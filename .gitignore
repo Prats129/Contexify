@@ -1,0 +1,25 @@
+# Virtual Environment
+backend/venv/
+venv/
+.venv/
+
+# Python Cache & Bytecode
+__pycache__/
+*.py[cod]
+
+# Secrets & Environment variables
+.env
+*.env
+
+# Vector Storage & Dynamic Uploads
+backend/data/chroma_db/
+backend/data/uploads/
+*.sqlite3
+*.db
+
+# Logs & System Files
+*.log
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

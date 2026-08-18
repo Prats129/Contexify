@@ -1,0 +1,16 @@
+# Quantum Computing & Neural Architecture Fundamentals
+
+## Chapter 1: Introduction to Quantum Circuit Design
+Quantum computing utilizes quantum mechanics principles such as superposition and entanglement to process information. Unlike classical bits that represent either 0 or 1, quantum bits (qubits) exist in linear combinations of states until measured.
+
+Superposition allows quantum algorithms to process exponentially large state spaces simultaneously. The fundamental state of a single qubit is represented as |ψ⟩ = α|0⟩ + β|1⟩, where α and β are complex probability amplitudes satisfying |α|² + |β|² = 1.
+
+## Chapter 2: Entanglement and Teleportation
+Quantum entanglement is a phenomenon where two or more qubits become inextricably correlated, such that the state of one instantly determines the state of the other, regardless of distance. The canonical Bell state is |Φ⁺⟩ = (|00⟩ + |11⟩) / √2.
+
+Quantum teleportation uses entanglement and classical communication channels to transmit qubit states across arbitrary physical distances without moving the actual physical particle.
+
+## Chapter 3: Hybrid AI & Quantum Neural Networks (QNN)
+Quantum Neural Networks combine classical deep learning architectures with parameterized quantum circuits (PQC). In a QNN, classical input vectors are mapped into quantum state vectors using feature maps. The parameterized quantum gates act as trainable layers, optimized via classical gradient descent using parameter-shift rules.
+
+Key advantages of Quantum AI include faster convergence in high-dimensional feature spaces and enhanced expressivity compared to classical deep networks of equivalent parameter counts.

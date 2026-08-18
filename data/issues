@@ -1,0 +1,7 @@
+there are some of the issues - 
+1. the result is good in the case of attached document, but not so refined and in understanding manner.
+2. the result for the web search is not good at all, it is just returning the web search results without any proper understanding and analysis of the question. It is just giving me the links which are also not clickable and no data is being extracted from the web.
+3. while the document is uploaded, like in the case of pdf, it is not being able to read the entire book, rather it is only able to read the first few pages of the book. 
+4. this is for future - we have to also add the user based data, it means that when the user is asking the question, it should also consider the user's previous questions and the answers and should provide the answer in a way that is relevant to the user's previous questions and answers.
+5. i want that the data is stored user wise and the several chats can be managed by a particular user as well. we can also give them the option to clear the chat or to delete the data as well.
+6. we have to also add the voice based chat, where the user can speak the question and the answer should be spoken in a voice manner as well.
