@@ -3,160 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Knowledge AI Engine | RAG & Web Search Agent</title>
+    <title>Contexify AI | Enterprise RAG & Web Search</title>
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
     <!-- FontAwesome Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="/static/src/styles/main.css">
 </head>
 <body>
-    <div class="app-container">
-        <!-- Sidebar Drawer -->
-        <aside class="sidebar">
-            <div class="sidebar-header">
-                <div class="brand">
-                    <div class="brand-icon"><i class="fa-solid fa-brain"></i></div>
-                    <div class="brand-text">
-                        <h1>Knowledge Engine</h1>
-                        <span>Enterprise RAG & Search</span>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Mode Selector Switcher -->
-            <div class="sidebar-section">
-                <label class="section-label"><i class="fa-solid fa-sliders"></i> Engine Mode</label>
-                <div class="mode-selector">
-                    <button class="mode-btn active" data-mode="DOCUMENT_RAG">
-                        <i class="fa-solid fa-file-contract"></i>
-                        <div class="mode-info">
-                            <span class="mode-title">Document RAG</span>
-                            <span class="mode-desc">Priority 1 • Context QA</span>
-                        </div>
-                    </button>
-                    <button class="mode-btn" data-mode="WEB_SEARCH">
-                        <i class="fa-solid fa-globe"></i>
-                        <div class="mode-info">
-                            <span class="mode-title">Web Search</span>
-                            <span class="mode-desc">Priority 2 • Real-time Internet</span>
-                        </div>
-                    </button>
-                    <button class="mode-btn disabled" title="Priority 3 - Coming Soon">
-                        <i class="fa-solid fa-photo-film"></i>
-                        <div class="mode-info">
-                            <span class="mode-title">Multimodal</span>
-                            <span class="mode-desc">Priority 3 • Vision & Audio</span>
-                        </div>
-                    </button>
-                </div>
-            </div>
-
-            <!-- Document Upload & Storage Section -->
-            <div class="sidebar-section docs-section">
-                <div class="section-header">
-                    <label class="section-label"><i class="fa-solid fa-folder-open"></i> Document Base</label>
-                    <span class="doc-count-badge" id="docCountBadge">0 files</span>
-                </div>
-                
-                <!-- Dropzone -->
-                <div class="upload-dropzone" id="dropzone">
-                    <input type="file" id="fileInput" accept=".pdf,.txt,.md,.csv,.json,.log" hidden>
-                    <div class="dropzone-content">
-                        <i class="fa-solid fa-cloud-arrow-up upload-icon"></i>
-                        <p class="drop-title">Upload Knowledge Content</p>
-                        <p class="drop-subtitle">PDF, TXT, MD up to 50MB</p>
-                        <button class="btn-browse" onclick="document.getElementById('fileInput').click()">Browse File</button>
-                    </div>
-                    <div class="upload-progress-overlay hidden" id="uploadProgress">
-                        <div class="spinner"></div>
-                        <span id="uploadStatusText">Vectorizing document...</span>
-                    </div>
-                </div>
-
-                <!-- Document List -->
-                <div class="document-list" id="documentList">
-                    <div class="empty-docs-placeholder">
-                        <i class="fa-regular fa-file-lines"></i>
-                        <p>No documents uploaded yet.</p>
-                        <span>Drop a PDF/TXT to start RAG QA</span>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Sidebar Footer -->
-            <div class="sidebar-footer">
-                <div class="system-status">
-                    <span class="status-dot online"></span>
-                    <span class="status-text">Vector Store Active</span>
-                </div>
-            </div>
-        </aside>
-
-        <!-- Main Chat Workspace -->
-        <main class="chat-workspace">
-            <!-- Workspace Header -->
-            <header class="workspace-header">
-                <div class="header-mode-indicator">
-                    <span class="mode-badge RAG" id="activeModeBadge">
-                        <i class="fa-solid fa-shield-halved"></i> Document Grounded RAG
-                    </span>
-                    <span class="session-tag" id="sessionTag">Session: <code id="sessionIdDisplay">...</code></span>
-                </div>
-                <div class="header-actions">
-                    <button class="action-btn" id="newChatBtn" title="Start New Session">
-                        <i class="fa-solid fa-plus"></i> New Session
-                    </button>
-                </div>
-            </header>
-
-            <!-- Chat Message List -->
-            <div class="chat-history" id="chatHistory">
-                <!-- Welcome Banner -->
-                <div class="welcome-banner">
-                    <div class="welcome-icon"><i class="fa-solid fa-wand-magic-sparkles"></i></div>
-                    <h2>Welcome to Enterprise Knowledge AI</h2>
-                    <p>Upload a book or PDF document on the sidebar to ask grounded questions with verifiable source citations, or switch to Live Web Search mode.</p>
-                    
-                    <div class="quick-prompts">
-                        <button class="prompt-chip" data-prompt="Summarize the core topics covered in the uploaded document.">
-                            <i class="fa-solid fa-list-check"></i> Summarize document
-                        </button>
-                        <button class="prompt-chip" data-prompt="What are the key technical concepts mentioned here?">
-                            <i class="fa-solid fa-microchip"></i> Key concepts
-                        </button>
-                        <button class="prompt-chip" data-prompt="List any critical guidelines or rules stated in the text.">
-                            <i class="fa-solid fa-bullseye"></i> Extract rules & guidelines
-                        </button>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Input Controls Area -->
-            <div class="chat-input-container">
-                <form id="chatForm" class="input-form">
-                    <div class="textarea-wrapper">
-                        <textarea 
-                            id="messageInput" 
-                            placeholder="Ask any question based on your uploaded document content..." 
-                            rows="1" 
-                            required></textarea>
-                        <button type="submit" id="sendBtn" class="send-btn" title="Send Question">
-                            <i class="fa-solid fa-paper-plane"></i>
-                        </button>
-                    </div>
-                </form>
-                <div class="input-footer">
-                    <span><i class="fa-solid fa-lock"></i> Strict Grounded RAG Architecture • Answers extracted directly from document embeddings</span>
-                </div>
-            </div>
-        </main>
-    </div>
-
-    <!-- Scripts -->
-    <script src="/static/src/services/api.js"></script>
-    <script src="/static/src/app.js"></script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
 </body>
 </html>
