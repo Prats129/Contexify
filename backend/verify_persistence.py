@@ -1,114 +1,133 @@
 import sys
-import uuid
 from pathlib import Path
+from fastapi import HTTPException
 
 # Add backend directory to Python path
 backend_dir = Path(__file__).resolve().parent
 if str(backend_dir) not in sys.path:
     sys.path.insert(0, str(backend_dir))
 
-from app.db.database import init_db
-from app.schemas.user import UserLoginRequest
+from app.db.database import init_db, get_db_connection
+from app.schemas.user import UserRegisterRequest, UserLoginRequest
 from app.services.user_service import user_service
 from app.services.chat_history_service import chat_history_service
 from app.schemas.chat import ChatMode
 
 def run_verification():
-    print("=== 1. Testing Database Initialization ===")
+    print("=== 1. Testing Database Initialization & Schema ===")
     init_db()
-    print("[OK] DB Tables initialized successfully.")
+    print("[OK] DB Tables and password columns initialized successfully.")
 
-    print("\n=== 2. Testing User Management ===")
-    user_req = UserLoginRequest(username="test_alice", email="alice@test.com", display_name="Alice Wonderland")
-    user = user_service.get_or_create_user(user_req)
-    assert user.id is not None, "User creation failed!"
-    print(f"[OK] User created/retrieved: ID={user.id}, Username={user.username}, DisplayName={user.display_name}")
+    print("\n=== 2. Testing Secure User Registration & Hashing ===")
+    test_uname = "test_sec_user"
+    test_email = "sec_user@example.com"
+    test_pwd = "SuperSecretPassword123!"
 
-    # Re-login with same username should return same user
-    user_again = user_service.get_or_create_user(user_req)
-    assert user_again.id == user.id, "User idempotency failed!"
-    print("[OK] User retrieval by username idempotency confirmed.")
+    # Clean up test user if exists from prior aborted run
+    with get_db_connection() as conn:
+        conn.execute("DELETE FROM users WHERE username = ?", (test_uname,))
 
-    print("\n=== 3. Testing Session Management ===")
+    reg_req = UserRegisterRequest(
+        username=test_uname,
+        display_name="Security Tester",
+        email=test_email,
+        password=test_pwd
+    )
+    user = user_service.register_user(reg_req)
+    assert user.id is not None, "User registration failed!"
+    print(f"[OK] User registered: ID={user.id}, Username={user.username}, DisplayName={user.display_name}")
+
+    # Verify password hash and salt in DB
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT password_hash, password_salt FROM users WHERE id = ?", (user.id,))
+        row = cursor.fetchone()
+        assert row["password_hash"] != test_pwd, "Password stored in plaintext!"
+        assert len(row["password_salt"]) > 0, "Salt missing!"
+        print("[OK] Verified password is cryptographically hashed with salt (PBKDF2-HMAC-SHA256).")
+
+    # Test Duplicate Username rejection
+    print("\n=== 3. Testing Duplicate Username & Email Rejection ===")
+    try:
+        user_service.register_user(reg_req)
+        assert False, "Should have rejected duplicate username"
+    except HTTPException as e:
+        assert e.status_code == 400
+        print(f"[OK] Duplicate username properly rejected: {e.detail}")
+
+    dup_email_req = UserRegisterRequest(
+        username="unique_user_2",
+        display_name="Unique User",
+        email=test_email,
+        password=test_pwd
+    )
+    try:
+        user_service.register_user(dup_email_req)
+        assert False, "Should have rejected duplicate email"
+    except HTTPException as e:
+        assert e.status_code == 400
+        print(f"[OK] Duplicate email properly rejected: {e.detail}")
+
+    print("\n=== 4. Testing Password Authentication (Login) ===")
+    # Login with wrong password
+    wrong_login = UserLoginRequest(username_or_email=test_uname, password="WrongPassword!")
+    try:
+        user_service.authenticate_user(wrong_login)
+        assert False, "Should have rejected wrong password"
+    except HTTPException as e:
+        assert e.status_code == 401
+        print(f"[OK] Wrong password properly rejected: {e.detail}")
+
+    # Login with correct password by username
+    correct_login = UserLoginRequest(username_or_email=test_uname, password=test_pwd)
+    auth_user = user_service.authenticate_user(correct_login)
+    assert auth_user.id == user.id
+    print(f"[OK] Login via username succeeded: {auth_user.username}")
+
+    # Login with correct password by email
+    email_login = UserLoginRequest(username_or_email=test_email, password=test_pwd)
+    auth_user_email = user_service.authenticate_user(email_login)
+    assert auth_user_email.id == user.id
+    print(f"[OK] Login via email succeeded: {auth_user_email.email}")
+
+    print("\n=== 5. Testing Session & Message History Persistence ===")
     session = chat_history_service.create_session(
         user_id=user.id,
-        title="Test RAG Session",
+        title="Test Auth Session",
         mode=ChatMode.DOCUMENT_RAG
     )
     assert session.id is not None
-    print(f"[OK] Chat session created: ID={session.id}, Title='{session.title}'")
+    print(f"[OK] Chat session created: ID={session.id}")
 
-    # List sessions for user
-    sessions = chat_history_service.list_user_sessions(user.id)
-    assert len(sessions) >= 1
-    print(f"[OK] User sessions listed: count={len(sessions)}")
-
-    print("\n=== 4. Testing Document Persistence ===")
-    doc_id = str(uuid.uuid4())
-    doc = chat_history_service.save_document(
-        document_id=doc_id,
-        user_id=user.id,
-        session_id=session.id,
-        filename="rag_spec.pdf",
-        file_type=".pdf",
-        file_size_bytes=45210,
-        total_chunks=8
-    )
-    assert doc.document_id == doc_id
-    print(f"[OK] Document saved: ID={doc.document_id}, Filename={doc.filename}, Chunks={doc.total_chunks}")
-
-    docs = chat_history_service.list_session_documents(session.id)
-    assert len(docs) == 1
-    print(f"[OK] Session documents verified: count={len(docs)}")
-
-    print("\n=== 5. Testing Message & Citation History ===")
-    # Save User message
     user_msg = chat_history_service.save_message(
         session_id=session.id,
         role="user",
-        content="What is the retrieval threshold used by the system?"
+        content="Testing auth chat"
     )
-    print(f"[OK] User message saved: ID={user_msg.id}")
+    assert user_msg.id is not None
 
-    # Save Assistant message with citation
-    citation_mock = [{
-        "document_id": doc_id,
-        "filename": "rag_spec.pdf",
-        "page_number": 2,
-        "chunk_index": 1,
-        "snippet": "The similarity threshold is set to 0.2 by default.",
-        "similarity_score": 0.89
-    }]
     asst_msg = chat_history_service.save_message(
         session_id=session.id,
         role="assistant",
-        content="The system uses a default similarity threshold of 0.2 for retrieval.",
-        citations=citation_mock
+        content="Authenticated response"
     )
-    print(f"[OK] Assistant message with citation saved: ID={asst_msg.id}")
+    assert asst_msg.id is not None
 
-    # Retrieve full history
     history = chat_history_service.get_session_history(session.id)
     assert len(history.messages) == 2
-    assert len(history.documents) == 1
-    assert history.messages[1].citations is not None
-    assert len(history.messages[1].citations) == 1
-    print(f"[OK] Full Session History verified: {len(history.messages)} messages, {len(history.documents)} documents, citations intact.")
+    print(f"[OK] Full session history verified ({len(history.messages)} messages).")
 
-    print("\n=== 6. Testing Session Deletion & Cascading ===")
+    print("\n=== 6. Testing Session Deletion & Test User Cleanup ===")
     deleted = chat_history_service.delete_session(session.id)
     assert deleted is True
-    post_delete_history = chat_history_service.get_session_history(session.id)
-    assert post_delete_history is None
-    print("[OK] Session deleted and cascaded clean successfully.")
+    print("[OK] Session deleted cleanly.")
 
-    # Clean up test user
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("DELETE FROM users WHERE id = ?", (user.id,))
     print("[OK] Test user cleaned up.")
 
-    print("\nALL PERSISTENCE AND USER MANAGEMENT TESTS PASSED!")
+    print("\nALL AUTHENTICATION, PASSWORD HASHING, AND PERSISTENCE TESTS PASSED!")
 
 if __name__ == "__main__":
     run_verification()

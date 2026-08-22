@@ -8,15 +8,21 @@ export interface User {
   id: string;
   username: string;
   email: string;
-  display_name?: string | null;
+  display_name: string;
   avatar_color?: string;
   created_at: string;
 }
 
-export interface UserLoginRequest {
+export interface UserRegisterRequest {
   username: string;
-  email?: string | null;
-  display_name?: string | null;
+  display_name: string;
+  email: string;
+  password: string;
+}
+
+export interface UserLoginRequest {
+  username_or_email: string;
+  password: string;
 }
 
 export interface Citation {

@@ -35,23 +35,33 @@ def get_db_connection():
 
 def init_db():
     """
-    Initialize SQLite database tables and indexes.
+    Initialize SQLite database tables, indexes, and run migrations if needed.
     """
     logger.info(f"Initializing SQLite database at {DB_FILE}...")
     with get_db_connection() as conn:
         cursor = conn.cursor()
         
-        # 1. Users Table
+        # 1. Users Table with secure password hash & salt
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id TEXT PRIMARY KEY,
                 username TEXT UNIQUE NOT NULL,
                 email TEXT UNIQUE NOT NULL,
-                display_name TEXT,
+                display_name TEXT NOT NULL,
+                password_hash TEXT NOT NULL,
+                password_salt TEXT NOT NULL,
                 avatar_color TEXT DEFAULT '#3B82F6',
                 created_at TEXT NOT NULL
             );
         """)
+        
+        # Schema migration check: ensure password columns exist if table was previously created
+        cursor.execute("PRAGMA table_info(users);")
+        columns = [row["name"] for row in cursor.fetchall()]
+        if "password_hash" not in columns:
+            cursor.execute("ALTER TABLE users ADD COLUMN password_hash TEXT DEFAULT '';")
+        if "password_salt" not in columns:
+            cursor.execute("ALTER TABLE users ADD COLUMN password_salt TEXT DEFAULT '';")
         
         # 2. Chat Sessions Table
         cursor.execute("""

@@ -11,24 +11,45 @@ import type {
 const API_BASE_URL = '/api/v1';
 
 export const apiService = {
-  // --- User Endpoints ---
-  async loginOrRegister(
+  // --- User Authentication Endpoints ---
+  async register(
+    displayName: string,
     username: string,
-    email: string | null = null,
-    displayName: string | null = null
+    email: string,
+    password: string
   ): Promise<User> {
-    const response = await fetch(`${API_BASE_URL}/user/login-or-register`, {
+    const response = await fetch(`${API_BASE_URL}/user/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        display_name: displayName,
         username,
         email,
-        display_name: displayName,
+        password,
       }),
     });
     if (!response.ok) {
-      const err = await response.json().catch(() => ({ detail: 'Failed to authenticate user' }));
-      throw new Error(err.detail || 'Authentication failed');
+      const err = await response.json().catch(() => ({ detail: 'Registration failed' }));
+      throw new Error(err.detail || 'Registration failed');
+    }
+    return await response.json();
+  },
+
+  async login(
+    usernameOrEmail: string,
+    password: string
+  ): Promise<User> {
+    const response = await fetch(`${API_BASE_URL}/user/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username_or_email: usernameOrEmail,
+        password,
+      }),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ detail: 'Authentication failed' }));
+      throw new Error(err.detail || 'Invalid username/email or password');
     }
     return await response.json();
   },
@@ -37,14 +58,6 @@ export const apiService = {
     const response = await fetch(`${API_BASE_URL}/user/me?user_id=${encodeURIComponent(userId)}`);
     if (!response.ok) {
       throw new Error('User not found');
-    }
-    return await response.json();
-  },
-
-  async listUsers(): Promise<User[]> {
-    const response = await fetch(`${API_BASE_URL}/user/list`);
-    if (!response.ok) {
-      throw new Error('Failed to fetch user list');
     }
     return await response.json();
   },

@@ -343,40 +343,32 @@ export const App: React.FC = () => {
   };
 
   // --- 9. User Authentication & Guest Handlers ---
-  const handleSwitchUser = async (userId: string) => {
-    try {
-      const user = await apiService.getCurrentUser(userId);
-      setCurrentUser(user);
-      localStorage.setItem('contexify_user', JSON.stringify(user));
-      setIsUserModalOpen(false);
-      setActiveSessionId(null);
-      await loadSessions(user.id);
-    } catch (e: unknown) {
-      const err = e instanceof Error ? e.message : String(e);
-      alert(`Failed to switch user: ${err}`);
-    }
+  const handleLogin = async (usernameOrEmail: string, password: string) => {
+    const user = await apiService.login(usernameOrEmail, password);
+    setCurrentUser(user);
+    localStorage.setItem('contexify_user', JSON.stringify(user));
+    setIsUserModalOpen(false);
+    setActiveSessionId(null);
+    await loadSessions(user.id);
   };
 
-  const handleRegisterUser = async (
+  const handleRegister = async (
+    displayName: string,
     username: string,
-    email: string | null,
-    displayName: string | null
+    email: string,
+    password: string
   ) => {
-    try {
-      const user = await apiService.loginOrRegister(
-        username,
-        email,
-        displayName
-      );
-      setCurrentUser(user);
-      localStorage.setItem('contexify_user', JSON.stringify(user));
-      setIsUserModalOpen(false);
-      setActiveSessionId(null);
-      await loadSessions(user.id);
-    } catch (e: unknown) {
-      const err = e instanceof Error ? e.message : String(e);
-      alert(`Registration/Login failed: ${err}`);
-    }
+    const user = await apiService.register(
+      displayName,
+      username,
+      email,
+      password
+    );
+    setCurrentUser(user);
+    localStorage.setItem('contexify_user', JSON.stringify(user));
+    setIsUserModalOpen(false);
+    setActiveSessionId(null);
+    await loadSessions(user.id);
   };
 
   const handleContinueAsGuest = () => {
@@ -426,8 +418,8 @@ export const App: React.FC = () => {
         isOpen={isUserModalOpen}
         onClose={() => setIsUserModalOpen(false)}
         currentUser={currentUser}
-        onSwitchUser={handleSwitchUser}
-        onRegisterUser={handleRegisterUser}
+        onLogin={handleLogin}
+        onRegister={handleRegister}
         onContinueAsGuest={handleContinueAsGuest}
       />
     </div>

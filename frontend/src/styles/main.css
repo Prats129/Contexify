@@ -1169,3 +1169,119 @@ textarea {
     opacity: 0.9;
 }
 
+/* Authentication Modal Redesign */
+.auth-modal-card {
+    max-width: 440px;
+    width: 90%;
+}
+
+.current-user-banner {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: rgba(59, 130, 246, 0.08);
+    border: 1px solid rgba(59, 130, 246, 0.25);
+    border-radius: var(--radius-md);
+    padding: 10px 14px;
+    margin-bottom: 16px;
+}
+
+.auth-tab-group {
+    display: flex;
+    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 4px;
+    margin-bottom: 16px;
+    gap: 4px;
+}
+
+.auth-tab-btn {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 9px;
+    border: none;
+    background: none;
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+    font-weight: 600;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.auth-tab-btn.active {
+    background: var(--bg-card);
+    color: var(--text-primary);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.auth-tab-btn:hover:not(.active) {
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.auth-error-banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(239, 68, 68, 0.12);
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    color: #FCA5A5;
+    padding: 10px 12px;
+    border-radius: var(--radius-sm);
+    font-size: 0.78rem;
+    line-height: 1.4;
+    margin-bottom: 14px;
+    animation: fadeIn 0.2s ease;
+}
+
+.auth-error-banner i {
+    font-size: 1rem;
+    color: #EF4444;
+    flex-shrink: 0;
+}
+
+.input-with-icon {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.input-icon {
+    position: absolute;
+    left: 12px;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    pointer-events: none;
+}
+
+.input-with-icon input {
+    width: 100%;
+    padding-left: 36px;
+    padding-right: 38px;
+}
+
+.btn-toggle-pwd {
+    position: absolute;
+    right: 10px;
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    cursor: pointer;
+    padding: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.2s ease;
+}
+
+.btn-toggle-pwd:hover {
+    color: var(--text-primary);
+}
+
+
