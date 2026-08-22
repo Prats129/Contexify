@@ -1,5 +1,6 @@
 import React from 'react';
 import type { ChatSession, User } from '../../types';
+import { FaGoogle } from 'react-icons/fa';
 
 interface SessionHistoryProps {
   currentUser: User | null;
@@ -44,7 +45,7 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
               className="btn-guest-login"
               onClick={onOpenUserModal}
             >
-              <i className="fa-solid fa-right-to-bracket"></i> Sign In / Create Account
+              <FaGoogle /> Sign In / Create Account
             </button>
           </div>
         ) : sessions.length === 0 ? (
