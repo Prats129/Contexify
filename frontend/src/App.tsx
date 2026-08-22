@@ -371,7 +371,7 @@ export const App: React.FC = () => {
     await loadSessions(user.id);
   };
 
-  const handleContinueAsGuest = () => {
+  const handleLogout = () => {
     localStorage.removeItem('contexify_user');
     localStorage.removeItem('contexify_active_session');
     setCurrentUser(null);
@@ -382,11 +382,16 @@ export const App: React.FC = () => {
     setIsUserModalOpen(false);
   };
 
+  const handleContinueAsGuest = () => {
+    handleLogout();
+  };
+
   return (
     <div className="app-container">
       <Sidebar
         currentUser={currentUser}
         onOpenUserModal={() => setIsUserModalOpen(true)}
+        onLogout={handleLogout}
         sessions={sessions}
         activeSessionId={activeSessionId}
         onSelectSession={selectSession}
@@ -420,6 +425,7 @@ export const App: React.FC = () => {
         currentUser={currentUser}
         onLogin={handleLogin}
         onRegister={handleRegister}
+        onLogout={handleLogout}
         onContinueAsGuest={handleContinueAsGuest}
       />
     </div>
@@ -427,3 +433,4 @@ export const App: React.FC = () => {
 };
 
 export default App;
+

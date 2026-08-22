@@ -9,6 +9,7 @@ import type { User, ChatSession, ChatMode, DocumentMetadata } from '../../types'
 interface SidebarProps {
   currentUser: User | null;
   onOpenUserModal: () => void;
+  onLogout: () => void;
   sessions: ChatSession[];
   activeSessionId: string | null;
   onSelectSession: (sessionId: string) => void;
@@ -26,6 +27,7 @@ interface SidebarProps {
 export const Sidebar: React.FC<SidebarProps> = ({
   currentUser,
   onOpenUserModal,
+  onLogout,
   sessions,
   activeSessionId,
   onSelectSession,
@@ -58,6 +60,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <UserProfileCard
         currentUser={currentUser}
         onOpenModal={onOpenUserModal}
+        onLogout={onLogout}
       />
 
       {/* New Conversation Button */}
