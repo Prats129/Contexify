@@ -4,14 +4,12 @@ import {
   LuShieldCheck,
   LuLogIn,
   LuUserPlus,
-  LuPlus,
 } from 'react-icons/lu';
 import type { ChatMode, User } from '../../types';
 
 interface ChatHeaderProps {
   currentMode: ChatMode;
   sessionId: string | null;
-  onNewSession: () => void;
   currentUser: User | null;
   onOpenUserModal: (tab?: 'login' | 'register') => void;
 }
@@ -19,7 +17,6 @@ interface ChatHeaderProps {
 export const ChatHeader: React.FC<ChatHeaderProps> = ({
   currentMode,
   sessionId,
-  onNewSession,
   currentUser,
   onOpenUserModal,
 }) => {
@@ -30,11 +27,10 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-3">
           <span
-            className={`px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5 border transition-colors ${
-              isWeb
-                ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
-                : 'bg-blue-500/15 text-blue-400 border-blue-500/30'
-            }`}
+            className={`px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5 border transition-colors ${isWeb
+              ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+              : 'bg-blue-500/15 text-blue-400 border-blue-500/30'
+              }`}
           >
             {isWeb ? <LuGlobe size={14} /> : <LuShieldCheck size={14} />}
             {isWeb ? 'Live Web Search' : 'Document Grounded RAG'}
@@ -64,18 +60,6 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
               <LuUserPlus size={14} /> Sign up
             </button>
           </div>
-        )}
-
-        {/* New Chat Button (Logged-in users only) */}
-        {currentUser && (
-          <button
-            type="button"
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-200 bg-white/5 hover:bg-white/10 border border-white/10 rounded-md transition-all cursor-pointer"
-            onClick={onNewSession}
-            title="Start New Session"
-          >
-            <LuPlus size={15} /> New Chat
-          </button>
         )}
       </div>
     </header>

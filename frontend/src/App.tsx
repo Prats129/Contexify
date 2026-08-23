@@ -291,9 +291,9 @@ export const App: React.FC = () => {
         setStreamingMessage((prev) =>
           prev
             ? {
-                ...prev,
-                citations,
-              }
+              ...prev,
+              citations,
+            }
             : null
         );
       },
@@ -302,11 +302,11 @@ export const App: React.FC = () => {
         setStreamingMessage((prev) =>
           prev
             ? {
-                ...prev,
-                content: accumulatedText,
-                citations: receivedCitations,
-                isStreaming: true,
-              }
+              ...prev,
+              content: accumulatedText,
+              citations: receivedCitations,
+              isStreaming: true,
+            }
             : null
         );
       },
@@ -422,7 +422,6 @@ export const App: React.FC = () => {
         currentMode={currentMode}
         onModeChange={handleModeChange}
         activeSessionId={activeSessionId}
-        onNewSession={handleNewSession}
         messages={messages}
         streamingMessage={streamingMessage}
         onSelectPrompt={handleSelectPrompt}

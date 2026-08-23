@@ -1,10 +1,10 @@
 import React from 'react';
 import { LuBrain, LuPlus } from 'react-icons/lu';
-import { GoSidebarCollapse, GoSidebarExpand } from 'react-icons/go';
 import { UserProfileCard } from './UserProfileCard';
 import { SessionHistory } from './SessionHistory';
 import { DocumentList } from './DocumentList';
 import type { User, ChatSession, DocumentMetadata } from '../../types';
+import { FiSidebar } from 'react-icons/fi';
 
 interface SidebarProps {
   isOpen: boolean;
@@ -37,19 +37,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   return (
     <aside
-      className={`h-screen bg-gray-900 border-r border-white/10 flex flex-col gap-3 shrink-0 overflow-y-auto overflow-x-hidden transition-all duration-200 ${
-        isOpen ? 'w-[290px] p-3.5' : 'w-[68px] p-2.5 items-center'
-      }`}
+      className={`h-screen bg-gray-900 border-r border-white/10 flex flex-col gap-3 shrink-0 overflow-y-auto overflow-x-hidden transition-all duration-200 ${isOpen ? 'w-72.5 p-3.5' : 'w-17 p-2.5 items-center'
+        }`}
     >
       {/* Brand & Toggle Sidebar Button */}
       <div
-        className={`flex items-center pb-2.5 border-b border-white/10 w-full ${
-          isOpen ? 'justify-between gap-2' : 'justify-center'
-        }`}
+        className={`flex items-center pb-2.5 border-b border-white/10 w-full ${isOpen ? 'justify-between gap-2' : 'justify-center'
+          }`}
       >
         {isOpen && (
           <div className="flex items-center gap-3 overflow-hidden">
-            <div className="w-9 h-9 rounded-lg bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center text-white shadow-md shadow-blue-500/20 shrink-0">
+            <div className="w-9 h-9 rounded-lg bg-linear-to-tr from-blue-600 to-indigo-500 flex items-center justify-center text-white shadow-md shadow-blue-500/20 shrink-0">
               <LuBrain size={20} />
             </div>
             <div className="flex flex-col min-w-0">
@@ -65,18 +63,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
           onClick={onToggleSidebar}
           title={isOpen ? 'Collapse sidebar' : 'Expand sidebar'}
         >
-          {isOpen ? <GoSidebarCollapse size={18} /> : <GoSidebarExpand size={18} />}
+          <FiSidebar size={18} />
         </button>
       </div>
 
       {/* New Conversation Button (Logged-in users only) */}
       {currentUser && (
-        <div className="w-full flex justify-center">
+        <div className={`${isOpen ? 'w-full' : 'w-10'} flex justify-center`}>
           <button
             type="button"
-            className={`w-full flex items-center justify-center gap-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-semibold rounded-lg shadow-sm shadow-blue-500/20 transition-all cursor-pointer ${
-              isOpen ? 'py-2.5 px-4 text-xs' : 'w-10 h-10 p-0 text-sm'
-            }`}
+            className={`w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700  text-white font-semibold rounded-lg cursor-pointer ${isOpen ? 'py-2.5 px-2 text-xs' : 'h-10 text-sm'
+              }`}
             onClick={onNewSession}
             title="New Conversation"
           >

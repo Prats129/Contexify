@@ -73,13 +73,11 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
             return (
               <div
                 key={s.id}
-                className={`group flex items-center justify-between p-2 rounded-lg border transition-all cursor-pointer ${
-                  isOpen ? 'w-full' : 'w-10 h-10 justify-center mx-auto p-0'
-                } ${
-                  isActive
+                className={`group flex items-center justify-between p-2 rounded-lg border transition-all cursor-pointer ${isOpen ? 'w-full' : 'w-10 h-10 justify-center mx-auto p-0'
+                  } ${isActive
                     ? 'bg-blue-500/15 border-blue-500/40 text-blue-300'
-                    : 'bg-white/[0.02] hover:bg-white/[0.06] border-white/5 hover:border-white/15 text-gray-300'
-                }`}
+                    : 'bg-white/2 hover:bg-white/6 border-white/5 hover:border-white/15 text-gray-300'
+                  }`}
                 onClick={() => onSelectSession(s.id)}
                 title={`${s.title} (${isWeb ? 'Web Search' : 'Document RAG'})`}
               >
