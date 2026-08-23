@@ -36,6 +36,11 @@ body {
   color: var(--text-main);
 }
 
+input,
+textarea {
+  color: var(--text-main);
+}
+
 /* Dynamic Accent Utility Classes */
 .bg-primary-theme {
   background-color: var(--color-primary) !important;
@@ -81,6 +86,7 @@ body {
   from {
     transform: rotate(0deg);
   }
+
   to {
     transform: rotate(360deg);
   }
@@ -91,6 +97,7 @@ body {
     opacity: 0;
     transform: translateY(6px) scale(0.97);
   }
+
   to {
     opacity: 1;
     transform: translateY(0) scale(1);
@@ -101,6 +108,7 @@ body {
   from {
     opacity: 0;
   }
+
   to {
     opacity: 1;
   }
@@ -111,6 +119,7 @@ body {
     opacity: 0;
     transform: translateY(4px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0);

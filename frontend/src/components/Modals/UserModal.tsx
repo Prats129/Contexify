@@ -351,7 +351,7 @@ export const UserModal: React.FC<UserModalProps> = ({
                         placeholder="Enter username or email"
                         required
                         autoComplete="username"
-                        className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-3 text-xs placeholder-(--text-muted) outline-none"
+                        className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-3 text-xs outline-none"
                       />
                     </div>
                   </div>
@@ -367,7 +367,7 @@ export const UserModal: React.FC<UserModalProps> = ({
                         placeholder="Enter password"
                         required
                         autoComplete="current-password"
-                        className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-9 text-xs text-(--text-main) outline-none"
+                        className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-9 text-xs outline-none"
                       />
                       <button
                         type="button"
@@ -412,7 +412,7 @@ export const UserModal: React.FC<UserModalProps> = ({
                         placeholder="Enter full name"
                         required
                         autoComplete="name"
-                        className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-3 text-xs placeholder-(--text-muted) outline-none"
+                        className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-3 text-xs outline-none"
                       />
                     </div>
                   </div>
@@ -428,7 +428,7 @@ export const UserModal: React.FC<UserModalProps> = ({
                         placeholder="Choose unique username (e.g. alex_smith)"
                         required
                         autoComplete="username"
-                        className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-3 text-xs placeholder-(--text-muted) outline-none"
+                        className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-3 text-xs outline-none"
                       />
                     </div>
                   </div>
@@ -444,7 +444,7 @@ export const UserModal: React.FC<UserModalProps> = ({
                         placeholder="Enter email"
                         required
                         autoComplete="email"
-                        className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-3 text-xs placeholder-(--text-muted) outline-none"
+                        className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-3 text-xs outline-none"
                       />
                     </div>
                   </div>
@@ -461,7 +461,7 @@ export const UserModal: React.FC<UserModalProps> = ({
                         required
                         minLength={6}
                         autoComplete="new-password"
-                        className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-9 text-xs placeholder-(--text-muted) outline-none"
+                        className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-9 text-xs outline-none"
                       />
                       <button
                         type="button"

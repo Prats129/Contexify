@@ -305,7 +305,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             rows={1}
             required
             disabled={isSending}
-            className="flex-1 bg-transparent border-0 outline-none resize-none text-sm placeholder-(--text-muted) px-2 py-1 max-h-36 overflow-y-auto"
+            className="flex-1 bg-transparent border-0 outline-none resize-none text-sm px-2 py-1 max-h-36 overflow-y-auto"
           />
 
           {/* Send Button */}
