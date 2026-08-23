@@ -151,7 +151,7 @@ class RAGService:
             uploaded_at=Path(file_path).stat().st_mtime.__str__()
         )
 
-        session_store_repo.save_document_metadata(doc_metadata)
+        session_store_repo.save_document_metadata(doc_metadata, session_id=session_id)
         session_store_repo.attach_document_to_session(session_id, document_id)
 
         logger.info(f"Document '{filename}' indexed successfully into ChromaDB with {len(chunks)} chunks.")

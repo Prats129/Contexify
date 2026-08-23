@@ -84,3 +84,12 @@ async def delete_document(document_id: str, session_id: str):
     vector_store_repo.delete_document(document_id)
     session_store_repo.remove_document(document_id)
     return {"message": f"Document '{document_id}' removed successfully."}
+
+@router.post("/clear-all")
+async def clear_all_documents():
+    """
+    Purge all vector embeddings from ChromaDB and clear document records.
+    """
+    vector_store_repo.clear_all()
+    return {"message": "All vectors and collections cleared from ChromaDB successfully."}
+

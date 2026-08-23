@@ -1,25 +1,57 @@
-# Virtual Environment
+# Node & Frontend Build Artifacts
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+dist-ssr/
+*.local
+.vite/
+*.tsbuildinfo
+
+# Python Virtual Environment
 backend/venv/
 venv/
 .venv/
+env/
+ENV/
 
 # Python Cache & Bytecode
 __pycache__/
 *.py[cod]
+*$py.class
+*.pytest_cache/
+*.mypy_cache/
 
 # Secrets & Environment variables
 .env
 *.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
 
-# Vector Storage & Dynamic Uploads
+# Vector Storage & Relational Database Data
 backend/data/chroma_db/
 backend/data/uploads/
+data/chroma_db/
+data/uploads/
 *.sqlite3
 *.db
+*.db-wal
+*.db-shm
 
-# Logs & System Files
+# Logs & Debuggers
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# OS & Editor Files
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
+*.sublime-project
+*.sublime-workspace

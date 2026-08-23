@@ -96,4 +96,18 @@ class VectorStoreRepository:
         except Exception as e:
             logger.error(f"Failed to delete document vectors: {str(e)}")
 
+    def clear_all(self):
+        """Clear all indexed documents and vector embeddings from ChromaDB."""
+        try:
+            self.client.delete_collection("document_knowledge_base")
+            logger.info("Deleted ChromaDB collection 'document_knowledge_base'")
+        except Exception as e:
+            logger.warning(f"Collection deletion warning: {e}")
+        
+        self.collection = self.client.get_or_create_collection(
+            name="document_knowledge_base",
+            metadata={"hnsw:space": "cosine"}
+        )
+        logger.info("Recreated empty ChromaDB collection 'document_knowledge_base'")
+
 vector_store_repo = VectorStoreRepository()
