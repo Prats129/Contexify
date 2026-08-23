@@ -47,26 +47,43 @@ export const Sidebar: React.FC<SidebarProps> = ({
           isOpen ? 'justify-between gap-2' : 'justify-center'
         }`}
       >
-        {isOpen && (
-          <div className="flex items-center gap-3 overflow-hidden">
-            <div className="w-9 h-9 rounded-lg bg-primary-theme flex items-center justify-center text-white shrink-0">
+        {isOpen ? (
+          <>
+            <div className="flex items-center gap-3 overflow-hidden">
+              <div className="w-9 h-9 rounded-lg bg-primary-theme flex items-center justify-center text-white shrink-0">
+                <LuBrain size={20} />
+              </div>
+              <div className="flex flex-col min-w-0">
+                <h1 className="text-sm font-bold text-(--text-main) truncate">Contexify AI</h1>
+                <span className="text-[11px] text-(--text-muted) truncate">Enterprise RAG & Search</span>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              className="w-8 h-8 rounded-lg bg-(--border-subtle) hover:bg-(--border-hover) text-(--text-muted) hover:text-(--text-main) border border-(--border-subtle) flex items-center justify-center cursor-pointer shrink-0"
+              onClick={onToggleSidebar}
+              title="Collapse sidebar"
+            >
+              <FiSidebar size={18} />
+            </button>
+          </>
+        ) : (
+          /* Collapsed State: Shows Brand Icon normally, reveals Expand icon on hover */
+          <button
+            type="button"
+            className="group relative w-10 h-10 rounded-lg flex items-center justify-center cursor-pointer"
+            onClick={onToggleSidebar}
+            title="Expand sidebar"
+          >
+            <div className="w-9 h-9 rounded-lg bg-primary-theme flex items-center justify-center text-white group-hover:hidden">
               <LuBrain size={20} />
             </div>
-            <div className="flex flex-col min-w-0">
-              <h1 className="text-sm font-bold text-(--text-main) truncate">Contexify AI</h1>
-              <span className="text-[11px] text-(--text-muted) truncate">Enterprise RAG & Search</span>
+            <div className="hidden group-hover:flex w-9 h-9 rounded-lg items-center justify-center text-(--text-main) border border-(--border-subtle) bg-(--border-hover)">
+              <FiSidebar size={18} />
             </div>
-          </div>
+          </button>
         )}
-
-        <button
-          type="button"
-          className="w-8 h-8 rounded-lg bg-(--border-subtle) hover:bg-(--border-hover) text-(--text-muted) hover:text-(--text-main) border border-(--border-subtle) flex items-center justify-center cursor-pointer shrink-0"
-          onClick={onToggleSidebar}
-          title={isOpen ? 'Collapse sidebar' : 'Expand sidebar'}
-        >
-          <FiSidebar size={18} />
-        </button>
       </div>
 
       {/* New Conversation Button (Logged-in users only) */}
