@@ -242,7 +242,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                   <button
                     type="button"
                     className={`flex items-center justify-between p-2 rounded-lg text-left text-xs cursor-pointer w-full ${currentMode === 'DOCUMENT_RAG'
-                      ? 'bg-primary-light-theme text-primary-theme'
+                      ? 'bg-primary-light-theme text-primary-theme font-medium'
                       : 'hover:bg-(--border-subtle) text-(--text-main)'
                       }`}
                     onClick={() => handleSelectMode('DOCUMENT_RAG')}
@@ -250,7 +250,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                     <div className="flex items-center gap-2">
                       <LuFileText size={16} className="text-primary-theme" />
                       <div className="flex flex-col">
-                        <span className="font-semibold">{currentModeDetails.title}</span>
+                        <span className="font-semibold">Document RAG</span>
                         <span className="text-[10px] text-(--text-muted)">Grounded Context QA</span>
                       </div>
                     </div>
@@ -260,7 +260,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                   <button
                     type="button"
                     className={`flex items-center justify-between p-2 rounded-lg text-left text-xs cursor-pointer w-full ${currentMode === 'WEB_SEARCH'
-                      ? 'bg-emerald-500/15 text-emerald-500 dark:text-emerald-400'
+                      ? 'bg-emerald-500/15 text-emerald-500 dark:text-emerald-400 font-medium'
                       : 'hover:bg-(--border-subtle) text-(--text-main)'
                       }`}
                     onClick={() => handleSelectMode('WEB_SEARCH')}
@@ -277,21 +277,24 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
                   <button
                     type="button"
-                    className="flex items-center justify-between p-2 rounded-lg text-left text-xs opacity-50 cursor-not-allowed w-full"
-                    onClick={() => handleSelectMode('MULTIMODAL')}
-                    title="Vision & Audio (Coming)"
+                    disabled
+                    className="flex items-center justify-between p-2 rounded-lg text-left text-xs opacity-40 cursor-not-allowed w-full select-none"
+                    title="Multimodal Engine is coming soon"
                   >
                     <div className="flex items-center gap-2">
                       <LuImage size={16} className="text-purple-400" />
                       <div className="flex flex-col">
-                        <span className="font-semibold">Multimodal</span>
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-semibold">Multimodal</span>
+                          <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-(--border-subtle) text-(--text-muted) uppercase font-medium">Soon</span>
+                        </div>
                         <span className="text-[10px] text-(--text-muted)">Vision & Audio (Coming)</span>
                       </div>
                     </div>
-                    {currentMode === 'MULTIMODAL' && <LuCheck size={14} />}
                   </button>
                 </div>
               )}
+
             </div>
           </div>
 
