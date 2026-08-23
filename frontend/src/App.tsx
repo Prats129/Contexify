@@ -35,6 +35,18 @@ export const App: React.FC = () => {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadStatusText, setUploadStatusText] = useState('');
   const [isUserModalOpen, setIsUserModalOpen] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(() => {
+    const saved = localStorage.getItem('contexify_sidebar_open');
+    return saved !== null ? JSON.parse(saved) : true;
+  });
+
+  const handleToggleSidebar = () => {
+    setIsSidebarOpen((prev) => {
+      const next = !prev;
+      localStorage.setItem('contexify_sidebar_open', JSON.stringify(next));
+      return next;
+    });
+  };
 
   // --- 1. User Initialization (Guest vs Logged In) ---
   useEffect(() => {
@@ -389,6 +401,8 @@ export const App: React.FC = () => {
   return (
     <div className="app-container">
       <Sidebar
+        isOpen={isSidebarOpen}
+        onToggleSidebar={handleToggleSidebar}
         currentUser={currentUser}
         onOpenUserModal={() => setIsUserModalOpen(true)}
         onLogout={handleLogout}
@@ -402,6 +416,8 @@ export const App: React.FC = () => {
       />
 
       <ChatWorkspace
+        isSidebarOpen={isSidebarOpen}
+        onToggleSidebar={handleToggleSidebar}
         currentMode={currentMode}
         onModeChange={handleModeChange}
         activeSessionId={activeSessionId}

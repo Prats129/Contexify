@@ -5,6 +5,8 @@ import { DocumentList } from './DocumentList';
 import type { User, ChatSession, DocumentMetadata } from '../../types';
 
 interface SidebarProps {
+  isOpen: boolean;
+  onToggleSidebar: () => void;
   currentUser: User | null;
   onOpenUserModal: () => void;
   onLogout: () => void;
@@ -18,6 +20,8 @@ interface SidebarProps {
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
+  isOpen,
+  onToggleSidebar,
   currentUser,
   onOpenUserModal,
   onLogout,
@@ -30,8 +34,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onDeleteDocument,
 }) => {
   return (
-    <aside className="sidebar">
-      {/* Brand */}
+    <aside className={`sidebar ${!isOpen ? 'collapsed' : ''}`}>
+      {/* Brand & Collapse Button */}
       <div className="sidebar-header">
         <div className="brand">
           <div className="brand-icon">
@@ -42,6 +46,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <span>Enterprise RAG & Search</span>
           </div>
         </div>
+        <button
+          type="button"
+          className="btn-toggle-sidebar"
+          onClick={onToggleSidebar}
+          title="Collapse sidebar"
+        >
+          <i className="fa-solid fa-angles-left"></i>
+        </button>
       </div>
 
       {/* User Profile Card */}

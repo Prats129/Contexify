@@ -26,6 +26,8 @@ interface ChatWorkspaceProps {
   uploadStatusText?: string;
   documents: DocumentMetadata[];
   onDeleteDocument: (documentId: string) => void;
+  isSidebarOpen: boolean;
+  onToggleSidebar: () => void;
 }
 
 export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
@@ -45,6 +47,8 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
   uploadStatusText,
   documents,
   onDeleteDocument,
+  isSidebarOpen,
+  onToggleSidebar,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const dragCounterRef = useRef(0);
@@ -130,6 +134,8 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
         currentMode={currentMode}
         sessionId={activeSessionId}
         onNewSession={onNewSession}
+        isSidebarOpen={isSidebarOpen}
+        onToggleSidebar={onToggleSidebar}
       />
 
       <MessageList
