@@ -1,5 +1,11 @@
 from fastapi import APIRouter, HTTPException, status
-from app.schemas.user import UserRegisterRequest, UserLoginRequest, UserResponse
+from app.schemas.user import (
+    UserRegisterRequest,
+    UserLoginRequest,
+    UserResponse,
+    UserProfileUpdateRequest,
+    UserPasswordChangeRequest
+)
 from app.services.user_service import user_service
 
 router = APIRouter()
@@ -30,3 +36,27 @@ async def get_current_user(user_id: str):
             detail="User account not found."
         )
     return user
+
+@router.patch("/profile", response_model=UserResponse)
+async def update_profile(req: UserProfileUpdateRequest):
+    """
+    Update user display name and/or avatar color.
+    """
+    return user_service.update_user_profile(
+        user_id=req.user_id,
+        display_name=req.display_name,
+        avatar_color=req.avatar_color
+    )
+
+@router.post("/change-password")
+async def change_password(req: UserPasswordChangeRequest):
+    """
+    Change user password with old password verification.
+    """
+    success = user_service.change_user_password(
+        user_id=req.user_id,
+        old_password=req.old_password,
+        new_password=req.new_password
+    )
+    return {"message": "Password changed successfully."}
+

@@ -37,6 +37,8 @@ interface UserModalProps {
   ) => Promise<void>;
   onLogout: () => void;
   onContinueAsGuest: () => void;
+  onUpdateProfile?: (displayName: string, avatarColor: string) => Promise<void>;
+  onChangePassword?: (oldPassword: string, newPassword: string) => Promise<void>;
 }
 
 export const UserModal: React.FC<UserModalProps> = ({
@@ -48,14 +50,31 @@ export const UserModal: React.FC<UserModalProps> = ({
   onRegister,
   onLogout,
   onContinueAsGuest,
+  onUpdateProfile,
+  onChangePassword,
 }) => {
   const { mode, setMode, accent, setAccent, currentAccent } = useTheme();
   const [activeTab, setActiveTab] = useState<'login' | 'register'>('login');
+
+  // Edit Profile State
+  const [editDisplayName, setEditDisplayName] = useState('');
+  const [selectedAvatarColor, setSelectedAvatarColor] = useState('#3B82F6');
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const [profileSuccessMsg, setProfileSuccessMsg] = useState<string | null>(null);
+
+  // Change Password State
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
+  const [oldPassword, setOldPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [showOldPassword, setShowOldPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [passwordSuccessMsg, setPasswordSuccessMsg] = useState<string | null>(null);
 
   // Login Form State
   const [loginIdentifier, setLoginIdentifier] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [showLoginPassword, setShowLoginPassword] = useState(false);
+
 
   // Register Form State
   const [regDisplayName, setRegDisplayName] = useState('');
@@ -71,16 +90,81 @@ export const UserModal: React.FC<UserModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       setErrorMessage(null);
+      setProfileSuccessMsg(null);
+      setPasswordSuccessMsg(null);
       setLoginIdentifier('');
       setLoginPassword('');
       setRegDisplayName('');
       setRegUsername('');
       setRegEmail('');
       setRegPassword('');
+      setOldPassword('');
+      setNewPassword('');
       setIsSubmitting(false);
+      setIsEditingProfile(false);
+      setIsChangingPassword(false);
+      if (currentUser) {
+        setEditDisplayName(currentUser.display_name);
+        setSelectedAvatarColor(currentUser.avatar_color || '#3B82F6');
+      }
       setActiveTab(initialTab);
     }
-  }, [isOpen, initialTab]);
+  }, [isOpen, initialTab, currentUser]);
+
+  const handleProfileUpdateSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMessage(null);
+    setProfileSuccessMsg(null);
+    if (!currentUser || !onUpdateProfile) return;
+
+    const trimmedName = editDisplayName.trim();
+    if (!trimmedName || trimmedName.length < 2) {
+      setErrorMessage('Display Name must be at least 2 characters.');
+      return;
+    }
+
+    try {
+      setIsSubmitting(true);
+      await onUpdateProfile(trimmedName, selectedAvatarColor);
+      setProfileSuccessMsg('Profile updated successfully!');
+      setIsEditingProfile(false);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setErrorMessage(msg);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handlePasswordChangeSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMessage(null);
+    setPasswordSuccessMsg(null);
+    if (!currentUser || !onChangePassword) return;
+
+    if (!oldPassword) {
+      setErrorMessage('Please enter your current password.');
+      return;
+    }
+    if (!newPassword || newPassword.length < 6) {
+      setErrorMessage('New password must be at least 6 characters.');
+      return;
+    }
+
+    try {
+      setIsSubmitting(true);
+      await onChangePassword(oldPassword, newPassword);
+      setPasswordSuccessMsg('Password changed successfully!');
+      setOldPassword('');
+      setNewPassword('');
+      setIsChangingPassword(false);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setErrorMessage(msg);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -181,26 +265,167 @@ export const UserModal: React.FC<UserModalProps> = ({
 
         {/* Body */}
         <div className="p-5 flex flex-col gap-5">
+          {/* Status Alerts */}
+          {errorMessage && (
+            <div className="flex items-center gap-2 p-2.5 bg-red-500/10 border border-red-500/30 rounded-xl text-xs text-red-500">
+              <LuCircleAlert size={15} className="shrink-0" />
+              <span>{errorMessage}</span>
+            </div>
+          )}
+          {profileSuccessMsg && (
+            <div className="flex items-center gap-2 p-2.5 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-xs text-emerald-500">
+              <LuCheck size={15} className="shrink-0" />
+              <span>{profileSuccessMsg}</span>
+            </div>
+          )}
+          {passwordSuccessMsg && (
+            <div className="flex items-center gap-2 p-2.5 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-xs text-emerald-500">
+              <LuCheck size={15} className="shrink-0" />
+              <span>{passwordSuccessMsg}</span>
+            </div>
+          )}
+
           {/* CASE A: USER IS CURRENTLY LOGGED IN */}
           {currentUser ? (
             <div className="flex flex-col gap-4">
               {/* User Profile Card */}
-              <div className="flex items-center gap-3 p-3 bg-(--border-subtle) border border-(--border-subtle) rounded-xl">
-                <div
-                  className="w-12 h-12 rounded-full flex items-center justify-center font-bold text-white text-lg shrink-0"
-                  style={{ backgroundColor: currentUser.avatar_color || currentAccent.primary }}
+              <div className="flex items-center justify-between p-3 bg-(--border-subtle) border border-(--border-subtle) rounded-xl">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div
+                    className="w-12 h-12 rounded-full flex items-center justify-center font-bold text-white text-lg shrink-0"
+                    style={{ backgroundColor: currentUser.avatar_color || currentAccent.primary }}
+                  >
+                    {currentUser.display_name.charAt(0).toUpperCase()}
+                  </div>
+                  <div className="flex flex-col min-w-0">
+                    <h4 className="text-sm font-bold text-(--text-main) truncate">
+                      {currentUser.display_name}
+                    </h4>
+                    <span className="text-xs text-(--text-muted)">@{currentUser.username}</span>
+                    <span className="text-xs text-(--text-muted) flex items-center gap-1 mt-0.5">
+                      <LuMail size={12} /> {currentUser.email}
+                    </span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="px-2.5 py-1 text-xs font-medium text-primary-theme bg-primary-light-theme hover:opacity-80 rounded-lg border border-primary-theme/30 cursor-pointer shrink-0"
+                  onClick={() => {
+                    setIsEditingProfile((prev) => !prev);
+                    setIsChangingPassword(false);
+                    setErrorMessage(null);
+                  }}
                 >
-                  {currentUser.display_name.charAt(0).toUpperCase()}
+                  {isEditingProfile ? 'Cancel' : 'Edit'}
+                </button>
+              </div>
+
+              {/* Edit Profile Form Sub-panel */}
+              {isEditingProfile && (
+                <form onSubmit={handleProfileUpdateSubmit} className="flex flex-col gap-3 p-3.5 bg-(--border-subtle)/50 border border-primary-theme/30 rounded-xl">
+                  <span className="text-xs font-semibold text-(--text-main)">Edit Profile Details</span>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[11px] text-(--text-muted)">Display Name</label>
+                    <input
+                      type="text"
+                      value={editDisplayName}
+                      onChange={(e) => setEditDisplayName(e.target.value)}
+                      required
+                      className="bg-(--bg-card) border border-(--border-subtle) focus:border-primary-theme rounded-lg py-1.5 px-3 text-xs outline-none"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[11px] text-(--text-muted)">Avatar Color</label>
+                    <div className="flex items-center gap-2">
+                      {['#3B82F6', '#10B981', '#8B5CF6', '#F59E0B', '#EC4899', '#06B6D4', '#6366F1'].map((c) => (
+                        <button
+                          key={c}
+                          type="button"
+                          className={`w-6 h-6 rounded-full cursor-pointer transition-transform ${selectedAvatarColor === c ? 'scale-125 ring-2 ring-white/50' : 'opacity-70 hover:opacity-100'}`}
+                          style={{ backgroundColor: c }}
+                          onClick={() => setSelectedAvatarColor(c)}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={isSubmitting}
+                    className="mt-1 py-1.5 px-3 bg-primary-theme text-white text-xs font-semibold rounded-lg hover:opacity-90 cursor-pointer disabled:opacity-50"
+                  >
+                    {isSubmitting ? 'Saving...' : 'Save Profile Changes'}
+                  </button>
+                </form>
+              )}
+
+              {/* Change Password Sub-panel */}
+              <div className="flex flex-col gap-2 p-3.5 bg-(--border-subtle)/30 border border-(--border-subtle) rounded-xl">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-(--text-main)">
+                    <LuLock size={14} className="text-primary-theme" />
+                    <span>Security & Password</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="text-xs text-primary-theme hover:underline cursor-pointer"
+                    onClick={() => {
+                      setIsChangingPassword((prev) => !prev);
+                      setIsEditingProfile(false);
+                      setErrorMessage(null);
+                    }}
+                  >
+                    {isChangingPassword ? 'Cancel' : 'Change Password'}
+                  </button>
                 </div>
-                <div className="flex flex-col min-w-0">
-                  <h4 className="text-sm font-bold text-(--text-main) truncate">
-                    {currentUser.display_name}
-                  </h4>
-                  <span className="text-xs text-(--text-muted)">@{currentUser.username}</span>
-                  <span className="text-xs text-(--text-muted) flex items-center gap-1 mt-0.5">
-                    <LuMail size={12} /> {currentUser.email}
-                  </span>
-                </div>
+
+                {isChangingPassword && (
+                  <form onSubmit={handlePasswordChangeSubmit} className="flex flex-col gap-2.5 pt-2">
+                    <div className="relative flex items-center">
+                      <input
+                        type={showOldPassword ? 'text' : 'password'}
+                        value={oldPassword}
+                        onChange={(e) => setOldPassword(e.target.value)}
+                        placeholder="Current password"
+                        required
+                        className="w-full bg-(--bg-card) border border-(--border-subtle) focus:border-primary-theme rounded-lg py-1.5 px-3 pr-8 text-xs outline-none"
+                      />
+                      <button
+                        type="button"
+                        className="absolute right-2.5 text-(--text-muted)"
+                        onClick={() => setShowOldPassword((prev) => !prev)}
+                      >
+                        {showOldPassword ? <LuEyeOff size={13} /> : <LuEye size={13} />}
+                      </button>
+                    </div>
+
+                    <div className="relative flex items-center">
+                      <input
+                        type={showNewPassword ? 'text' : 'password'}
+                        value={newPassword}
+                        onChange={(e) => setNewPassword(e.target.value)}
+                        placeholder="New password (min 6 chars)"
+                        required
+                        minLength={6}
+                        className="w-full bg-(--bg-card) border border-(--border-subtle) focus:border-primary-theme rounded-lg py-1.5 px-3 pr-8 text-xs outline-none"
+                      />
+                      <button
+                        type="button"
+                        className="absolute right-2.5 text-(--text-muted)"
+                        onClick={() => setShowNewPassword((prev) => !prev)}
+                      >
+                        {showNewPassword ? <LuEyeOff size={13} /> : <LuEye size={13} />}
+                      </button>
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={isSubmitting}
+                      className="py-1.5 px-3 bg-primary-theme text-white text-xs font-semibold rounded-lg hover:opacity-90 cursor-pointer disabled:opacity-50"
+                    >
+                      {isSubmitting ? 'Updating Password...' : 'Update Password'}
+                    </button>
+                  </form>
+                )}
               </div>
 
               {/* Theme & Appearance Section */}
@@ -297,6 +522,7 @@ export const UserModal: React.FC<UserModalProps> = ({
               </div>
             </div>
           ) : (
+
             /* CASE B: GUEST / NOT LOGGED IN */
             <>
               {/* Tab Switcher */}

@@ -88,7 +88,35 @@ class VectorStoreRepository:
             logger.error(f"Vector search failed: {str(e)}")
             return []
 
+    def get_document_chunks(self, document_id: str) -> List[Dict[str, Any]]:
+        """Retrieve all indexed chunks and metadata for a specific document."""
+        try:
+            results = self.collection.get(
+                where={"document_id": document_id},
+                include=["documents", "metadatas"]
+            )
+            chunks = []
+            if results and results.get("ids"):
+                ids = results["ids"]
+                documents = results["documents"] or []
+                metadatas = results["metadatas"] or []
+                for i in range(len(ids)):
+                    meta = metadatas[i] if i < len(metadatas) else {}
+                    chunks.append({
+                        "chunk_id": ids[i],
+                        "chunk_index": meta.get("chunk_index", i),
+                        "page_number": meta.get("page_number"),
+                        "text": documents[i] if i < len(documents) else ""
+                    })
+                # Sort by chunk_index
+                chunks.sort(key=lambda x: x["chunk_index"])
+            return chunks
+        except Exception as e:
+            logger.error(f"Failed to get chunks for document '{document_id}': {str(e)}")
+            return []
+
     def delete_document(self, document_id: str):
+
         """Delete all vectors belonging to a specific document."""
         try:
             self.collection.delete(where={"document_id": document_id})

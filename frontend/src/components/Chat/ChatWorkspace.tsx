@@ -29,6 +29,7 @@ interface ChatWorkspaceProps {
   onDeleteDocument: (documentId: string) => void;
   currentUser: User | null;
   onOpenUserModal: (tab?: 'login' | 'register') => void;
+  onClearChat?: () => void;
 }
 
 export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
@@ -49,6 +50,7 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
   onDeleteDocument,
   currentUser,
   onOpenUserModal,
+  onClearChat,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const dragCounterRef = useRef(0);
@@ -137,6 +139,8 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
         sessionId={activeSessionId}
         currentUser={currentUser}
         onOpenUserModal={onOpenUserModal}
+        onClearChat={onClearChat}
+        hasMessages={messages.length > 0 || !!streamingMessage}
       />
 
       <MessageList

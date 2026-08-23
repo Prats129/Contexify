@@ -1,6 +1,6 @@
 import uuid
 from pathlib import Path
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from pypdf import PdfReader
 from app.core.config import settings
 from app.core.logging import logger
@@ -97,7 +97,13 @@ class RAGService:
 
         return chunks
 
-    def process_and_index_document(self, file_path: Path, filename: str, session_id: str) -> DocumentMetadata:
+    def process_and_index_document(
+        self,
+        file_path: Path,
+        filename: str,
+        session_id: str,
+        user_id: Optional[str] = None
+    ) -> DocumentMetadata:
         """
         Full ingestion pipeline: Extract -> Chunk -> Embed -> Index -> Register Metadata.
         """
@@ -151,11 +157,12 @@ class RAGService:
             uploaded_at=Path(file_path).stat().st_mtime.__str__()
         )
 
-        session_store_repo.save_document_metadata(doc_metadata, session_id=session_id)
+        session_store_repo.save_document_metadata(doc_metadata, user_id=user_id, session_id=session_id)
         session_store_repo.attach_document_to_session(session_id, document_id)
 
         logger.info(f"Document '{filename}' indexed successfully into ChromaDB with {len(chunks)} chunks.")
         return doc_metadata
+
 
     def retrieve_context_for_query(self, query: str, session_id: str) -> List[Dict[str, Any]]:
         """

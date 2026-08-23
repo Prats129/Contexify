@@ -143,4 +143,88 @@ class UserService:
                 created_at=row["created_at"]
             )
 
+    def update_user_profile(
+        self,
+        user_id: str,
+        display_name: Optional[str] = None,
+        avatar_color: Optional[str] = None
+    ) -> UserResponse:
+        """Update display name and/or avatar color for a user."""
+        user = self.get_user_by_id(user_id)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User account not found."
+            )
+
+        new_display_name = display_name.strip() if display_name else user.display_name
+        new_avatar_color = avatar_color.strip() if avatar_color else (user.avatar_color or "#3B82F6")
+
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE users
+                SET display_name = ?, avatar_color = ?
+                WHERE id = ?
+                """,
+                (new_display_name, new_avatar_color, user_id)
+            )
+
+        logger.info(f"Updated profile for user '{user.username}' ({user_id})")
+        return UserResponse(
+            id=user.id,
+            username=user.username,
+            email=user.email,
+            display_name=new_display_name,
+            avatar_color=new_avatar_color,
+            created_at=user.created_at
+        )
+
+    def change_user_password(
+        self,
+        user_id: str,
+        old_password: str,
+        new_password: str
+    ) -> bool:
+        """Change user password after verifying the old password."""
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT password_salt, password_hash, username FROM users WHERE id = ?",
+                (user_id,)
+            )
+            row = cursor.fetchone()
+            if not row:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="User account not found."
+                )
+
+            stored_salt = row["password_salt"] or ""
+            stored_hash = row["password_hash"] or ""
+
+            if not verify_password(old_password, stored_salt, stored_hash):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Current password is incorrect."
+                )
+
+            if len(new_password) < 6:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="New password must be at least 6 characters long."
+                )
+
+            new_salt = secrets.token_hex(16)
+            new_hash = hash_password(new_password, new_salt)
+
+            cursor.execute(
+                "UPDATE users SET password_hash = ?, password_salt = ? WHERE id = ?",
+                (new_hash, new_salt, user_id)
+            )
+            logger.info(f"Password changed successfully for user '{row['username']}' ({user_id})")
+            return True
+
 user_service = UserService()
+

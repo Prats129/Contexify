@@ -208,8 +208,18 @@ export const App: React.FC = () => {
   };
 
   // --- 6. Mode Switch ---
-  const handleModeChange = (mode: ChatMode) => {
+  const handleModeChange = async (mode: ChatMode) => {
     setCurrentMode(mode);
+    if (activeSessionId && currentUser?.id) {
+      try {
+        await apiService.updateSessionMode(activeSessionId, mode);
+        setSessions((prev) =>
+          prev.map((s) => (s.id === activeSessionId ? { ...s, mode } : s))
+        );
+      } catch (err) {
+        console.error('Failed to persist session mode switch:', err);
+      }
+    }
   };
 
   // --- 7. Document Upload & Delete ---
@@ -219,7 +229,7 @@ export const App: React.FC = () => {
     setUploadStatusText(`Vectorizing '${file.name}'...`);
 
     try {
-      const res = await apiService.uploadDocument(file, activeSessionId);
+      const res = await apiService.uploadDocument(file, activeSessionId, currentUser?.id);
       // Update local document state
       setDocuments((prev) => {
         const exists = prev.some(
@@ -235,6 +245,7 @@ export const App: React.FC = () => {
       setUploadStatusText('');
     }
   };
+
 
   const handleDeleteDocument = async (documentId: string) => {
     if (
@@ -252,6 +263,23 @@ export const App: React.FC = () => {
       alert(`Deletion failed: ${err}`);
     }
   };
+
+  // --- Clear Messages in Active Conversation (Authenticated Users Only) ---
+  const handleClearMessages = async () => {
+    if (!currentUser || !activeSessionId || (messages.length === 0 && !streamingMessage)) return;
+    if (!window.confirm('Clear all messages in this conversation? Attached documents and vectors will remain intact.')) {
+      return;
+    }
+    try {
+      await apiService.clearSessionMessages(activeSessionId);
+      setMessages([]);
+      setStreamingMessage(null);
+    } catch (e: unknown) {
+      const err = e instanceof Error ? e.message : String(e);
+      alert(`Failed to clear messages: ${err}`);
+    }
+  };
+
 
   // --- 8. Send Chat Message & SSE Stream ---
   const handleSendMessage = async (e?: React.FormEvent) => {
@@ -384,6 +412,22 @@ export const App: React.FC = () => {
     await loadSessions(user.id);
   };
 
+  const handleUpdateProfile = async (displayName: string, avatarColor: string) => {
+    if (!currentUser?.id) return;
+    const updated = await apiService.updateUserProfile(
+      currentUser.id,
+      displayName,
+      avatarColor
+    );
+    setCurrentUser(updated);
+    localStorage.setItem('contexify_user', JSON.stringify(updated));
+  };
+
+  const handleChangePassword = async (oldPassword: string, newPassword: string) => {
+    if (!currentUser?.id) return;
+    await apiService.changePassword(currentUser.id, oldPassword, newPassword);
+  };
+
   const handleLogout = () => {
     localStorage.removeItem('contexify_user');
     localStorage.removeItem('contexify_active_session');
@@ -434,6 +478,7 @@ export const App: React.FC = () => {
         uploadStatusText={uploadStatusText}
         documents={documents}
         onDeleteDocument={handleDeleteDocument}
+        onClearChat={handleClearMessages}
       />
 
       <UserModal
@@ -445,10 +490,13 @@ export const App: React.FC = () => {
         onRegister={handleRegister}
         onLogout={handleLogout}
         onContinueAsGuest={handleContinueAsGuest}
+        onUpdateProfile={handleUpdateProfile}
+        onChangePassword={handleChangePassword}
       />
     </div>
   );
 };
 
 export default App;
+
 

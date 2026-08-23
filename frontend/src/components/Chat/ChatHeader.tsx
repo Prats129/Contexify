@@ -6,6 +6,7 @@ import {
   LuUserPlus,
   LuSun,
   LuMoon,
+  LuEraser,
 } from 'react-icons/lu';
 import { useTheme } from '../../context/ThemeContext';
 import type { ChatMode, User } from '../../types';
@@ -15,6 +16,8 @@ interface ChatHeaderProps {
   sessionId: string | null;
   currentUser: User | null;
   onOpenUserModal: (tab?: 'login' | 'register') => void;
+  onClearChat?: () => void;
+  hasMessages?: boolean;
 }
 
 export const ChatHeader: React.FC<ChatHeaderProps> = ({
@@ -22,6 +25,8 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   sessionId,
   currentUser,
   onOpenUserModal,
+  onClearChat,
+  hasMessages = false,
 }) => {
   const isWeb = currentMode === 'WEB_SEARCH';
   const { mode, toggleMode } = useTheme();
@@ -29,24 +34,34 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   return (
     <header className="h-14 border-b border-(--border-subtle) flex items-center justify-between px-5 bg-(--bg-app)/80 backdrop-blur-md shrink-0">
       <div className="flex items-center gap-3">
-        <div className="flex items-center gap-3">
-          <span
-            className={`px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5 border ${
-              isWeb
-                ? 'bg-emerald-500/15 text-emerald-500 dark:text-emerald-400 border-emerald-500/30'
-                : 'bg-primary-light-theme text-primary-theme border-primary-theme'
+        <span
+          className={`px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5 border ${isWeb
+            ? 'bg-emerald-500/15 text-emerald-500 dark:text-emerald-400 border-emerald-500/30'
+            : 'bg-primary-light-theme text-primary-theme border-primary-theme'
             }`}
-          >
-            {isWeb ? <LuGlobe size={14} /> : <LuShieldCheck size={14} />}
-            {isWeb ? 'Live Web Search' : 'Document Grounded RAG'}
-          </span>
-          <span className="text-xs text-(--text-muted) hidden sm:inline-block">
-            Session: <code className="font-mono text-(--text-main) font-semibold">{sessionId ? sessionId.substring(0, 8) : '...'}</code>
-          </span>
-        </div>
+        >
+          {isWeb ? <LuGlobe size={14} /> : <LuShieldCheck size={14} />}
+          {isWeb ? 'Live Web Search' : 'Document Grounded RAG'}
+        </span>
+        <span className="text-xs text-(--text-muted) hidden sm:inline-block">
+          Session: <code className="font-mono text-(--text-main) font-semibold">{sessionId ? sessionId.substring(0, 8) : '...'}</code>
+        </span>
       </div>
 
       <div className="flex items-center gap-2.5">
+        {/* Clear Chat Button (only available for authenticated account holders) */}
+        {Boolean(currentUser && hasMessages && onClearChat) && (
+          <button
+            type="button"
+            onClick={onClearChat}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-(--text-muted) hover:text-red-500 hover:bg-red-500/10 rounded-lg cursor-pointer transition-colors"
+            title="Clear message history (keeps documents)"
+          >
+            <LuEraser size={14} />
+            <span className="hidden sm:inline">Clear Chat</span>
+          </button>
+        )}
+
         {/* Quick Light / Dark Mode Toggle Button */}
         <button
           type="button"
@@ -80,3 +95,4 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
     </header>
   );
 };
+
