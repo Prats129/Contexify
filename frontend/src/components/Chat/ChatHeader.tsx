@@ -13,7 +13,6 @@ import type { ChatMode, User } from '../../types';
 
 interface ChatHeaderProps {
   currentMode: ChatMode;
-  sessionId: string | null;
   currentUser: User | null;
   onOpenUserModal: (tab?: 'login' | 'register') => void;
   onClearChat?: () => void;
@@ -22,7 +21,6 @@ interface ChatHeaderProps {
 
 export const ChatHeader: React.FC<ChatHeaderProps> = ({
   currentMode,
-  sessionId,
   currentUser,
   onOpenUserModal,
   onClearChat,
@@ -42,9 +40,6 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
         >
           {isWeb ? <LuGlobe size={14} /> : <LuShieldCheck size={14} />}
           {isWeb ? 'Live Web Search' : 'Document Grounded RAG'}
-        </span>
-        <span className="text-xs text-(--text-muted) hidden sm:inline-block">
-          Session: <code className="font-mono text-(--text-main) font-semibold">{sessionId ? sessionId.substring(0, 8) : '...'}</code>
         </span>
       </div>
 

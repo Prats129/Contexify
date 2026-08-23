@@ -14,7 +14,6 @@ import type {
 interface ChatWorkspaceProps {
   currentMode: ChatMode;
   onModeChange: (mode: ChatMode) => void;
-  activeSessionId: string | null;
   messages: Message[];
   streamingMessage: StreamingMessageState | null;
   onSelectPrompt: (prompt: string) => void;
@@ -35,7 +34,6 @@ interface ChatWorkspaceProps {
 export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
   currentMode,
   onModeChange,
-  activeSessionId,
   messages,
   streamingMessage,
   onSelectPrompt,
@@ -117,9 +115,8 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
 
   return (
     <main
-      className={`flex-1 flex flex-col bg-(--bg-app) text-(--text-main) relative overflow-hidden h-screen ${
-        isDragging ? 'ring-2 border-primary-theme ring-inset' : ''
-      }`}
+      className={`flex-1 flex flex-col bg-(--bg-app) text-(--text-main) relative overflow-hidden h-screen ${isDragging ? 'ring-2 border-primary-theme ring-inset' : ''
+        }`}
     >
       {/* Drag & Drop Visual Overlay */}
       {isDragging && (
@@ -136,7 +133,6 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
 
       <ChatHeader
         currentMode={currentMode}
-        sessionId={activeSessionId}
         currentUser={currentUser}
         onOpenUserModal={onOpenUserModal}
         onClearChat={onClearChat}

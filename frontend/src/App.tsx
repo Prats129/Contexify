@@ -18,6 +18,31 @@ function generateGuestSessionId(): string {
   return `guest-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
 }
 
+function getSessionIdFromUrl(): string | null {
+  const path = window.location.pathname;
+  const match = path.match(/^\/c\/([^/]+)/);
+  if (match && match[1]) {
+    return decodeURIComponent(match[1]);
+  }
+  const params = new URLSearchParams(window.location.search);
+  const cParam = params.get('c');
+  if (cParam) return cParam;
+  return null;
+}
+
+function updateUrlForSession(sessionId: string | null) {
+  if (sessionId && !sessionId.startsWith('guest-')) {
+    const targetPath = `/c/${encodeURIComponent(sessionId)}`;
+    if (window.location.pathname !== targetPath) {
+      window.history.pushState({ sessionId }, '', targetPath);
+    }
+  } else {
+    if (window.location.pathname !== '/' && window.location.pathname !== '') {
+      window.history.pushState({}, '', '/');
+    }
+  }
+}
+
 export const App: React.FC = () => {
   // --- Global State ---
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -54,7 +79,38 @@ export const App: React.FC = () => {
     });
   };
 
-  // --- 1. User Initialization (Guest vs Logged In) ---
+  // --- 1. Select / Switch Active Session ---
+  const selectSession = useCallback(
+    async (sessionId: string, pushUrl: boolean = true) => {
+      if (!sessionId) return;
+      setActiveSessionId(sessionId);
+      setStreamingMessage(null);
+
+      if (currentUser?.id) {
+        localStorage.setItem('contexify_active_session', sessionId);
+        if (pushUrl) {
+          updateUrlForSession(sessionId);
+        }
+        try {
+          const history = await apiService.getSessionHistory(sessionId);
+          if (history.session?.mode) {
+            setCurrentMode(history.session.mode);
+          }
+          setDocuments(history.documents || []);
+          setMessages(history.messages || []);
+        } catch (e) {
+          console.error('Failed to load session history:', e);
+        }
+      } else {
+        if (pushUrl) {
+          updateUrlForSession(null);
+        }
+      }
+    },
+    [currentUser]
+  );
+
+  // --- 2. User Initialization (Guest vs Logged In) ---
   useEffect(() => {
     initUser();
   }, []);
@@ -82,6 +138,14 @@ export const App: React.FC = () => {
         setSessions([]);
         setMessages([]);
         setDocuments([]);
+        const urlSessionId = getSessionIdFromUrl();
+        if (urlSessionId) {
+          // Prompt user to log in if trying to access a direct session URL
+          setIsUserModalOpen(true);
+          setUserModalTab('login');
+        } else {
+          updateUrlForSession(null);
+        }
       }
     } catch (e) {
       console.error('Failed to initialize user:', e);
@@ -90,68 +154,76 @@ export const App: React.FC = () => {
     }
   };
 
-  // --- 2. Load Sessions when Logged In ---
-  useEffect(() => {
-    if (currentUser?.id) {
-      loadSessions(currentUser.id);
-    }
-  }, [currentUser]);
-
-  const loadSessions = async (userId: string) => {
+  // --- 3. Load Sessions when Logged In ---
+  const loadSessions = useCallback(async (userId: string) => {
     try {
       const sessionList = await apiService.listSessions(userId);
       setSessions(sessionList || []);
 
-      const savedActiveSessionId = localStorage.getItem(
-        'contexify_active_session'
-      );
-      const matchingSession = sessionList.find(
-        (s) => s.id === savedActiveSessionId
-      );
+      const urlSessionId = getSessionIdFromUrl();
+      const savedActiveSessionId = localStorage.getItem('contexify_active_session');
 
-      if (matchingSession) {
-        selectSession(matchingSession.id);
+      // 1. Check if URL specifies a target session ID
+      if (urlSessionId) {
+        const matchingUrlSession = sessionList.find((s) => s.id === urlSessionId);
+        if (matchingUrlSession) {
+          await selectSession(matchingUrlSession.id, false);
+          return;
+        }
+        // If not directly in list, attempt to fetch history directly (e.g. valid session)
+        try {
+          const hist = await apiService.getSessionHistory(urlSessionId);
+          if (hist.session) {
+            setSessions((prev) => [hist.session, ...prev.filter(s => s.id !== hist.session.id)]);
+            await selectSession(hist.session.id, false);
+            return;
+          }
+        } catch {
+          // If session doesn't exist, ignore and fallback
+        }
+      }
+
+      // 2. Check localStorage saved session
+      const matchingSaved = sessionList.find((s) => s.id === savedActiveSessionId);
+      if (matchingSaved) {
+        await selectSession(matchingSaved.id, true);
       } else if (sessionList.length > 0) {
-        selectSession(sessionList[0].id);
+        await selectSession(sessionList[0].id, true);
       } else {
-        // Create initial session for logged-in user
+        // 3. Create initial session for logged-in user
         const newSess = await apiService.createSession(
           userId,
           'New Conversation',
           currentMode
         );
         setSessions([newSess]);
-        selectSession(newSess.id);
+        await selectSession(newSess.id, true);
       }
     } catch (e) {
       console.error('Failed to load user sessions:', e);
     }
-  };
+  }, [currentMode, selectSession]);
 
-  // --- 3. Select / Switch Active Session ---
-  const selectSession = useCallback(
-    async (sessionId: string) => {
-      if (!sessionId) return;
-      setActiveSessionId(sessionId);
-      setStreamingMessage(null);
+  useEffect(() => {
+    if (currentUser?.id) {
+      loadSessions(currentUser.id);
+    }
+  }, [currentUser, loadSessions]);
 
-      // Only save active session in localStorage if user is logged in
-      if (currentUser?.id) {
-        localStorage.setItem('contexify_active_session', sessionId);
-        try {
-          const history = await apiService.getSessionHistory(sessionId);
-          if (history.session?.mode) {
-            setCurrentMode(history.session.mode);
-          }
-          setDocuments(history.documents || []);
-          setMessages(history.messages || []);
-        } catch (e) {
-          console.error('Failed to load session history:', e);
-        }
+  // --- 4. Listen to Browser Back / Forward History Navigation ---
+  useEffect(() => {
+    const handlePopState = () => {
+      const targetSessionId = getSessionIdFromUrl();
+      if (targetSessionId && currentUser?.id) {
+        selectSession(targetSessionId, false);
+      } else if (!targetSessionId && currentUser?.id && sessions.length > 0) {
+        selectSession(sessions[0].id, false);
       }
-    },
-    [currentUser]
-  );
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [currentUser, sessions, selectSession]);
 
   // --- 4. Create New Session ---
   const handleNewSession = async () => {
@@ -479,7 +551,6 @@ export const App: React.FC = () => {
         onOpenUserModal={handleOpenUserModal}
         currentMode={currentMode}
         onModeChange={handleModeChange}
-        activeSessionId={activeSessionId}
         messages={messages}
         streamingMessage={streamingMessage}
         onSelectPrompt={handleSelectPrompt}
