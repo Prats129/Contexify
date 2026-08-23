@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react';
+import { LuSparkles, LuListTodo, LuCpu, LuTarget } from 'react-icons/lu';
 import { MessageItem } from './MessageItem';
 import type { Message, StreamingMessageState } from '../../types';
 
@@ -26,7 +27,7 @@ export const MessageList: React.FC<MessageListProps> = ({
       {showWelcome && (
         <div className="welcome-banner">
           <div className="welcome-icon">
-            <i className="fa-solid fa-wand-magic-sparkles"></i>
+            <LuSparkles />
           </div>
           <h2>Welcome to Enterprise Knowledge AI</h2>
           <p>
@@ -45,7 +46,7 @@ export const MessageList: React.FC<MessageListProps> = ({
                 )
               }
             >
-              <i className="fa-solid fa-list-check"></i> Summarize document
+              <LuListTodo /> Summarize document
             </button>
             <button
               type="button"
@@ -56,7 +57,7 @@ export const MessageList: React.FC<MessageListProps> = ({
                 )
               }
             >
-              <i className="fa-solid fa-microchip"></i> Key concepts
+              <LuCpu /> Key concepts
             </button>
             <button
               type="button"
@@ -67,7 +68,7 @@ export const MessageList: React.FC<MessageListProps> = ({
                 )
               }
             >
-              <i className="fa-solid fa-bullseye"></i> Extract rules & guidelines
+              <LuTarget /> Extract rules & guidelines
             </button>
           </div>
         </div>

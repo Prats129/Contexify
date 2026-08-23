@@ -1,4 +1,5 @@
 import React from 'react';
+import { LuBrain, LuUser, LuTriangleAlert } from 'react-icons/lu';
 import { CitationsBox } from './CitationsBox';
 import type { Citation } from '../../types';
 
@@ -40,19 +41,19 @@ export const MessageItem: React.FC<MessageItemProps> = ({
     <div className={`message-row ${isUser ? 'user' : 'assistant'}`}>
       {!isUser && (
         <div className="message-avatar">
-          <i className="fa-solid fa-brain"></i>
+          <LuBrain />
         </div>
       )}
 
       <div className="message-content-wrapper">
         <div className="message-bubble">
           {isError ? (
-            <span style={{ color: '#EF4444' }}>
-              <i className="fa-solid fa-triangle-exclamation"></i> {content}
+            <span style={{ color: '#EF4444', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <LuTriangleAlert /> {content}
             </span>
           ) : isStreaming && !content ? (
-            <span>
-              <i className="fa-solid fa-ellipsis fa-pulse"></i> Generating answer...
+            <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              Generating answer...
             </span>
           ) : (
             formatContent(content)
@@ -68,7 +69,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
 
       {isUser && (
         <div className="message-avatar">
-          <i className="fa-solid fa-user"></i>
+          <LuUser />
         </div>
       )}
     </div>

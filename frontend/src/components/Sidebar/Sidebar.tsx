@@ -1,4 +1,6 @@
 import React from 'react';
+import { LuBrain, LuPlus } from 'react-icons/lu';
+import { GoSidebarCollapse, GoSidebarExpand } from 'react-icons/go';
 import { UserProfileCard } from './UserProfileCard';
 import { SessionHistory } from './SessionHistory';
 import { DocumentList } from './DocumentList';
@@ -44,7 +46,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           title={!isOpen ? 'Contexify AI - Click to expand' : undefined}
         >
           <div className="brand-icon">
-            <i className="fa-solid fa-brain"></i>
+            <LuBrain size={20} />
           </div>
           <div className="brand-text">
             <h1>Contexify AI</h1>
@@ -57,7 +59,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           onClick={onToggleSidebar}
           title={isOpen ? 'Collapse sidebar' : 'Expand sidebar'}
         >
-          <i className={`fa-solid ${isOpen ? 'fa-angles-left' : 'fa-angles-right'}`}></i>
+          {isOpen ? <GoSidebarCollapse size={18} /> : <GoSidebarExpand size={18} />}
         </button>
       </div>
 
@@ -70,7 +72,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             onClick={onNewSession}
             title="New Conversation"
           >
-            <i className="fa-solid fa-plus"></i>
+            <LuPlus size={18} />
             <span>New Conversation</span>
           </button>
         </div>

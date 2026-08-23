@@ -1,4 +1,5 @@
 import React from 'react';
+import { LuQuote } from 'react-icons/lu';
 import type { Citation } from '../../types';
 
 interface CitationsBoxProps {
@@ -11,7 +12,7 @@ export const CitationsBox: React.FC<CitationsBoxProps> = ({ citations }) => {
   return (
     <div className="citations-box">
       <div className="citations-header">
-        <i className="fa-solid fa-quote-left"></i> Retrieved Context Citations ({citations.length})
+        <LuQuote /> Retrieved Context Citations ({citations.length})
       </div>
       {citations.map((c, idx) => (
         <div key={idx} className="citation-item">

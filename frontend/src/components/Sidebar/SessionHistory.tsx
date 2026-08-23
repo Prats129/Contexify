@@ -1,6 +1,7 @@
 import React from 'react';
-import type { ChatSession, User } from '../../types';
+import { LuMessageSquare, LuCloudUpload, LuGlobe, LuFileText, LuTrash2 } from 'react-icons/lu';
 import { FaGoogle } from 'react-icons/fa';
+import type { ChatSession, User } from '../../types';
 
 interface SessionHistoryProps {
   currentUser: User | null;
@@ -25,7 +26,7 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
     <div className="sidebar-section history-section">
       <div className="section-header">
         <label className="section-label">
-          <i className="fa-solid fa-comments"></i> Chat History
+          <LuMessageSquare /> Chat History
         </label>
         <span className="session-count-badge">
           {isGuest ? 'Guest' : sessions.length}
@@ -35,7 +36,7 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
       <div className="session-list">
         {isGuest ? (
           <div className="guest-history-card">
-            <i className="fa-solid fa-cloud-arrow-up"></i>
+            <LuCloudUpload />
             <p className="guest-title">Browsing as Guest</p>
             <span className="guest-desc">
               Chats are temporary in this browser tab. Sign in to save and sync history.
@@ -50,7 +51,7 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
           </div>
         ) : sessions.length === 0 ? (
           <div className="empty-sessions-placeholder">
-            <i className="fa-regular fa-message"></i>
+            <LuMessageSquare />
             <p>No conversations yet.</p>
           </div>
         ) : (
@@ -65,11 +66,7 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
                 title={`${s.title} (${isWeb ? 'Web Search' : 'Document RAG'})`}
               >
                 <div className="session-mini-icon">
-                  <i
-                    className={`fa-solid ${
-                      isWeb ? 'fa-globe' : 'fa-message'
-                    }`}
-                  ></i>
+                  {isWeb ? <LuGlobe /> : <LuMessageSquare />}
                 </div>
                 <div className="session-item-content">
                   <span className="session-item-title" title={s.title}>
@@ -77,11 +74,7 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
                   </span>
                   <div className="session-item-meta">
                     <span className="session-tag-mode">
-                      <i
-                        className={`fa-solid ${
-                          isWeb ? 'fa-globe' : 'fa-file-contract'
-                        }`}
-                      ></i>{' '}
+                      {isWeb ? <LuGlobe /> : <LuFileText />}{' '}
                       {isWeb ? 'Web' : 'RAG'}
                     </span>
                     <span>{s.message_count || 0} msgs</span>
@@ -96,7 +89,7 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
                   }}
                   title="Delete Conversation"
                 >
-                  <i className="fa-solid fa-trash-can"></i>
+                  <LuTrash2 />
                 </button>
               </div>
             );

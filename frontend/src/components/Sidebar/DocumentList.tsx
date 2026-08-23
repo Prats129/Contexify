@@ -1,4 +1,5 @@
 import React from 'react';
+import { LuFolderOpen, LuFileText, LuFileCode, LuFile, LuTrash2 } from 'react-icons/lu';
 import type { DocumentMetadata } from '../../types';
 
 interface DocumentListProps {
@@ -11,16 +12,16 @@ export const DocumentList: React.FC<DocumentListProps> = ({
   onDeleteDocument,
 }) => {
   const getFileIcon = (fileType: string) => {
-    if (fileType === '.pdf') return 'fa-solid fa-file-pdf';
-    if (fileType === '.txt' || fileType === '.md') return 'fa-solid fa-file-lines';
-    return 'fa-solid fa-file';
+    if (fileType === '.pdf') return <LuFileText />;
+    if (fileType === '.txt' || fileType === '.md') return <LuFileCode />;
+    return <LuFile />;
   };
 
   return (
     <div className="sidebar-section docs-section">
       <div className="section-header">
         <label className="section-label">
-          <i className="fa-solid fa-folder-open"></i> Session Documents
+          <LuFolderOpen /> Session Documents
         </label>
         <span className="doc-count-badge">{documents.length} files</span>
       </div>
@@ -28,7 +29,7 @@ export const DocumentList: React.FC<DocumentListProps> = ({
       <div className="document-list">
         {documents.length === 0 ? (
           <div className="empty-docs-placeholder">
-            <i className="fa-regular fa-file-lines"></i>
+            <LuFileText />
             <p>No documents in this session.</p>
             <span>Drop a PDF/TXT to start RAG QA</span>
           </div>
@@ -36,7 +37,7 @@ export const DocumentList: React.FC<DocumentListProps> = ({
           documents.map((doc) => (
             <div key={doc.document_id} className="doc-card">
               <div className="doc-info">
-                <i className={getFileIcon(doc.file_type)}></i>
+                {getFileIcon(doc.file_type)}
                 <div className="doc-details">
                   <span className="doc-name" title={doc.filename}>
                     {doc.filename}
@@ -52,7 +53,7 @@ export const DocumentList: React.FC<DocumentListProps> = ({
                 onClick={() => onDeleteDocument(doc.document_id)}
                 title="Delete Document"
               >
-                <i className="fa-solid fa-trash-can"></i>
+                <LuTrash2 />
               </button>
             </div>
           ))

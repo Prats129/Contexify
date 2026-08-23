@@ -1,4 +1,22 @@
 import React, { useState, useEffect } from 'react';
+import {
+  LuShieldCheck,
+  LuX,
+  LuLogIn,
+  LuUserPlus,
+  LuLogOut,
+  LuUser,
+  LuLock,
+  LuEye,
+  LuEyeOff,
+  LuMail,
+  LuIdCard,
+  LuAtSign,
+  LuCircleAlert,
+  LuInfo,
+  LuLoader,
+  LuUserCheck,
+} from 'react-icons/lu';
 import type { User } from '../../types';
 
 interface UserModalProps {
@@ -134,11 +152,11 @@ export const UserModal: React.FC<UserModalProps> = ({
       <div className="modal-card auth-modal-card" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <div className="modal-title">
-            <i className="fa-solid fa-shield-halved"></i>
+            <LuShieldCheck />
             <h3>{currentUser ? 'Account Profile' : 'Contexify AI Authentication'}</h3>
           </div>
           <button type="button" className="btn-close-modal" onClick={onClose} title="Close">
-            <i className="fa-solid fa-xmark"></i>
+            <LuX />
           </button>
         </div>
 
@@ -157,13 +175,13 @@ export const UserModal: React.FC<UserModalProps> = ({
                   <h4 className="user-profile-name">{currentUser.display_name}</h4>
                   <span className="user-profile-handle">@{currentUser.username}</span>
                   <span className="user-profile-email">
-                    <i className="fa-regular fa-envelope"></i> {currentUser.email}
+                    <LuMail /> {currentUser.email}
                   </span>
                 </div>
               </div>
 
               <div className="auth-lock-notice">
-                <i className="fa-solid fa-circle-info"></i>
+                <LuInfo />
                 <span>
                   You are currently logged in. To switch accounts or create a new account, please log out first.
                 </span>
@@ -184,7 +202,7 @@ export const UserModal: React.FC<UserModalProps> = ({
                     }
                   }}
                 >
-                  <i className="fa-solid fa-arrow-right-from-bracket"></i> Log Out of Account
+                  <LuLogOut /> Log Out of Account
                 </button>
                 <button
                   type="button"
@@ -208,7 +226,7 @@ export const UserModal: React.FC<UserModalProps> = ({
                     setErrorMessage(null);
                   }}
                 >
-                  <i className="fa-solid fa-right-to-bracket"></i> Sign In
+                  <LuLogIn /> Sign In
                 </button>
                 <button
                   type="button"
@@ -218,14 +236,14 @@ export const UserModal: React.FC<UserModalProps> = ({
                     setErrorMessage(null);
                   }}
                 >
-                  <i className="fa-solid fa-user-plus"></i> Create Account
+                  <LuUserPlus /> Create Account
                 </button>
               </div>
 
               {/* Error Alert */}
               {errorMessage && (
                 <div className="auth-error-banner">
-                  <i className="fa-solid fa-circle-exclamation"></i>
+                  <LuCircleAlert />
                   <span>{errorMessage}</span>
                 </div>
               )}
@@ -236,7 +254,7 @@ export const UserModal: React.FC<UserModalProps> = ({
                   <div className="form-group">
                     <label htmlFor="loginIdentifier">Username or Email *</label>
                     <div className="input-with-icon">
-                      <i className="fa-solid fa-user input-icon"></i>
+                      <LuUser className="input-icon" />
                       <input
                         type="text"
                         id="loginIdentifier"
@@ -252,7 +270,7 @@ export const UserModal: React.FC<UserModalProps> = ({
                   <div className="form-group">
                     <label htmlFor="loginPassword">Password *</label>
                     <div className="input-with-icon">
-                      <i className="fa-solid fa-lock input-icon"></i>
+                      <LuLock className="input-icon" />
                       <input
                         type={showLoginPassword ? 'text' : 'password'}
                         id="loginPassword"
@@ -268,7 +286,7 @@ export const UserModal: React.FC<UserModalProps> = ({
                         onClick={() => setShowLoginPassword((prev) => !prev)}
                         title={showLoginPassword ? 'Hide password' : 'Show password'}
                       >
-                        <i className={`fa-solid ${showLoginPassword ? 'fa-eye-slash' : 'fa-eye'}`}></i>
+                        {showLoginPassword ? <LuEyeOff /> : <LuEye />}
                       </button>
                     </div>
                   </div>
@@ -280,11 +298,11 @@ export const UserModal: React.FC<UserModalProps> = ({
                   >
                     {isSubmitting ? (
                       <>
-                        <i className="fa-solid fa-spinner fa-spin"></i> Authenticating...
+                        <LuLoader className="icon-spin" /> Authenticating...
                       </>
                     ) : (
                       <>
-                        <i className="fa-solid fa-right-to-bracket"></i> Sign In to Account
+                        <LuLogIn /> Sign In to Account
                       </>
                     )}
                   </button>
@@ -297,7 +315,7 @@ export const UserModal: React.FC<UserModalProps> = ({
                   <div className="form-group">
                     <label htmlFor="regDisplayName">Full Name / Display Name *</label>
                     <div className="input-with-icon">
-                      <i className="fa-solid fa-id-card input-icon"></i>
+                      <LuIdCard className="input-icon" />
                       <input
                         type="text"
                         id="regDisplayName"
@@ -313,7 +331,7 @@ export const UserModal: React.FC<UserModalProps> = ({
                   <div className="form-group">
                     <label htmlFor="regUsername">Username *</label>
                     <div className="input-with-icon">
-                      <i className="fa-solid fa-at input-icon"></i>
+                      <LuAtSign className="input-icon" />
                       <input
                         type="text"
                         id="regUsername"
@@ -329,7 +347,7 @@ export const UserModal: React.FC<UserModalProps> = ({
                   <div className="form-group">
                     <label htmlFor="regEmail">Email Address *</label>
                     <div className="input-with-icon">
-                      <i className="fa-solid fa-envelope input-icon"></i>
+                      <LuMail className="input-icon" />
                       <input
                         type="email"
                         id="regEmail"
@@ -345,7 +363,7 @@ export const UserModal: React.FC<UserModalProps> = ({
                   <div className="form-group">
                     <label htmlFor="regPassword">Password * (min 6 characters)</label>
                     <div className="input-with-icon">
-                      <i className="fa-solid fa-lock input-icon"></i>
+                      <LuLock className="input-icon" />
                       <input
                         type={showRegPassword ? 'text' : 'password'}
                         id="regPassword"
@@ -362,7 +380,7 @@ export const UserModal: React.FC<UserModalProps> = ({
                         onClick={() => setShowRegPassword((prev) => !prev)}
                         title={showRegPassword ? 'Hide password' : 'Show password'}
                       >
-                        <i className={`fa-solid ${showRegPassword ? 'fa-eye-slash' : 'fa-eye'}`}></i>
+                        {showRegPassword ? <LuEyeOff /> : <LuEye />}
                       </button>
                     </div>
                   </div>
@@ -374,11 +392,11 @@ export const UserModal: React.FC<UserModalProps> = ({
                   >
                     {isSubmitting ? (
                       <>
-                        <i className="fa-solid fa-spinner fa-spin"></i> Creating Account...
+                        <LuLoader className="icon-spin" /> Creating Account...
                       </>
                     ) : (
                       <>
-                        <i className="fa-solid fa-user-plus"></i> Create Account & Save History
+                        <LuUserPlus /> Create Account & Save History
                       </>
                     )}
                   </button>
@@ -392,7 +410,7 @@ export const UserModal: React.FC<UserModalProps> = ({
                   className="btn-modal-guest"
                   onClick={onContinueAsGuest}
                 >
-                  <i className="fa-solid fa-user-secret"></i> Continue as Guest (Ephemeral Mode)
+                  <LuUserCheck /> Continue as Guest (Ephemeral Mode)
                 </button>
               </div>
             </>

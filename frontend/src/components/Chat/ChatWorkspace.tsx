@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { LuCloudUpload } from 'react-icons/lu';
 import { ChatHeader } from './ChatHeader';
 import { MessageList } from './MessageList';
 import { ChatInput } from './ChatInput';
@@ -127,7 +128,7 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
         <div className="workspace-drop-overlay">
           <div className="drop-overlay-box">
             <div className="drop-icon-wrapper">
-              <i className="fa-solid fa-cloud-arrow-up"></i>
+              <LuCloudUpload />
             </div>
             <h3>Drop your files here</h3>
             <p>PDF, TXT, MD, CSV, JSON or images to add to this chat</p>

@@ -1,4 +1,11 @@
 import React from 'react';
+import {
+  LuGlobe,
+  LuShieldCheck,
+  LuLogIn,
+  LuUserPlus,
+  LuPlus,
+} from 'react-icons/lu';
 import type { ChatMode, User } from '../../types';
 
 interface ChatHeaderProps {
@@ -15,8 +22,6 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   currentMode,
   sessionId,
   onNewSession,
-  isSidebarOpen,
-  onToggleSidebar,
   currentUser,
   onOpenUserModal,
 }) => {
@@ -25,18 +30,9 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   return (
     <header className="workspace-header">
       <div className="header-left">
-        <button
-          type="button"
-          className="btn-toggle-sidebar-header"
-          onClick={onToggleSidebar}
-          title={isSidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
-        >
-          <i className={`fa-solid ${isSidebarOpen ? 'fa-bars-staggered' : 'fa-bars'}`}></i>
-        </button>
-
         <div className="header-mode-indicator">
           <span className={`mode-badge ${isWeb ? 'WEB' : 'RAG'}`}>
-            <i className={`fa-solid ${isWeb ? 'fa-globe' : 'fa-shield-halved'}`}></i>{' '}
+            {isWeb ? <LuGlobe size={15} /> : <LuShieldCheck size={15} />}
             {isWeb ? 'Live Web Search' : 'Document Grounded RAG'}
           </span>
           <span className="session-tag">
@@ -54,14 +50,14 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
               className="btn-header-login"
               onClick={() => onOpenUserModal('login')}
             >
-              <i className="fa-solid fa-right-to-bracket"></i> Log in
+              <LuLogIn size={15} /> Log in
             </button>
             <button
               type="button"
               className="btn-header-signup"
               onClick={() => onOpenUserModal('register')}
             >
-              <i className="fa-solid fa-user-plus"></i> Sign up
+              <LuUserPlus size={15} /> Sign up
             </button>
           </div>
         )}
@@ -74,7 +70,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
             onClick={onNewSession}
             title="Start New Session"
           >
-            <i className="fa-solid fa-plus"></i> New Chat
+            <LuPlus size={15} /> New Chat
           </button>
         )}
       </div>

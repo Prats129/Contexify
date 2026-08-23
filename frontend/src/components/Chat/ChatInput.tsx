@@ -1,4 +1,21 @@
 import React, { useRef, useEffect, useState } from 'react';
+import {
+  LuPlus,
+  LuFileText,
+  LuFileCode,
+  LuFileImage,
+  LuFile,
+  LuGlobe,
+  LuImage,
+  LuChevronDown,
+  LuChevronUp,
+  LuCheck,
+  LuSend,
+  LuLoader,
+  LuX,
+  LuDatabase,
+  LuSlidersHorizontal,
+} from 'react-icons/lu';
 import type { ChatMode, DocumentMetadata } from '../../types';
 
 interface ChatInputProps {
@@ -98,25 +115,25 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         return {
           title: 'Document RAG',
           desc: 'Grounded Context QA',
-          icon: 'fa-solid fa-file-contract',
+          icon: <LuFileText />,
         };
       case 'WEB_SEARCH':
         return {
           title: 'Web Search',
           desc: 'Live Internet Access',
-          icon: 'fa-solid fa-globe',
+          icon: <LuGlobe />,
         };
       case 'MULTIMODAL':
         return {
           title: 'Multimodal',
           desc: 'Vision & Audio (Coming)',
-          icon: 'fa-solid fa-photo-film',
+          icon: <LuImage />,
         };
       default:
         return {
           title: 'Document RAG',
           desc: 'Grounded Context QA',
-          icon: 'fa-solid fa-file-contract',
+          icon: <LuFileText />,
         };
     }
   };
@@ -131,17 +148,16 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       : 'Ask a question with multimodal vision & audio...';
 
   const getFileIcon = (fileType: string) => {
-    if (fileType === '.pdf') return 'fa-solid fa-file-pdf';
-    if (fileType === '.txt' || fileType === '.md')
-      return 'fa-solid fa-file-lines';
+    if (fileType === '.pdf') return <LuFileText />;
+    if (fileType === '.txt' || fileType === '.md') return <LuFileCode />;
     if (
       fileType === '.png' ||
       fileType === '.jpg' ||
       fileType === '.jpeg' ||
       fileType === '.webp'
     )
-      return 'fa-solid fa-file-image';
-    return 'fa-solid fa-file';
+      return <LuFileImage />;
+    return <LuFile />;
   };
 
   return (
@@ -151,7 +167,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         <div className="input-attachments-bar">
           {isUploading && (
             <div className="input-upload-pill">
-              <i className="fa-solid fa-spinner fa-spin"></i>
+              <LuLoader className="icon-spin" />
               <span>{uploadStatusText || 'Vectorizing document...'}</span>
             </div>
           )}
@@ -162,7 +178,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
               className="input-attached-pill"
               title={`${doc.filename} (${(doc.file_size_bytes / 1024).toFixed(1)} KB)`}
             >
-              <i className={getFileIcon(doc.file_type)}></i>
+              {getFileIcon(doc.file_type)}
               <span className="pill-name">{doc.filename}</span>
               {onDeleteDocument && (
                 <button
@@ -171,7 +187,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                   onClick={() => onDeleteDocument(doc.document_id)}
                   title="Remove document"
                 >
-                  <i className="fa-solid fa-xmark"></i>
+                  <LuX />
                 </button>
               )}
             </div>
@@ -199,11 +215,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
               title="Add document or image"
               disabled={isUploading || isSending}
             >
-              {isUploading ? (
-                <i className="fa-solid fa-spinner fa-spin"></i>
-              ) : (
-                <i className="fa-solid fa-plus"></i>
-              )}
+              {isUploading ? <LuLoader className="icon-spin" /> : <LuPlus />}
             </button>
 
             {/* Mode Dropdown Selector */}
@@ -215,22 +227,22 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                 title="Select Engine Mode"
                 disabled={isSending}
               >
-                <i className={currentModeDetails.icon}></i>
+                {currentModeDetails.icon}
                 <span className="mode-dropdown-label">
                   {currentModeDetails.title}
                 </span>
-                <i
-                  className={`fa-solid fa-chevron-${
-                    isDropdownOpen ? 'up' : 'down'
-                  } mode-chevron`}
-                ></i>
+                {isDropdownOpen ? (
+                  <LuChevronUp className="mode-chevron" />
+                ) : (
+                  <LuChevronDown className="mode-chevron" />
+                )}
               </button>
 
               {/* Dropdown Popup Menu */}
               {isDropdownOpen && (
                 <div className="mode-dropdown-menu">
                   <div className="mode-dropdown-header">
-                    <i className="fa-solid fa-sliders"></i> Engine Mode
+                    <LuSlidersHorizontal /> Engine Mode
                   </div>
 
                   <button
@@ -241,14 +253,14 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                     onClick={() => handleSelectMode('DOCUMENT_RAG')}
                   >
                     <div className="item-icon-wrapper">
-                      <i className="fa-solid fa-file-contract"></i>
+                      <LuFileText />
                     </div>
                     <div className="item-info">
                       <span className="item-title">Document RAG</span>
                       <span className="item-desc">Grounded Context QA</span>
                     </div>
                     {currentMode === 'DOCUMENT_RAG' && (
-                      <i className="fa-solid fa-check item-check"></i>
+                      <LuCheck className="item-check" />
                     )}
                   </button>
 
@@ -260,14 +272,14 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                     onClick={() => handleSelectMode('WEB_SEARCH')}
                   >
                     <div className="item-icon-wrapper">
-                      <i className="fa-solid fa-globe"></i>
+                      <LuGlobe />
                     </div>
                     <div className="item-info">
                       <span className="item-title">Web Search</span>
                       <span className="item-desc">Live Internet Access</span>
                     </div>
                     {currentMode === 'WEB_SEARCH' && (
-                      <i className="fa-solid fa-check item-check"></i>
+                      <LuCheck className="item-check" />
                     )}
                   </button>
 
@@ -280,14 +292,14 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                     title="Vision & Audio (Coming)"
                   >
                     <div className="item-icon-wrapper">
-                      <i className="fa-solid fa-photo-film"></i>
+                      <LuImage />
                     </div>
                     <div className="item-info">
                       <span className="item-title">Multimodal</span>
                       <span className="item-desc">Vision & Audio (Coming)</span>
                     </div>
                     {currentMode === 'MULTIMODAL' && (
-                      <i className="fa-solid fa-check item-check"></i>
+                      <LuCheck className="item-check" />
                     )}
                   </button>
                 </div>
@@ -314,18 +326,14 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             disabled={isSending || !inputQuery.trim()}
             title="Send Question"
           >
-            {isSending ? (
-              <i className="fa-solid fa-spinner fa-spin"></i>
-            ) : (
-              <i className="fa-solid fa-paper-plane"></i>
-            )}
+            {isSending ? <LuLoader className="icon-spin" /> : <LuSend />}
           </button>
         </div>
       </form>
       <div className="input-footer">
         <span>
-          <i className="fa-solid fa-database"></i> Persistent Relational Storage
-          • Real-time Stream with Citations
+          <LuDatabase /> Persistent Relational Storage • Real-time Stream with
+          Citations
         </span>
       </div>
     </div>

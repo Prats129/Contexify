@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { LuSettings, LuLogOut } from 'react-icons/lu';
 import type { User } from '../../types';
 
 interface UserProfileCardProps {
@@ -85,7 +86,7 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
 
   return (
     <div className="user-profile-bottom-wrapper">
-      {/* Fixed position ChatGPT-style popover menu (avoids sidebar overflow-x:hidden clipping) */}
+      {/* Fixed position ChatGPT-style popover menu */}
       {isMenuOpen && (
         <div
           className="user-profile-popover"
@@ -116,7 +117,7 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
             className="popover-item"
             onClick={handleOpenSettings}
           >
-            <i className="fa-solid fa-gear"></i>
+            <LuSettings />
             <span>Settings & Account</span>
           </button>
 
@@ -127,7 +128,7 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
             className="popover-item logout-item"
             onClick={handleLogoutConfirm}
           >
-            <i className="fa-solid fa-arrow-right-from-bracket"></i>
+            <LuLogOut />
             <span>Log out</span>
           </button>
         </div>
