@@ -26,7 +26,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
     return parts.map((part, index) => {
       if (part.startsWith('**') && part.endsWith('**')) {
         return (
-          <strong key={index} className="font-semibold text-white">
+          <strong key={index} className="font-semibold">
             {part.slice(2, -2)}
           </strong>
         );
@@ -35,7 +35,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
         return (
           <code
             key={index}
-            className="px-1.5 py-0.5 bg-black/40 border border-white/10 rounded font-mono text-xs text-blue-300"
+            className="px-1.5 py-0.5 bg-(--border-subtle) border border-(--border-subtle) rounded font-mono text-xs text-primary-theme"
           >
             {part.slice(1, -1)}
           </code>
@@ -55,7 +55,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
       }`}
     >
       {!isUser && (
-        <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center text-white text-sm shrink-0 shadow-md shadow-blue-500/20 mt-1">
+        <div className="w-8 h-8 rounded-full bg-primary-theme flex items-center justify-center text-white text-sm shrink-0 mt-1">
           <LuBrain size={16} />
         </div>
       )}
@@ -68,17 +68,17 @@ export const MessageItem: React.FC<MessageItemProps> = ({
         <div
           className={`p-4 rounded-2xl text-sm leading-relaxed ${
             isUser
-              ? 'bg-blue-600 text-white rounded-br-none shadow-md shadow-blue-600/20'
-              : 'bg-gray-900 border border-white/10 text-gray-200 rounded-tl-none shadow-md shadow-black/20'
+              ? 'bg-primary-theme text-white rounded-br-none'
+              : 'bg-(--bg-card) border border-(--border-subtle) text-(--text-main) rounded-tl-none shadow-sm'
           }`}
         >
           {isError ? (
-            <span className="text-red-400 flex items-center gap-1.5">
+            <span className="text-red-500 flex items-center gap-1.5">
               <LuTriangleAlert size={16} /> {content}
             </span>
           ) : isStreaming && !content ? (
-            <span className="flex items-center gap-2 text-gray-400">
-              <span className="w-2 h-2 rounded-full bg-blue-400 animate-ping"></span>
+            <span className="flex items-center gap-2 text-(--text-muted)">
+              <span className="w-2 h-2 rounded-full bg-primary-theme animate-ping"></span>
               Generating answer...
             </span>
           ) : (
@@ -94,7 +94,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
       </div>
 
       {isUser && (
-        <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-white text-sm shrink-0 shadow-md shadow-blue-500/20 mt-1">
+        <div className="w-8 h-8 rounded-full bg-primary-theme flex items-center justify-center text-white text-sm shrink-0 mt-1">
           <LuUser size={16} />
         </div>
       )}

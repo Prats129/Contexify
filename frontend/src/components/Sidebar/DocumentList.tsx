@@ -14,20 +14,20 @@ export const DocumentList: React.FC<DocumentListProps> = ({
   onDeleteDocument,
 }) => {
   const getFileIcon = (fileType: string) => {
-    if (fileType === '.pdf') return <LuFileText size={15} className="text-red-400 shrink-0" />;
+    if (fileType === '.pdf') return <LuFileText size={15} className="text-red-500 shrink-0" />;
     if (fileType === '.txt' || fileType === '.md')
-      return <LuFileCode size={15} className="text-blue-400 shrink-0" />;
-    return <LuFile size={15} className="text-gray-400 shrink-0" />;
+      return <LuFileCode size={15} className="text-primary-theme shrink-0" />;
+    return <LuFile size={15} className="text-(--text-muted) shrink-0" />;
   };
 
   return (
     <div className="flex flex-col gap-2 w-full">
       {isOpen && (
         <div className="flex items-center justify-between px-1">
-          <label className="text-[11px] font-semibold uppercase tracking-wider text-gray-400 flex items-center gap-1.5">
+          <label className="text-[11px] font-semibold uppercase tracking-wider text-(--text-muted) flex items-center gap-1.5">
             <LuFolderOpen size={13} /> Session Documents
           </label>
-          <span className="text-[10px] bg-white/10 px-2 py-0.5 rounded-full text-gray-400">
+          <span className="text-[10px] bg-(--border-subtle) px-2 py-0.5 rounded-full text-(--text-muted)">
             {documents.length} files
           </span>
         </div>
@@ -36,17 +36,17 @@ export const DocumentList: React.FC<DocumentListProps> = ({
       <div className="flex flex-col gap-1.5 max-h-40 overflow-y-auto w-full">
         {documents.length === 0 ? (
           isOpen ? (
-            <div className="text-center py-3 text-gray-500 text-xs">
+            <div className="text-center py-3 text-(--text-muted) text-xs">
               <LuFileText size={16} className="mx-auto mb-1 opacity-50" />
               <p>No documents attached.</p>
-              <span className="text-[10px] text-gray-600">Drop a PDF or TXT into chat</span>
+              <span className="text-[10px] opacity-70">Drop a PDF or TXT into chat</span>
             </div>
           ) : null
         ) : (
           documents.map((doc) => (
             <div
               key={doc.document_id}
-              className={`group flex items-center justify-between p-2 rounded-lg border border-white/5 bg-white/[0.02] hover:bg-white/[0.06] hover:border-white/15 transition-all ${
+              className={`group flex items-center justify-between p-2 rounded-lg border border-(--border-subtle) bg-transparent hover:bg-(--border-subtle) ${
                 isOpen ? 'w-full' : 'w-10 h-10 justify-center mx-auto p-0'
               }`}
               title={doc.filename}
@@ -55,10 +55,10 @@ export const DocumentList: React.FC<DocumentListProps> = ({
                 {getFileIcon(doc.file_type)}
                 {isOpen && (
                   <div className="flex flex-col min-w-0 overflow-hidden">
-                    <span className="text-xs font-medium text-gray-200 truncate">
+                    <span className="text-xs font-medium text-(--text-main) truncate">
                       {doc.filename}
                     </span>
-                    <span className="text-[10px] text-gray-500">
+                    <span className="text-[10px] text-(--text-muted)">
                       {doc.total_chunks} chunks • {(doc.file_size_bytes / 1024).toFixed(1)} KB
                     </span>
                   </div>
@@ -68,7 +68,7 @@ export const DocumentList: React.FC<DocumentListProps> = ({
               {isOpen && (
                 <button
                   type="button"
-                  className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-red-400 hover:bg-red-500/15 rounded transition-all cursor-pointer"
+                  className="opacity-0 group-hover:opacity-100 p-1 text-(--text-muted) hover:text-red-500 hover:bg-red-500/15 rounded cursor-pointer"
                   onClick={() => onDeleteDocument(doc.document_id)}
                   title="Delete Document"
                 >

@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { LuSettings, LuLogOut } from 'react-icons/lu';
+import { useTheme } from '../../context/ThemeContext';
 import type { User } from '../../types';
 
 interface UserProfileCardProps {
@@ -22,6 +23,7 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
   });
   const popoverRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const { currentAccent } = useTheme();
 
   // Close menu on outside click or Escape
   useEffect(() => {
@@ -53,7 +55,6 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
     };
   }, [isMenuOpen]);
 
-  // If user is guest, do not render this in the sidebar (guest auth is at the top of chat)
   if (!currentUser) {
     return null;
   }
@@ -61,7 +62,7 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
   const initial = (currentUser.display_name || currentUser.username || 'U')
     .charAt(0)
     .toUpperCase();
-  const avatarBg = currentUser.avatar_color || '#3B82F6';
+  const avatarBg = currentUser.avatar_color || currentAccent.primary;
 
   const handleToggleMenu = () => {
     if (!isMenuOpen && buttonRef.current) {
@@ -88,17 +89,17 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
 
   return (
     <div className="relative w-full">
-      {/* Fixed position ChatGPT-style popover menu */}
+      {/* Fixed position popover menu */}
       {isMenuOpen && (
         <div
           ref={popoverRef}
-          className="fixed w-64 bg-gray-900 border border-blue-500/30 rounded-xl shadow-2xl shadow-black/80 z-[1000] p-2 flex flex-col gap-1 backdrop-blur-xl animate-[popoverIn_0.18s_ease-out]"
+          className="fixed w-64 bg-(--bg-card) border border-(--border-hover) rounded-xl shadow-2xl z-1000 p-2 flex flex-col gap-1 backdrop-blur-xl animate-[popoverIn_0.18s_ease-out]"
           style={{
             left: `${menuPosition.left}px`,
             bottom: `${menuPosition.bottom}px`,
           }}
         >
-          <div className="flex items-center gap-2.5 p-2 border-b border-white/10">
+          <div className="flex items-center gap-2.5 p-2 border-b border-(--border-subtle)">
             <div
               className="w-9 h-9 rounded-full flex items-center justify-center font-bold text-white text-sm shrink-0"
               style={{ backgroundColor: avatarBg }}
@@ -106,28 +107,28 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
               {initial}
             </div>
             <div className="flex flex-col overflow-hidden min-w-0">
-              <span className="text-xs font-semibold text-gray-100 truncate">
+              <span className="text-xs font-semibold text-(--text-main) truncate">
                 {currentUser.display_name}
               </span>
-              <span className="text-[11px] text-gray-400 truncate">@{currentUser.username}</span>
-              <span className="text-[10px] text-gray-500 truncate">{currentUser.email}</span>
+              <span className="text-[11px] text-(--text-muted) truncate">@{currentUser.username}</span>
+              <span className="text-[10px] text-(--text-muted) opacity-80 truncate">{currentUser.email}</span>
             </div>
           </div>
 
           <button
             type="button"
-            className="flex items-center gap-2 px-2.5 py-2 text-xs font-medium text-gray-300 hover:text-white hover:bg-white/10 rounded-lg transition-colors cursor-pointer text-left w-full"
+            className="flex items-center gap-2 px-2.5 py-2 text-xs font-medium text-(--text-main) hover:bg-(--border-subtle) rounded-lg cursor-pointer text-left w-full"
             onClick={handleOpenSettings}
           >
             <LuSettings size={15} />
-            <span>Settings & Account</span>
+            <span>Settings & Preferences</span>
           </button>
 
-          <div className="h-px bg-white/10 my-0.5"></div>
+          <div className="h-px bg-(--border-subtle) my-0.5"></div>
 
           <button
             type="button"
-            className="flex items-center gap-2 px-2.5 py-2 text-xs font-medium text-red-400 hover:text-red-300 hover:bg-red-500/15 rounded-lg transition-colors cursor-pointer text-left w-full"
+            className="flex items-center gap-2 px-2.5 py-2 text-xs font-medium text-red-500 hover:text-red-400 hover:bg-red-500/15 rounded-lg cursor-pointer text-left w-full"
             onClick={handleLogoutConfirm}
           >
             <LuLogOut size={15} />
@@ -140,9 +141,8 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
       <button
         ref={buttonRef}
         type="button"
-        className={`flex items-center gap-2.5 p-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl transition-all cursor-pointer text-left ${
-          isOpen ? 'w-full' : 'w-10 h-10 justify-center mx-auto rounded-full p-0'
-        } ${isMenuOpen ? 'border-blue-500/50 bg-white/10' : ''}`}
+        className={`flex items-center gap-2.5 p-2 bg-(--border-subtle) hover:bg-(--border-hover) border border-(--border-subtle) rounded-xl cursor-pointer text-left ${isOpen ? 'w-full' : 'w-10 h-10 justify-center mx-auto rounded-full p-0'
+          } ${isMenuOpen ? 'border-primary-theme' : ''}`}
         onClick={handleToggleMenu}
         title="Account & Settings"
       >
@@ -154,8 +154,8 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
         </div>
         {isOpen && (
           <div className="flex flex-col min-w-0 overflow-hidden">
-            <span className="text-xs font-semibold text-gray-200 truncate">{currentUser.display_name}</span>
-            <span className="text-[11px] text-gray-400 truncate">@{currentUser.username}</span>
+            <span className="text-xs font-semibold text-(--text-main) truncate">{currentUser.display_name}</span>
+            <span className="text-[11px] text-(--text-muted) truncate">@{currentUser.username}</span>
           </div>
         )}
       </button>

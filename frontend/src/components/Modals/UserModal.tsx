@@ -13,10 +13,14 @@ import {
   LuIdCard,
   LuAtSign,
   LuCircleAlert,
-  LuInfo,
   LuLoader,
   LuUserCheck,
+  LuSun,
+  LuMoon,
+  LuPalette,
+  LuCheck,
 } from 'react-icons/lu';
+import { useTheme, ACCENT_PALETTES, type AccentColor } from '../../context/ThemeContext';
 import type { User } from '../../types';
 
 interface UserModalProps {
@@ -45,6 +49,7 @@ export const UserModal: React.FC<UserModalProps> = ({
   onLogout,
   onContinueAsGuest,
 }) => {
+  const { mode, setMode, accent, setAccent, currentAccent } = useTheme();
   const [activeTab, setActiveTab] = useState<'login' | 'register'>('login');
 
   // Login Form State
@@ -149,24 +154,24 @@ export const UserModal: React.FC<UserModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-[2000] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-[fadeIn_0.15s_ease-out]"
+      className="fixed inset-0 z-2000 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-[fadeIn_0.15s_ease-out]"
       onClick={onClose}
     >
       <div
-        className="bg-gray-900 border border-white/10 rounded-2xl w-full max-w-md shadow-2xl shadow-black/80 flex flex-col overflow-hidden animate-[popoverIn_0.2s_cubic-bezier(0.16,1,0.3,1)]"
+        className="bg-(--bg-card) border border-(--border-hover) rounded-2xl w-full max-w-lg shadow-2xl flex flex-col overflow-hidden animate-[popoverIn_0.2s_cubic-bezier(0.16,1,0.3,1)] max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-white/10">
-          <div className="flex items-center gap-2 text-blue-400 font-bold text-base">
+        <div className="flex items-center justify-between p-4 border-b border-(--border-subtle) sticky top-0 bg-(--bg-card)/90 backdrop-blur-md z-10">
+          <div className="flex items-center gap-2 text-primary-theme font-bold text-base">
             <LuShieldCheck size={20} />
-            <h3 className="text-gray-100 text-sm font-semibold">
-              {currentUser ? 'Account Profile' : 'Contexify AI Authentication'}
+            <h3 className="text-(--text-main) text-sm font-semibold">
+              {currentUser ? 'Account & Preferences' : 'Contexify AI Authentication'}
             </h3>
           </div>
           <button
             type="button"
-            className="w-7 h-7 rounded-lg bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
+            className="w-7 h-7 rounded-lg bg-(--border-subtle) hover:bg-(--border-hover) text-(--text-muted) hover:text-(--text-main) flex items-center justify-center cursor-pointer"
             onClick={onClose}
             title="Close"
           >
@@ -175,45 +180,106 @@ export const UserModal: React.FC<UserModalProps> = ({
         </div>
 
         {/* Body */}
-        <div className="p-5 flex flex-col gap-4">
+        <div className="p-5 flex flex-col gap-5">
           {/* CASE A: USER IS CURRENTLY LOGGED IN */}
           {currentUser ? (
             <div className="flex flex-col gap-4">
-              <div className="flex items-center gap-3 p-3 bg-white/5 border border-white/10 rounded-xl">
+              {/* User Profile Card */}
+              <div className="flex items-center gap-3 p-3 bg-(--border-subtle) border border-(--border-subtle) rounded-xl">
                 <div
                   className="w-12 h-12 rounded-full flex items-center justify-center font-bold text-white text-lg shrink-0"
-                  style={{ backgroundColor: currentUser.avatar_color || '#3B82F6' }}
+                  style={{ backgroundColor: currentUser.avatar_color || currentAccent.primary }}
                 >
                   {currentUser.display_name.charAt(0).toUpperCase()}
                 </div>
                 <div className="flex flex-col min-w-0">
-                  <h4 className="text-sm font-bold text-gray-100 truncate">
+                  <h4 className="text-sm font-bold text-(--text-main) truncate">
                     {currentUser.display_name}
                   </h4>
-                  <span className="text-xs text-gray-400">@{currentUser.username}</span>
-                  <span className="text-xs text-gray-400 flex items-center gap-1 mt-0.5">
+                  <span className="text-xs text-(--text-muted)">@{currentUser.username}</span>
+                  <span className="text-xs text-(--text-muted) flex items-center gap-1 mt-0.5">
                     <LuMail size={12} /> {currentUser.email}
                   </span>
                 </div>
               </div>
 
-              <div className="flex items-start gap-2 p-3 bg-blue-500/10 border border-blue-500/20 rounded-xl text-xs text-blue-300">
-                <LuInfo size={16} className="shrink-0 mt-0.5" />
-                <span>
-                  You are currently logged in. To switch accounts or create a new account, please log out first.
-                </span>
+              {/* Theme & Appearance Section */}
+              <div className="flex flex-col gap-3 p-4 bg-(--border-subtle)/40 border border-(--border-subtle) rounded-xl">
+                <div className="flex items-center gap-2 text-xs font-semibold text-(--text-main)">
+                  <LuPalette size={15} className="text-primary-theme" />
+                  <span>Appearance & Theme Preferences</span>
+                </div>
+
+                {/* Theme Mode Toggle (Light vs Dark) */}
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[11px] font-medium text-(--text-muted)">Theme Mode</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      className={`flex items-center justify-center gap-2 py-2 px-3 rounded-lg border text-xs font-medium cursor-pointer ${mode === 'dark'
+                        ? 'bg-primary-light-theme border-primary-theme text-primary-theme font-semibold'
+                        : 'bg-(--border-subtle) border-(--border-subtle) text-(--text-main) hover:bg-(--border-hover)'
+                        }`}
+                      onClick={() => setMode('dark')}
+                    >
+                      <LuMoon size={14} /> Dark Mode
+                    </button>
+                    <button
+                      type="button"
+                      className={`flex items-center justify-center gap-2 py-2 px-3 rounded-lg border text-xs font-medium cursor-pointer ${mode === 'light'
+                        ? 'bg-primary-light-theme border-primary-theme text-primary-theme font-semibold'
+                        : 'bg-(--border-subtle) border-(--border-subtle) text-(--text-main) hover:bg-(--border-hover)'
+                        }`}
+                      onClick={() => setMode('light')}
+                    >
+                      <LuSun size={14} /> Light Mode
+                    </button>
+                  </div>
+                </div>
+
+                {/* Accent Color Palette Selector */}
+                <div className="flex flex-col gap-1.5 mt-1">
+                  <label className="text-[11px] font-medium text-(--text-muted)">
+                    Accent Color ({currentAccent.label})
+                  </label>
+                  <div className="grid grid-cols-4 sm:grid-cols-7 gap-2">
+                    {(Object.keys(ACCENT_PALETTES) as AccentColor[]).map((key) => {
+                      const pal = ACCENT_PALETTES[key];
+                      const isSelected = accent === key;
+                      return (
+                        <button
+                          key={key}
+                          type="button"
+                          className={`group relative flex flex-col items-center justify-center p-2 rounded-xl border cursor-pointer ${isSelected
+                            ? 'border-primary-theme bg-primary-light-theme scale-105'
+                            : 'border-(--border-subtle) bg-(--border-subtle) hover:border-(--border-hover)'
+                            }`}
+                          onClick={() => setAccent(key)}
+                          title={pal.label}
+                        >
+                          <div
+                            className="w-5 h-5 rounded-full flex items-center justify-center text-white shadow-sm"
+                            style={{ backgroundColor: pal.primary }}
+                          >
+                            {isSelected && <LuCheck size={11} />}
+                          </div>
+                          <span className="text-[10px] text-(--text-muted) mt-1 truncate max-w-10">
+                            {pal.label.split(' ')[0]}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
 
-              <div className="flex flex-col gap-2 pt-2">
+              {/* Actions */}
+              <div className="flex flex-col gap-2 pt-1">
                 <button
                   type="button"
-                  className="w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-red-600/20 hover:bg-red-600/30 border border-red-500/30 text-red-300 rounded-xl text-xs font-semibold transition-all cursor-pointer"
+                  className="w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-red-500/15 hover:bg-red-500/25 border border-red-500/30 text-red-500 rounded-xl text-xs font-semibold cursor-pointer"
                   onClick={() => {
-                    if (
-                      window.confirm(
-                        'Are you sure you want to log out of your account?'
-                      )
-                    ) {
+                    if (window.confirm('Are you sure you want to log out of your account?')) {
                       onLogout();
                       onClose();
                     }
@@ -223,7 +289,7 @@ export const UserModal: React.FC<UserModalProps> = ({
                 </button>
                 <button
                   type="button"
-                  className="w-full py-2 text-xs text-gray-400 hover:text-gray-200 transition-colors cursor-pointer"
+                  className="w-full py-2 text-xs text-(--text-muted) hover:text-(--text-main) cursor-pointer"
                   onClick={onClose}
                 >
                   Back to Workspace
@@ -234,14 +300,13 @@ export const UserModal: React.FC<UserModalProps> = ({
             /* CASE B: GUEST / NOT LOGGED IN */
             <>
               {/* Tab Switcher */}
-              <div className="grid grid-cols-2 p-1 bg-white/5 border border-white/10 rounded-xl gap-1">
+              <div className="grid grid-cols-2 p-1 bg-(--border-subtle) border border-(--border-subtle) rounded-xl gap-1">
                 <button
                   type="button"
-                  className={`flex items-center justify-center gap-1.5 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
-                    activeTab === 'login'
-                      ? 'bg-blue-600 text-white shadow-sm shadow-blue-500/30'
-                      : 'text-gray-400 hover:text-white'
-                  }`}
+                  className={`flex items-center justify-center gap-1.5 py-1.5 text-xs font-semibold rounded-lg cursor-pointer ${activeTab === 'login'
+                    ? 'bg-primary-theme text-white'
+                    : 'text-(--text-muted) hover:text-(--text-main)'
+                    }`}
                   onClick={() => {
                     setActiveTab('login');
                     setErrorMessage(null);
@@ -251,11 +316,10 @@ export const UserModal: React.FC<UserModalProps> = ({
                 </button>
                 <button
                   type="button"
-                  className={`flex items-center justify-center gap-1.5 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
-                    activeTab === 'register'
-                      ? 'bg-blue-600 text-white shadow-sm shadow-blue-500/30'
-                      : 'text-gray-400 hover:text-white'
-                  }`}
+                  className={`flex items-center justify-center gap-1.5 py-1.5 text-xs font-semibold rounded-lg cursor-pointer ${activeTab === 'register'
+                    ? 'bg-primary-theme text-white'
+                    : 'text-(--text-muted) hover:text-(--text-main)'
+                    }`}
                   onClick={() => {
                     setActiveTab('register');
                     setErrorMessage(null);
@@ -267,7 +331,7 @@ export const UserModal: React.FC<UserModalProps> = ({
 
               {/* Error Alert */}
               {errorMessage && (
-                <div className="flex items-center gap-2 p-2.5 bg-red-500/10 border border-red-500/30 rounded-xl text-xs text-red-400">
+                <div className="flex items-center gap-2 p-2.5 bg-red-500/10 border border-red-500/30 rounded-xl text-xs text-red-500">
                   <LuCircleAlert size={15} className="shrink-0" />
                   <span>{errorMessage}</span>
                 </div>
@@ -277,9 +341,9 @@ export const UserModal: React.FC<UserModalProps> = ({
               {activeTab === 'login' && (
                 <form onSubmit={handleLoginSubmit} className="flex flex-col gap-3">
                   <div className="flex flex-col gap-1">
-                    <label className="text-xs text-gray-300 font-medium">Username or Email *</label>
+                    <label className="text-xs text-(--text-main) font-medium">Username or Email *</label>
                     <div className="relative flex items-center">
-                      <LuUser size={15} className="absolute left-3 text-gray-400 pointer-events-none" />
+                      <LuUser size={15} className="absolute left-3 text-(--text-muted) pointer-events-none" />
                       <input
                         type="text"
                         value={loginIdentifier}
@@ -287,15 +351,15 @@ export const UserModal: React.FC<UserModalProps> = ({
                         placeholder="Enter username or email"
                         required
                         autoComplete="username"
-                        className="w-full bg-white/5 border border-white/10 focus:border-blue-500 rounded-xl py-2 pl-9 pr-3 text-xs text-white placeholder-gray-500 outline-none transition-colors"
+                        className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-3 text-xs placeholder-(--text-muted) outline-none"
                       />
                     </div>
                   </div>
 
                   <div className="flex flex-col gap-1">
-                    <label className="text-xs text-gray-300 font-medium">Password *</label>
+                    <label className="text-xs text-(--text-main) font-medium">Password *</label>
                     <div className="relative flex items-center">
-                      <LuLock size={15} className="absolute left-3 text-gray-400 pointer-events-none" />
+                      <LuLock size={15} className="absolute left-3 text-(--text-muted) pointer-events-none" />
                       <input
                         type={showLoginPassword ? 'text' : 'password'}
                         value={loginPassword}
@@ -303,11 +367,11 @@ export const UserModal: React.FC<UserModalProps> = ({
                         placeholder="Enter password"
                         required
                         autoComplete="current-password"
-                        className="w-full bg-white/5 border border-white/10 focus:border-blue-500 rounded-xl py-2 pl-9 pr-9 text-xs text-white placeholder-gray-500 outline-none transition-colors"
+                        className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-9 text-xs text-(--text-main) outline-none"
                       />
                       <button
                         type="button"
-                        className="absolute right-3 text-gray-400 hover:text-white cursor-pointer"
+                        className="absolute right-3 text-(--text-muted) hover:text-(--text-main) cursor-pointer"
                         onClick={() => setShowLoginPassword((prev) => !prev)}
                         title={showLoginPassword ? 'Hide password' : 'Show password'}
                       >
@@ -318,7 +382,7 @@ export const UserModal: React.FC<UserModalProps> = ({
 
                   <button
                     type="submit"
-                    className="mt-1 w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-xl text-xs font-semibold shadow-md shadow-blue-500/20 transition-all cursor-pointer"
+                    className="mt-1 w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-primary-theme hover:opacity-90 disabled:opacity-50 text-white rounded-xl text-xs font-semibold cursor-pointer"
                     disabled={isSubmitting}
                   >
                     {isSubmitting ? (
@@ -338,9 +402,9 @@ export const UserModal: React.FC<UserModalProps> = ({
               {activeTab === 'register' && (
                 <form onSubmit={handleRegisterSubmit} className="flex flex-col gap-2.5">
                   <div className="flex flex-col gap-1">
-                    <label className="text-xs text-gray-300 font-medium">Full Name *</label>
+                    <label className="text-xs text-(--text-main) font-medium">Full Name *</label>
                     <div className="relative flex items-center">
-                      <LuIdCard size={15} className="absolute left-3 text-gray-400 pointer-events-none" />
+                      <LuIdCard size={15} className="absolute left-3 text-(--text-muted) pointer-events-none" />
                       <input
                         type="text"
                         value={regDisplayName}
@@ -348,15 +412,15 @@ export const UserModal: React.FC<UserModalProps> = ({
                         placeholder="Enter full name"
                         required
                         autoComplete="name"
-                        className="w-full bg-white/5 border border-white/10 focus:border-blue-500 rounded-xl py-2 pl-9 pr-3 text-xs text-white placeholder-gray-500 outline-none transition-colors"
+                        className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-3 text-xs placeholder-(--text-muted) outline-none"
                       />
                     </div>
                   </div>
 
                   <div className="flex flex-col gap-1">
-                    <label className="text-xs text-gray-300 font-medium">Username *</label>
+                    <label className="text-xs text-(--text-main) font-medium">Username *</label>
                     <div className="relative flex items-center">
-                      <LuAtSign size={15} className="absolute left-3 text-gray-400 pointer-events-none" />
+                      <LuAtSign size={15} className="absolute left-3 text-(--text-muted) pointer-events-none" />
                       <input
                         type="text"
                         value={regUsername}
@@ -364,15 +428,15 @@ export const UserModal: React.FC<UserModalProps> = ({
                         placeholder="Choose unique username (e.g. alex_smith)"
                         required
                         autoComplete="username"
-                        className="w-full bg-white/5 border border-white/10 focus:border-blue-500 rounded-xl py-2 pl-9 pr-3 text-xs text-white placeholder-gray-500 outline-none transition-colors"
+                        className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-3 text-xs placeholder-(--text-muted) outline-none"
                       />
                     </div>
                   </div>
 
                   <div className="flex flex-col gap-1">
-                    <label className="text-xs text-gray-300 font-medium">Email Address *</label>
+                    <label className="text-xs text-(--text-main) font-medium">Email Address *</label>
                     <div className="relative flex items-center">
-                      <LuMail size={15} className="absolute left-3 text-gray-400 pointer-events-none" />
+                      <LuMail size={15} className="absolute left-3 text-(--text-muted) pointer-events-none" />
                       <input
                         type="email"
                         value={regEmail}
@@ -380,15 +444,15 @@ export const UserModal: React.FC<UserModalProps> = ({
                         placeholder="Enter email"
                         required
                         autoComplete="email"
-                        className="w-full bg-white/5 border border-white/10 focus:border-blue-500 rounded-xl py-2 pl-9 pr-3 text-xs text-white placeholder-gray-500 outline-none transition-colors"
+                        className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-3 text-xs placeholder-(--text-muted) outline-none"
                       />
                     </div>
                   </div>
 
                   <div className="flex flex-col gap-1">
-                    <label className="text-xs text-gray-300 font-medium">Password * (min 6 chars)</label>
+                    <label className="text-xs text-(--text-main) font-medium">Password * (min 6 chars)</label>
                     <div className="relative flex items-center">
-                      <LuLock size={15} className="absolute left-3 text-gray-400 pointer-events-none" />
+                      <LuLock size={15} className="absolute left-3 text-(--text-muted) pointer-events-none" />
                       <input
                         type={showRegPassword ? 'text' : 'password'}
                         value={regPassword}
@@ -397,11 +461,11 @@ export const UserModal: React.FC<UserModalProps> = ({
                         required
                         minLength={6}
                         autoComplete="new-password"
-                        className="w-full bg-white/5 border border-white/10 focus:border-blue-500 rounded-xl py-2 pl-9 pr-9 text-xs text-white placeholder-gray-500 outline-none transition-colors"
+                        className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-9 text-xs placeholder-(--text-muted) outline-none"
                       />
                       <button
                         type="button"
-                        className="absolute right-3 text-gray-400 hover:text-white cursor-pointer"
+                        className="absolute right-3 text-(--text-muted) hover:text-(--text-main) cursor-pointer"
                         onClick={() => setShowRegPassword((prev) => !prev)}
                         title={showRegPassword ? 'Hide password' : 'Show password'}
                       >
@@ -412,7 +476,7 @@ export const UserModal: React.FC<UserModalProps> = ({
 
                   <button
                     type="submit"
-                    className="mt-1 w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-xl text-xs font-semibold shadow-md shadow-blue-500/20 transition-all cursor-pointer"
+                    className="mt-1 w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-primary-theme hover:opacity-90 disabled:opacity-50 text-white rounded-xl text-xs font-semibold cursor-pointer"
                     disabled={isSubmitting}
                   >
                     {isSubmitting ? (
@@ -428,11 +492,31 @@ export const UserModal: React.FC<UserModalProps> = ({
                 </form>
               )}
 
+              {/* Theme Quick Preference Bar for Guests */}
+              <div className="p-2.5 bg-(--border-subtle)/50 border border-(--border-subtle) rounded-xl flex items-center justify-between">
+                <span className="text-[11px] text-(--text-muted) flex items-center gap-1.5 font-medium">
+                  <LuPalette size={13} className="text-primary-theme" /> Theme Accent:
+                </span>
+                <div className="flex items-center gap-1.5">
+                  {(['blue', 'purple', 'emerald', 'rose', 'amber'] as AccentColor[]).map((key) => (
+                    <button
+                      key={key}
+                      type="button"
+                      className={`w-4 h-4 rounded-full cursor-pointer ${accent === key ? 'scale-125 ring-2 ring-white/50' : 'opacity-70 hover:opacity-100'
+                        }`}
+                      style={{ backgroundColor: ACCENT_PALETTES[key].primary }}
+                      onClick={() => setAccent(key)}
+                      title={ACCENT_PALETTES[key].label}
+                    />
+                  ))}
+                </div>
+              </div>
+
               {/* Guest Mode Action */}
-              <div className="pt-1 border-t border-white/10 text-center">
+              <div className="pt-1 border-t border-(--border-subtle) text-center">
                 <button
                   type="button"
-                  className="w-full flex items-center justify-center gap-1.5 py-2 text-xs text-gray-400 hover:text-gray-200 transition-colors cursor-pointer"
+                  className="w-full flex items-center justify-center gap-1.5 py-2 text-xs text-(--text-muted) hover:text-(--text-main) cursor-pointer"
                   onClick={onContinueAsGuest}
                 >
                   <LuUserCheck size={14} /> Continue as Guest (Ephemeral Mode)

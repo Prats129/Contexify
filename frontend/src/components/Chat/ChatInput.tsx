@@ -50,7 +50,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const dropdownRef = useRef<HTMLDivElement>(null);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
 
-  // Auto-resize textarea height
   useEffect(() => {
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
@@ -61,7 +60,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     }
   }, [inputQuery]);
 
-  // Close dropdown on outside click or escape
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (
@@ -148,16 +146,16 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         : 'Ask a question with multimodal vision & audio...';
 
   const getFileIcon = (fileType: string) => {
-    if (fileType === '.pdf') return <LuFileText size={13} className="text-red-400" />;
-    if (fileType === '.txt' || fileType === '.md') return <LuFileCode size={13} className="text-blue-400" />;
+    if (fileType === '.pdf') return <LuFileText size={13} className="text-red-500" />;
+    if (fileType === '.txt' || fileType === '.md') return <LuFileCode size={13} className="text-primary-theme" />;
     if (
       fileType === '.png' ||
       fileType === '.jpg' ||
       fileType === '.jpeg' ||
       fileType === '.webp'
     )
-      return <LuFileImage size={13} className="text-emerald-400" />;
-    return <LuFile size={13} className="text-gray-400" />;
+      return <LuFileImage size={13} className="text-emerald-500" />;
+    return <LuFile size={13} className="text-(--text-muted)" />;
   };
 
   return (
@@ -166,7 +164,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       {(isUploading || documents.length > 0) && (
         <div className="flex flex-wrap items-center gap-1.5 px-2">
           {isUploading && (
-            <div className="flex items-center gap-1.5 px-2.5 py-1 bg-blue-500/15 border border-blue-500/30 text-blue-400 rounded-full text-xs animate-pulse">
+            <div className="flex items-center gap-1.5 px-2.5 py-1 bg-primary-light-theme border border-primary-theme text-primary-theme rounded-full text-xs animate-pulse">
               <LuLoader size={13} className="icon-spin" />
               <span>{uploadStatusText || 'Vectorizing document...'}</span>
             </div>
@@ -175,7 +173,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
           {documents.map((doc) => (
             <div
               key={doc.document_id}
-              className="flex items-center gap-1.5 px-2.5 py-1 bg-white/5 border border-white/10 text-gray-300 rounded-full text-xs max-w-[200px]"
+              className="flex items-center gap-1.5 px-2.5 py-1 bg-(--border-subtle) border border-(--border-subtle) text-(--text-main) rounded-full text-xs max-w-50"
               title={`${doc.filename} (${(doc.file_size_bytes / 1024).toFixed(1)} KB)`}
             >
               {getFileIcon(doc.file_type)}
@@ -183,7 +181,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
               {onDeleteDocument && (
                 <button
                   type="button"
-                  className="hover:text-red-400 transition-colors cursor-pointer ml-0.5"
+                  className="hover:text-red-500 cursor-pointer ml-0.5"
                   onClick={() => onDeleteDocument(doc.document_id)}
                   title="Remove document"
                 >
@@ -196,10 +194,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       )}
 
       <form onSubmit={onSubmit} className="w-full">
-        <div className="flex items-center gap-2 bg-gray-900/90 border border-white/10 focus-within:border-blue-500/50 focus-within:ring-1 focus-within:ring-blue-500/30 rounded-2xl p-2 shadow-lg shadow-black/40 transition-all">
+        <div className="flex items-center gap-2 bg-(--bg-input) border border-(--border-subtle) focus-within:border-primary-theme rounded-2xl p-2 shadow-lg">
           {/* Left Controls: Plus Attach Button & Mode Dropdown */}
           <div className="relative flex items-center gap-1.5" ref={dropdownRef}>
-            {/* ChatGPT style + Button */}
             <input
               type="file"
               ref={fileInputRef}
@@ -210,7 +207,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             />
             <button
               type="button"
-              className="w-8 h-8 rounded-full bg-white/5 hover:bg-white/10 text-gray-400 hover:text-gray-200 flex items-center justify-center transition-colors cursor-pointer shrink-0 disabled:opacity-50"
+              className="w-8 h-8 rounded-full bg-(--border-subtle) hover:bg-(--border-hover) text-(--text-muted) hover:text-(--text-main) flex items-center justify-center cursor-pointer shrink-0 disabled:opacity-50"
               onClick={() => fileInputRef.current?.click()}
               title="Add document or image"
               disabled={isUploading || isSending}
@@ -222,9 +219,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             <div className="relative">
               <button
                 type="button"
-                className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full border transition-all cursor-pointer ${isDropdownOpen
-                  ? 'bg-blue-500/20 text-blue-300 border-blue-500/50'
-                  : 'bg-white/5 text-gray-300 hover:text-white border-white/10 hover:border-white/20'
+                className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full border cursor-pointer ${isDropdownOpen
+                  ? 'bg-primary-light-theme text-primary-theme border-primary-theme'
+                  : 'bg-(--border-subtle) text-(--text-muted) hover:text-(--text-main) border-(--border-subtle) hover:border-(--border-hover)'
                   }`}
                 onClick={() => setIsDropdownOpen((prev) => !prev)}
                 title="Select Engine Mode"
@@ -237,58 +234,58 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
               {/* Dropdown Popup Menu */}
               {isDropdownOpen && (
-                <div className="absolute bottom-full left-0 mb-2 w-56 bg-gray-900 border border-blue-500/30 rounded-xl shadow-2xl shadow-black/80 z-50 p-1.5 flex flex-col gap-1 backdrop-blur-xl">
-                  <div className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-semibold text-gray-400 uppercase tracking-wider border-b border-white/10 mb-0.5">
+                <div className="absolute bottom-full left-0 mb-2 w-56 bg-(--bg-card) border border-(--border-hover) rounded-xl shadow-2xl z-50 p-1.5 flex flex-col gap-1 backdrop-blur-xl">
+                  <div className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-semibold text-(--text-muted) uppercase tracking-wider border-b border-(--border-subtle) mb-0.5">
                     <LuSlidersHorizontal size={12} /> Engine Mode
                   </div>
 
                   <button
                     type="button"
-                    className={`flex items-center justify-between p-2 rounded-lg text-left text-xs transition-colors cursor-pointer w-full ${currentMode === 'DOCUMENT_RAG'
-                      ? 'bg-blue-500/15 text-blue-300'
-                      : 'hover:bg-white/5 text-gray-300'
+                    className={`flex items-center justify-between p-2 rounded-lg text-left text-xs cursor-pointer w-full ${currentMode === 'DOCUMENT_RAG'
+                      ? 'bg-primary-light-theme text-primary-theme'
+                      : 'hover:bg-(--border-subtle) text-(--text-main)'
                       }`}
                     onClick={() => handleSelectMode('DOCUMENT_RAG')}
                   >
                     <div className="flex items-center gap-2">
-                      <LuFileText size={16} className="text-blue-400" />
+                      <LuFileText size={16} className="text-primary-theme" />
                       <div className="flex flex-col">
-                        <span className="font-semibold text-gray-200">Document RAG</span>
-                        <span className="text-[10px] text-gray-500">Grounded Context QA</span>
+                        <span className="font-semibold">{currentModeDetails.title}</span>
+                        <span className="text-[10px] text-(--text-muted)">Grounded Context QA</span>
                       </div>
                     </div>
-                    {currentMode === 'DOCUMENT_RAG' && <LuCheck size={14} className="text-blue-400" />}
+                    {currentMode === 'DOCUMENT_RAG' && <LuCheck size={14} className="text-primary-theme" />}
                   </button>
 
                   <button
                     type="button"
-                    className={`flex items-center justify-between p-2 rounded-lg text-left text-xs transition-colors cursor-pointer w-full ${currentMode === 'WEB_SEARCH'
-                      ? 'bg-blue-500/15 text-blue-300'
-                      : 'hover:bg-white/5 text-gray-300'
+                    className={`flex items-center justify-between p-2 rounded-lg text-left text-xs cursor-pointer w-full ${currentMode === 'WEB_SEARCH'
+                      ? 'bg-emerald-500/15 text-emerald-500 dark:text-emerald-400'
+                      : 'hover:bg-(--border-subtle) text-(--text-main)'
                       }`}
                     onClick={() => handleSelectMode('WEB_SEARCH')}
                   >
                     <div className="flex items-center gap-2">
-                      <LuGlobe size={16} className="text-emerald-400" />
+                      <LuGlobe size={16} className="text-emerald-500 dark:text-emerald-400" />
                       <div className="flex flex-col">
-                        <span className="font-semibold text-gray-200">Web Search</span>
-                        <span className="text-[10px] text-gray-500">Live Internet Access</span>
+                        <span className="font-semibold">Web Search</span>
+                        <span className="text-[10px] text-(--text-muted)">Live Internet Access</span>
                       </div>
                     </div>
-                    {currentMode === 'WEB_SEARCH' && <LuCheck size={14} className="text-emerald-400" />}
+                    {currentMode === 'WEB_SEARCH' && <LuCheck size={14} className="text-emerald-500 dark:text-emerald-400" />}
                   </button>
 
                   <button
                     type="button"
-                    className={`flex items-center justify-between p-2 rounded-lg text-left text-xs opacity-50 cursor-not-allowed w-full`}
+                    className="flex items-center justify-between p-2 rounded-lg text-left text-xs opacity-50 cursor-not-allowed w-full"
                     onClick={() => handleSelectMode('MULTIMODAL')}
                     title="Vision & Audio (Coming)"
                   >
                     <div className="flex items-center gap-2">
                       <LuImage size={16} className="text-purple-400" />
                       <div className="flex flex-col">
-                        <span className="font-semibold text-gray-200">Multimodal</span>
-                        <span className="text-[10px] text-gray-500">Vision & Audio (Coming)</span>
+                        <span className="font-semibold">Multimodal</span>
+                        <span className="text-[10px] text-(--text-muted)">Vision & Audio (Coming)</span>
                       </div>
                     </div>
                     {currentMode === 'MULTIMODAL' && <LuCheck size={14} />}
@@ -308,13 +305,13 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             rows={1}
             required
             disabled={isSending}
-            className="flex-1 bg-transparent border-0 outline-none resize-none text-sm text-gray-100 placeholder-gray-500 px-2 py-1 max-h-36 overflow-y-auto"
+            className="flex-1 bg-transparent border-0 outline-none resize-none text-sm placeholder-(--text-muted) px-2 py-1 max-h-36 overflow-y-auto"
           />
 
           {/* Send Button */}
           <button
             type="submit"
-            className="w-8 h-8 rounded-full bg-blue-600 hover:bg-blue-500 disabled:bg-gray-800 text-white disabled:text-gray-600 flex items-center justify-center transition-all cursor-pointer disabled:cursor-not-allowed shrink-0 shadow-sm shadow-blue-500/30 disabled:shadow-none"
+            className="w-8 h-8 rounded-full bg-primary-theme hover:opacity-90 disabled:opacity-30 text-white flex items-center justify-center disabled:cursor-not-allowed shrink-0 disabled:shadow-none"
             disabled={isSending || !inputQuery.trim()}
             title="Send Question"
           >
@@ -323,7 +320,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         </div>
       </form>
 
-      <div className="text-center text-[11px] text-gray-500 flex items-center justify-center gap-1.5">
+      <div className="text-center text-[11px] text-(--text-muted) flex items-center justify-center gap-1.5">
         <LuDatabase size={11} />
         <span>Persistent Relational Storage • Real-time Stream with Citations</span>
       </div>

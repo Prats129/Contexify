@@ -1,69 +1,118 @@
 @import "tailwindcss";
 
+/* Theme Surface & Accent Color Variables */
+:root {
+  --color-primary: #2563eb;
+  --color-primary-hover: #1d4ed8;
+  --color-primary-light: rgba(37, 99, 235, 0.15);
+  --color-primary-border: rgba(37, 99, 235, 0.35);
+
+  --bg-app: #030712;
+  --bg-sidebar: #111827;
+  --bg-card: #1f2937;
+  --bg-input: rgba(17, 24, 39, 0.9);
+  --bg-bubble-ai: #111827;
+  --text-main: #f9fafb;
+  --text-muted: #9ca3af;
+  --border-subtle: rgba(255, 255, 255, 0.1);
+  --border-hover: rgba(255, 255, 255, 0.2);
+}
+
+/* Light Mode Overrides */
+html.light {
+  --bg-app: #f8fafc;
+  --bg-sidebar: #ffffff;
+  --bg-card: #ffffff;
+  --bg-input: rgba(255, 255, 255, 0.95);
+  --bg-bubble-ai: #ffffff;
+  --text-main: #0f172a;
+  --text-muted: #64748b;
+  --border-subtle: rgba(0, 0, 0, 0.08);
+  --border-hover: rgba(0, 0, 0, 0.18);
+}
+
+body {
+  background-color: var(--bg-app);
+  color: var(--text-main);
+}
+
+/* Dynamic Accent Utility Classes */
+.bg-primary-theme {
+  background-color: var(--color-primary) !important;
+}
+
+.text-primary-theme {
+  color: var(--color-primary) !important;
+}
+
+.border-primary-theme {
+  border-color: var(--color-primary-border) !important;
+}
+
+.bg-primary-light-theme {
+  background-color: var(--color-primary-light) !important;
+}
+
 /* Custom Scrollbars */
 ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-    background: transparent;
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.12);
-    border-radius: 4px;
+  background: rgba(150, 150, 150, 0.2);
+  border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.22);
+  background: rgba(150, 150, 150, 0.35);
 }
 
 /* Animations */
 .icon-spin {
-    animation: spin 1s linear infinite;
+  animation: spin 1s linear infinite;
 }
 
 @keyframes spin {
-    from {
-        transform: rotate(0deg);
-    }
-
-    to {
-        transform: rotate(360deg);
-    }
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @keyframes popoverIn {
-    from {
-        opacity: 0;
-        transform: translateY(6px) scale(0.97);
-    }
-
-    to {
-        opacity: 1;
-        transform: translateY(0) scale(1);
-    }
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 @keyframes dropFadeIn {
-    from {
-        opacity: 0;
-    }
-
-    to {
-        opacity: 1;
-    }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 @keyframes fadeIn {
-    from {
-        opacity: 0;
-        transform: translateY(4px);
-    }
-
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }

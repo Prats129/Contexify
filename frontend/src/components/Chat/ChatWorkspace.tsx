@@ -53,8 +53,6 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
   const [isDragging, setIsDragging] = useState(false);
   const dragCounterRef = useRef(0);
 
-  // Global window listeners to reliably capture file drag & drop anywhere in the app
-  // and prevent browser default behavior of opening files in a new tab
   useEffect(() => {
     const handleDragEnter = (e: DragEvent) => {
       e.preventDefault();
@@ -117,18 +115,19 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
 
   return (
     <main
-      className={`flex-1 flex flex-col bg-gray-950 relative overflow-hidden h-screen transition-all ${isDragging ? 'ring-2 ring-blue-500 ring-inset' : ''
-        }`}
+      className={`flex-1 flex flex-col bg-(--bg-app) text-(--text-main) relative overflow-hidden h-screen ${
+        isDragging ? 'ring-2 border-primary-theme ring-inset' : ''
+      }`}
     >
       {/* Drag & Drop Visual Overlay */}
       {isDragging && (
-        <div className="absolute inset-0 bg-gray-950/85 backdrop-blur-md z-50 flex items-center justify-center pointer-events-none animate-[dropFadeIn_0.15s_ease-out]">
-          <div className="border-2 border-dashed border-blue-500 rounded-3xl bg-blue-500/10 shadow-2xl shadow-blue-500/30 p-12 text-center flex flex-col items-center gap-3">
-            <div className="w-16 h-16 rounded-full bg-blue-500/20 flex items-center justify-center text-blue-400 text-3xl shadow-lg shadow-blue-500/40 animate-bounce">
+        <div className="absolute inset-0 bg-(--bg-app)/90 backdrop-blur-md z-50 flex items-center justify-center pointer-events-none animate-[dropFadeIn_0.15s_ease-out]">
+          <div className="border-2 border-dashed border-primary-theme rounded-3xl bg-primary-light-theme shadow-2xl p-12 text-center flex flex-col items-center gap-3">
+            <div className="w-16 h-16 rounded-full bg-primary-light-theme flex items-center justify-center text-primary-theme text-3xl animate-bounce">
               <LuCloudUpload size={32} />
             </div>
-            <h3 className="text-xl font-bold text-gray-100">Drop your files here</h3>
-            <p className="text-xs text-gray-400">PDF, TXT, MD, CSV, JSON or images to attach to this chat</p>
+            <h3 className="text-xl font-bold text-(--text-main)">Drop your files here</h3>
+            <p className="text-xs text-(--text-muted)">PDF, TXT, MD, CSV, JSON or images to attach to this chat</p>
           </div>
         </div>
       )}
