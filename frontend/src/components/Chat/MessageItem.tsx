@@ -1,5 +1,5 @@
-import React from 'react';
-import { LuBrain, LuUser, LuTriangleAlert } from 'react-icons/lu';
+import React, { useState } from 'react';
+import { LuBrain, LuUser, LuTriangleAlert, LuCopy, LuCheck } from 'react-icons/lu';
 import { CitationsBox } from './CitationsBox';
 import type { Citation } from '../../types';
 
@@ -23,6 +23,26 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   userAvatarColor,
 }) => {
   const isUser = role === 'user';
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    if (!content) return;
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Fallback if clipboard API is restricted
+      const textarea = document.createElement('textarea');
+      textarea.value = content;
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
 
   const formatContent = (text: string) => {
     if (!text) return '';
@@ -54,7 +74,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
 
   return (
     <div
-      className={`flex items-start gap-2 w-full animate-[fadeIn_0.15s_ease-out] ${isUser ? 'justify-end' : 'justify-start'
+      className={`group flex items-start gap-2 w-full animate-[fadeIn_0.15s_ease-out] ${isUser ? 'justify-end' : 'justify-start'
         }`}
     >
       {!isUser && (
@@ -64,7 +84,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
       )}
 
       <div
-        className={`flex flex-col gap-2 max-w-[85%] md:max-w-[75%] ${isUser ? 'items-end' : 'items-start mt-1'
+        className={`flex flex-col gap-1 max-w-[85%] md:max-w-[75%] ${isUser ? 'items-end' : 'items-start mt-1'
           }`}
       >
         <div
@@ -86,6 +106,30 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             formatContent(content)
           )}
         </div>
+
+        {/* Action toolbar on hover (ChatGPT style) */}
+        {content && !isStreaming && (
+          <div
+            className={`flex items-center gap-1 mt-0.5 transition-opacity duration-150 ${copied ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+              }`}
+          >
+            <button
+              type="button"
+              onClick={handleCopy}
+              className="flex items-center gap-1 text-[11px] text-(--text-muted) hover:text-(--text-main) hover:bg-(--border-subtle) px-1.5 py-0.5 rounded cursor-pointer transition-colors"
+              title={copied ? 'Copied to clipboard' : 'Copy message'}
+            >
+              {copied ? (
+                <>
+                  <LuCheck size={12} className="text-emerald-500" />
+                  <span className="text-emerald-500 text-[10px] font-medium">Copied</span>
+                </>
+              ) : (
+                <LuCopy size={12} />
+              )}
+            </button>
+          </div>
+        )}
 
         {!isUser && citations && citations.length > 0 && (
           <div className="w-full mt-1">
