@@ -428,6 +428,20 @@ export const App: React.FC = () => {
     await apiService.changePassword(currentUser.id, oldPassword, newPassword);
   };
 
+  const handleUploadAvatar = async (file: File) => {
+    if (!currentUser?.id) return;
+    const updated = await apiService.uploadAvatar(currentUser.id, file);
+    setCurrentUser(updated);
+    localStorage.setItem('contexify_user', JSON.stringify(updated));
+  };
+
+  const handleDeleteAvatar = async () => {
+    if (!currentUser?.id) return;
+    const updated = await apiService.deleteAvatar(currentUser.id);
+    setCurrentUser(updated);
+    localStorage.setItem('contexify_user', JSON.stringify(updated));
+  };
+
   const handleLogout = () => {
     localStorage.removeItem('contexify_user');
     localStorage.removeItem('contexify_active_session');
@@ -492,6 +506,8 @@ export const App: React.FC = () => {
         onContinueAsGuest={handleContinueAsGuest}
         onUpdateProfile={handleUpdateProfile}
         onChangePassword={handleChangePassword}
+        onUploadAvatar={handleUploadAvatar}
+        onDeleteAvatar={handleDeleteAvatar}
       />
     </div>
   );

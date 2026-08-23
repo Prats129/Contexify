@@ -10,6 +10,7 @@ export interface User {
   email: string;
   display_name: string;
   avatar_color?: string;
+  avatar_url?: string | null;
   created_at: string;
 }
 
@@ -29,6 +30,7 @@ export interface UserProfileUpdateRequest {
   user_id: string;
   display_name?: string;
   avatar_color?: string;
+  avatar_url?: string | null;
 }
 
 export interface UserPasswordChangeRequest {

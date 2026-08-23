@@ -100,12 +100,20 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
           }}
         >
           <div className="flex items-center gap-2.5 p-2 border-b border-(--border-subtle)">
-            <div
-              className="w-9 h-9 rounded-full flex items-center justify-center font-bold text-white text-sm shrink-0"
-              style={{ backgroundColor: avatarBg }}
-            >
-              {initial}
-            </div>
+            {currentUser.avatar_url ? (
+              <img
+                src={currentUser.avatar_url}
+                alt={currentUser.display_name}
+                className="w-9 h-9 rounded-full object-cover shrink-0 border border-(--border-subtle)"
+              />
+            ) : (
+              <div
+                className="w-9 h-9 rounded-full flex items-center justify-center font-bold text-white text-sm shrink-0"
+                style={{ backgroundColor: avatarBg }}
+              >
+                {initial}
+              </div>
+            )}
             <div className="flex flex-col overflow-hidden min-w-0">
               <span className="text-xs font-semibold text-(--text-main) truncate">
                 {currentUser.display_name}
@@ -146,12 +154,20 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
         onClick={handleToggleMenu}
         title="Account & Settings"
       >
-        <div
-          className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-white text-xs shrink-0"
-          style={{ backgroundColor: avatarBg }}
-        >
-          {initial}
-        </div>
+        {currentUser.avatar_url ? (
+          <img
+            src={currentUser.avatar_url}
+            alt={currentUser.display_name}
+            className="w-8 h-8 rounded-full object-cover shrink-0 border border-(--border-subtle)"
+          />
+        ) : (
+          <div
+            className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-white text-xs shrink-0"
+            style={{ backgroundColor: avatarBg }}
+          >
+            {initial}
+          </div>
+        )}
         {isOpen && (
           <div className="flex flex-col min-w-0 overflow-hidden">
             <span className="text-xs font-semibold text-(--text-main) truncate">{currentUser.display_name}</span>

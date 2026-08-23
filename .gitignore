@@ -33,8 +33,10 @@ __pycache__/
 # Vector Storage & Relational Database Data
 backend/data/chroma_db/
 backend/data/uploads/
+backend/data/avatars/
 data/chroma_db/
 data/uploads/
+data/avatars/
 *.sqlite3
 *.db
 *.db-wal

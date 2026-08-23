@@ -104,6 +104,47 @@ export const apiService = {
     return await response.json();
   },
 
+  async uploadAvatar(userId: string, file: File): Promise<User> {
+    const MAX_SIZE = 2 * 1024 * 1024; // 2MB
+    if (file.size > MAX_SIZE) {
+      throw new Error('Avatar image exceeds maximum file size limit of 2MB.');
+    }
+
+    const allowedTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif'];
+    if (!allowedTypes.includes(file.type.toLowerCase()) && !/\.(png|jpg|jpeg|webp|gif)$/i.test(file.name)) {
+      throw new Error('Invalid image format. Allowed formats: PNG, JPG, JPEG, WEBP, GIF.');
+    }
+
+    const formData = new FormData();
+    formData.append('user_id', userId);
+    formData.append('file', file);
+
+    const response = await fetch(`${API_BASE_URL}/user/avatar`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ detail: 'Avatar upload failed' }));
+      throw new Error(err.detail || 'Avatar upload failed');
+    }
+
+    return await response.json();
+  },
+
+  async deleteAvatar(userId: string): Promise<User> {
+    const response = await fetch(`${API_BASE_URL}/user/avatar?user_id=${encodeURIComponent(userId)}`, {
+      method: 'DELETE',
+    });
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ detail: 'Avatar deletion failed' }));
+      throw new Error(err.detail || 'Avatar deletion failed');
+    }
+
+    return await response.json();
+  },
+
   // --- Session Endpoints ---
   async listSessions(userId: string): Promise<ChatSession[]> {
     const response = await fetch(`${API_BASE_URL}/session/list?user_id=${encodeURIComponent(userId)}`);

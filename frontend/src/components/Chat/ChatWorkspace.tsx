@@ -147,6 +147,7 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
         messages={messages}
         streamingMessage={streamingMessage}
         onSelectPrompt={onSelectPrompt}
+        currentUser={currentUser}
       />
 
       <ChatInput

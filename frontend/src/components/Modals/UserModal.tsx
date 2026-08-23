@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   LuShieldCheck,
   LuX,
@@ -19,6 +19,8 @@ import {
   LuMoon,
   LuPalette,
   LuCheck,
+  LuCamera,
+  LuTrash2,
 } from 'react-icons/lu';
 import { useTheme, ACCENT_PALETTES, type AccentColor } from '../../context/ThemeContext';
 import type { User } from '../../types';
@@ -39,6 +41,8 @@ interface UserModalProps {
   onContinueAsGuest: () => void;
   onUpdateProfile?: (displayName: string, avatarColor: string) => Promise<void>;
   onChangePassword?: (oldPassword: string, newPassword: string) => Promise<void>;
+  onUploadAvatar?: (file: File) => Promise<void>;
+  onDeleteAvatar?: () => Promise<void>;
 }
 
 export const UserModal: React.FC<UserModalProps> = ({
@@ -52,15 +56,23 @@ export const UserModal: React.FC<UserModalProps> = ({
   onContinueAsGuest,
   onUpdateProfile,
   onChangePassword,
+  onUploadAvatar,
+  onDeleteAvatar,
 }) => {
   const { mode, setMode, accent, setAccent, currentAccent } = useTheme();
   const [activeTab, setActiveTab] = useState<'login' | 'register'>('login');
+  const avatarFileInputRef = useRef<HTMLInputElement>(null);
 
   // Edit Profile State
   const [editDisplayName, setEditDisplayName] = useState('');
   const [selectedAvatarColor, setSelectedAvatarColor] = useState('#3B82F6');
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [profileSuccessMsg, setProfileSuccessMsg] = useState<string | null>(null);
+
+  // Pending Avatar Staging State (Preview only until Save)
+  const [pendingAvatarFile, setPendingAvatarFile] = useState<File | null>(null);
+  const [avatarPreviewUrl, setAvatarPreviewUrl] = useState<string | null>(null);
+  const [isAvatarRemoved, setIsAvatarRemoved] = useState(false);
 
   // Change Password State
   const [isChangingPassword, setIsChangingPassword] = useState(false);
@@ -74,7 +86,6 @@ export const UserModal: React.FC<UserModalProps> = ({
   const [loginIdentifier, setLoginIdentifier] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [showLoginPassword, setShowLoginPassword] = useState(false);
-
 
   // Register Form State
   const [regDisplayName, setRegDisplayName] = useState('');
@@ -103,6 +114,9 @@ export const UserModal: React.FC<UserModalProps> = ({
       setIsSubmitting(false);
       setIsEditingProfile(false);
       setIsChangingPassword(false);
+      setPendingAvatarFile(null);
+      setAvatarPreviewUrl(null);
+      setIsAvatarRemoved(false);
       if (currentUser) {
         setEditDisplayName(currentUser.display_name);
         setSelectedAvatarColor(currentUser.avatar_color || '#3B82F6');
@@ -111,11 +125,58 @@ export const UserModal: React.FC<UserModalProps> = ({
     }
   }, [isOpen, initialTab, currentUser]);
 
+  // Handle local photo file selection (preview only)
+  const handleAvatarFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    const file = e.target.files[0];
+    e.target.value = '';
+    setErrorMessage(null);
+    setProfileSuccessMsg(null);
+
+    const MAX_SIZE = 2 * 1024 * 1024; // 2MB
+    if (file.size > MAX_SIZE) {
+      setErrorMessage(`Selected image (${(file.size / (1024 * 1024)).toFixed(1)} MB) exceeds the 2MB limit.`);
+      return;
+    }
+
+    const allowedTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif'];
+    if (!allowedTypes.includes(file.type.toLowerCase()) && !/\.(png|jpg|jpeg|webp|gif)$/i.test(file.name)) {
+      setErrorMessage('Invalid image format. Allowed formats: PNG, JPG, JPEG, WEBP, GIF.');
+      return;
+    }
+
+    setPendingAvatarFile(file);
+    setIsAvatarRemoved(false);
+    const preview = URL.createObjectURL(file);
+    setAvatarPreviewUrl(preview);
+  };
+
+  // Handle local photo removal (staging only)
+  const handleRemovePhotoClick = () => {
+    setPendingAvatarFile(null);
+    setAvatarPreviewUrl(null);
+    setIsAvatarRemoved(true);
+  };
+
+  // Cancel profile editing and discard pending changes
+  const handleCancelEditing = () => {
+    setIsEditingProfile(false);
+    setPendingAvatarFile(null);
+    setAvatarPreviewUrl(null);
+    setIsAvatarRemoved(false);
+    setErrorMessage(null);
+    if (currentUser) {
+      setEditDisplayName(currentUser.display_name);
+      setSelectedAvatarColor(currentUser.avatar_color || '#3B82F6');
+    }
+  };
+
+  // Submit all profile changes together on Save
   const handleProfileUpdateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
     setProfileSuccessMsg(null);
-    if (!currentUser || !onUpdateProfile) return;
+    if (!currentUser) return;
 
     const trimmedName = editDisplayName.trim();
     if (!trimmedName || trimmedName.length < 2) {
@@ -125,8 +186,23 @@ export const UserModal: React.FC<UserModalProps> = ({
 
     try {
       setIsSubmitting(true);
-      await onUpdateProfile(trimmedName, selectedAvatarColor);
+
+      // 1. Commit avatar upload or deletion if changed
+      if (pendingAvatarFile && onUploadAvatar) {
+        await onUploadAvatar(pendingAvatarFile);
+      } else if (isAvatarRemoved && currentUser.avatar_url && onDeleteAvatar) {
+        await onDeleteAvatar();
+      }
+
+      // 2. Commit display name & fallback color
+      if (onUpdateProfile) {
+        await onUpdateProfile(trimmedName, selectedAvatarColor);
+      }
+
       setProfileSuccessMsg('Profile updated successfully!');
+      setPendingAvatarFile(null);
+      setAvatarPreviewUrl(null);
+      setIsAvatarRemoved(false);
       setIsEditingProfile(false);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -291,12 +367,20 @@ export const UserModal: React.FC<UserModalProps> = ({
               {/* User Profile Card */}
               <div className="flex items-center justify-between p-3 bg-(--border-subtle) border border-(--border-subtle) rounded-xl">
                 <div className="flex items-center gap-3 min-w-0">
-                  <div
-                    className="w-12 h-12 rounded-full flex items-center justify-center font-bold text-white text-lg shrink-0"
-                    style={{ backgroundColor: currentUser.avatar_color || currentAccent.primary }}
-                  >
-                    {currentUser.display_name.charAt(0).toUpperCase()}
-                  </div>
+                  {currentUser.avatar_url ? (
+                    <img
+                      src={currentUser.avatar_url}
+                      alt={currentUser.display_name}
+                      className="w-12 h-12 rounded-full object-cover shrink-0 border border-(--border-subtle)"
+                    />
+                  ) : (
+                    <div
+                      className="w-12 h-12 rounded-full flex items-center justify-center font-bold text-white text-lg shrink-0"
+                      style={{ backgroundColor: currentUser.avatar_color || currentAccent.primary }}
+                    >
+                      {currentUser.display_name.charAt(0).toUpperCase()}
+                    </div>
+                  )}
                   <div className="flex flex-col min-w-0">
                     <h4 className="text-sm font-bold text-(--text-main) truncate">
                       {currentUser.display_name}
@@ -310,8 +394,8 @@ export const UserModal: React.FC<UserModalProps> = ({
                 <button
                   type="button"
                   className="px-2.5 py-1 text-xs font-medium text-primary-theme bg-primary-light-theme hover:opacity-80 rounded-lg border border-primary-theme/30 cursor-pointer shrink-0"
-                  onClick={() => {
-                    setIsEditingProfile((prev) => !prev);
+                  onClick={isEditingProfile ? handleCancelEditing : () => {
+                    setIsEditingProfile(true);
                     setIsChangingPassword(false);
                     setErrorMessage(null);
                   }}
@@ -322,8 +406,78 @@ export const UserModal: React.FC<UserModalProps> = ({
 
               {/* Edit Profile Form Sub-panel */}
               {isEditingProfile && (
-                <form onSubmit={handleProfileUpdateSubmit} className="flex flex-col gap-3 p-3.5 bg-(--border-subtle)/50 border border-primary-theme/30 rounded-xl">
+                <form onSubmit={handleProfileUpdateSubmit} className="flex flex-col gap-3.5 p-3.5 bg-(--border-subtle)/50 border border-primary-theme/30 rounded-xl">
                   <span className="text-xs font-semibold text-(--text-main)">Edit Profile Details</span>
+
+                  {/* Profile Picture Upload & Live Preview */}
+                  <div className="flex flex-col gap-2 p-2.5 bg-(--bg-card) border border-(--border-subtle) rounded-xl">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[11px] font-semibold text-(--text-muted)">Profile Photo</label>
+                      <span className="text-[10px] text-(--text-muted)">Max 2MB</span>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      {/* Live Circular Preview */}
+                      <div className="relative shrink-0">
+                        {(!isAvatarRemoved && (avatarPreviewUrl || currentUser.avatar_url)) ? (
+                          <img
+                            src={avatarPreviewUrl || currentUser.avatar_url || ''}
+                            alt="Avatar Preview"
+                            className="w-12 h-12 rounded-full object-cover border border-(--border-subtle) shadow-sm"
+                          />
+                        ) : (
+                          <div
+                            className="w-12 h-12 rounded-full flex items-center justify-center font-bold text-white text-base shadow-sm shrink-0"
+                            style={{ backgroundColor: selectedAvatarColor }}
+                          >
+                            {editDisplayName.charAt(0).toUpperCase() || 'U'}
+                          </div>
+                        )}
+                        {pendingAvatarFile && (
+                          <span className="absolute -bottom-1 -right-1 text-[9px] bg-primary-theme text-white px-1.5 py-0.2 rounded-full font-bold shadow">
+                            New
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Photo Actions */}
+                      <div className="flex flex-col gap-1">
+                        <input
+                          type="file"
+                          ref={avatarFileInputRef}
+                          accept=".png,.jpg,.jpeg,.webp,.gif,image/*"
+                          onChange={handleAvatarFileChange}
+                          hidden
+                        />
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => avatarFileInputRef.current?.click()}
+                            className="flex items-center gap-1 px-2.5 py-1 bg-(--border-subtle) hover:bg-(--border-hover) border border-(--border-subtle) text-(--text-main) text-xs rounded-lg cursor-pointer transition-colors"
+                          >
+                            <LuCamera size={13} />
+                            <span>{(avatarPreviewUrl || (currentUser.avatar_url && !isAvatarRemoved)) ? 'Change Photo' : 'Upload Photo'}</span>
+                          </button>
+
+                          {(avatarPreviewUrl || (currentUser.avatar_url && !isAvatarRemoved)) && (
+                            <button
+                              type="button"
+                              onClick={handleRemovePhotoClick}
+                              className="flex items-center gap-1 px-2 py-1 text-xs text-red-500 hover:bg-red-500/10 rounded-lg cursor-pointer transition-colors"
+                              title="Remove photo"
+                            >
+                              <LuTrash2 size={13} />
+                              <span>Remove</span>
+                            </button>
+                          )}
+                        </div>
+                        <span className="text-[10px] text-(--text-muted)">
+                          {pendingAvatarFile ? `Selected: ${pendingAvatarFile.name}` : 'PNG, JPG, WEBP or GIF'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
                   <div className="flex flex-col gap-1">
                     <label className="text-[11px] text-(--text-muted)">Display Name</label>
                     <input
@@ -334,8 +488,9 @@ export const UserModal: React.FC<UserModalProps> = ({
                       className="bg-(--bg-card) border border-(--border-subtle) focus:border-primary-theme rounded-lg py-1.5 px-3 text-xs outline-none"
                     />
                   </div>
+
                   <div className="flex flex-col gap-1">
-                    <label className="text-[11px] text-(--text-muted)">Avatar Color</label>
+                    <label className="text-[11px] text-(--text-muted)">Fallback Avatar Color</label>
                     <div className="flex items-center gap-2">
                       {['#3B82F6', '#10B981', '#8B5CF6', '#F59E0B', '#EC4899', '#06B6D4', '#6366F1'].map((c) => (
                         <button
@@ -348,12 +503,14 @@ export const UserModal: React.FC<UserModalProps> = ({
                       ))}
                     </div>
                   </div>
+
                   <button
                     type="submit"
                     disabled={isSubmitting}
-                    className="mt-1 py-1.5 px-3 bg-primary-theme text-white text-xs font-semibold rounded-lg hover:opacity-90 cursor-pointer disabled:opacity-50"
+                    className="mt-1 py-1.5 px-3 bg-primary-theme text-white text-xs font-semibold rounded-lg hover:opacity-90 cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5"
                   >
-                    {isSubmitting ? 'Saving...' : 'Save Profile Changes'}
+                    {isSubmitting && <LuLoader className="icon-spin" size={13} />}
+                    <span>{isSubmitting ? 'Saving Profile...' : 'Save Profile Changes'}</span>
                   </button>
                 </form>
               )}

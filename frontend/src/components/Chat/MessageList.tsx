@@ -7,18 +7,20 @@ import {
   LuArrowDown,
 } from "react-icons/lu";
 import { MessageItem } from "./MessageItem";
-import type { Message, StreamingMessageState } from "../../types";
+import type { Message, StreamingMessageState, User } from "../../types";
 
 interface MessageListProps {
   messages: Message[];
   streamingMessage: StreamingMessageState | null;
   onSelectPrompt: (prompt: string) => void;
+  currentUser?: User | null;
 }
 
 export const MessageList: React.FC<MessageListProps> = ({
   messages,
   streamingMessage,
   onSelectPrompt,
+  currentUser,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollEndRef = useRef<HTMLDivElement>(null);
@@ -132,6 +134,8 @@ export const MessageList: React.FC<MessageListProps> = ({
             role={msg.role}
             content={msg.content}
             citations={msg.citations}
+            userAvatarUrl={currentUser?.avatar_url}
+            userAvatarColor={currentUser?.avatar_color}
           />
         ))}
 
@@ -142,6 +146,8 @@ export const MessageList: React.FC<MessageListProps> = ({
             citations={streamingMessage.citations}
             isStreaming={streamingMessage.isStreaming}
             isError={streamingMessage.isError}
+            userAvatarUrl={currentUser?.avatar_url}
+            userAvatarColor={currentUser?.avatar_color}
           />
         )}
 

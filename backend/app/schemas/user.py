@@ -49,6 +49,7 @@ class UserResponse(BaseModel):
     email: str
     display_name: str
     avatar_color: Optional[str] = "#3B82F6"
+    avatar_url: Optional[str] = None
     created_at: str
 
     class Config:
@@ -58,6 +59,7 @@ class UserProfileUpdateRequest(BaseModel):
     user_id: str = Field(..., description="ID of the user to update")
     display_name: Optional[str] = Field(None, min_length=2, max_length=50, description="New display name")
     avatar_color: Optional[str] = Field(None, max_length=30, description="Avatar hex color or preset name")
+    avatar_url: Optional[str] = Field(None, description="Custom avatar image URL or relative path")
 
     @field_validator("display_name")
     @classmethod

@@ -9,6 +9,8 @@ interface MessageItemProps {
   citations?: Citation[] | null;
   isStreaming?: boolean;
   isError?: boolean;
+  userAvatarUrl?: string | null;
+  userAvatarColor?: string;
 }
 
 export const MessageItem: React.FC<MessageItemProps> = ({
@@ -17,6 +19,8 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   citations,
   isStreaming,
   isError,
+  userAvatarUrl,
+  userAvatarColor,
 }) => {
   const isUser = role === 'user';
 
@@ -91,9 +95,20 @@ export const MessageItem: React.FC<MessageItemProps> = ({
       </div>
 
       {isUser && (
-        <div className="w-8 h-8 rounded-full bg-primary-theme flex items-center justify-center text-white text-sm shrink-0 mt-1">
-          <LuUser size={16} />
-        </div>
+        userAvatarUrl ? (
+          <img
+            src={userAvatarUrl}
+            alt="User"
+            className="w-8 h-8 rounded-full object-cover shrink-0 mt-1 border border-(--border-subtle)"
+          />
+        ) : (
+          <div
+            className="w-8 h-8 rounded-full flex items-center justify-center text-white text-sm shrink-0 mt-1"
+            style={{ backgroundColor: userAvatarColor || 'var(--color-primary)' }}
+          >
+            <LuUser size={16} />
+          </div>
+        )
       )}
     </div>
   );
