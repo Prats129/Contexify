@@ -35,10 +35,16 @@ export const App: React.FC = () => {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadStatusText, setUploadStatusText] = useState('');
   const [isUserModalOpen, setIsUserModalOpen] = useState(false);
+  const [userModalTab, setUserModalTab] = useState<'login' | 'register'>('login');
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(() => {
     const saved = localStorage.getItem('contexify_sidebar_open');
     return saved !== null ? JSON.parse(saved) : true;
   });
+
+  const handleOpenUserModal = (tab: 'login' | 'register' = 'login') => {
+    setUserModalTab(tab);
+    setIsUserModalOpen(true);
+  };
 
   const handleToggleSidebar = () => {
     setIsSidebarOpen((prev) => {
@@ -149,28 +155,23 @@ export const App: React.FC = () => {
 
   // --- 4. Create New Session ---
   const handleNewSession = async () => {
-    if (currentUser?.id) {
-      // Persistent session for logged in user
-      try {
-        const newSess = await apiService.createSession(
-          currentUser.id,
-          'New Conversation',
-          currentMode
-        );
-        setSessions((prev) => [newSess, ...prev]);
-        await selectSession(newSess.id);
-        setInputQuery('');
-      } catch (e: unknown) {
-        const err = e instanceof Error ? e.message : String(e);
-        alert(`Failed to create new conversation: ${err}`);
-      }
-    } else {
-      // Ephemeral new session for guest
-      const newGuestId = generateGuestSessionId();
-      setActiveSessionId(newGuestId);
-      setMessages([]);
-      setDocuments([]);
+    if (!currentUser?.id) {
+      setIsUserModalOpen(true);
+      return;
+    }
+    // Persistent session for logged in user
+    try {
+      const newSess = await apiService.createSession(
+        currentUser.id,
+        'New Conversation',
+        currentMode
+      );
+      setSessions((prev) => [newSess, ...prev]);
+      await selectSession(newSess.id);
       setInputQuery('');
+    } catch (e: unknown) {
+      const err = e instanceof Error ? e.message : String(e);
+      alert(`Failed to create new conversation: ${err}`);
     }
   };
 
@@ -404,7 +405,7 @@ export const App: React.FC = () => {
         isOpen={isSidebarOpen}
         onToggleSidebar={handleToggleSidebar}
         currentUser={currentUser}
-        onOpenUserModal={() => setIsUserModalOpen(true)}
+        onOpenUserModal={() => handleOpenUserModal('login')}
         onLogout={handleLogout}
         sessions={sessions}
         activeSessionId={activeSessionId}
@@ -418,6 +419,8 @@ export const App: React.FC = () => {
       <ChatWorkspace
         isSidebarOpen={isSidebarOpen}
         onToggleSidebar={handleToggleSidebar}
+        currentUser={currentUser}
+        onOpenUserModal={handleOpenUserModal}
         currentMode={currentMode}
         onModeChange={handleModeChange}
         activeSessionId={activeSessionId}
@@ -438,6 +441,7 @@ export const App: React.FC = () => {
 
       <UserModal
         isOpen={isUserModalOpen}
+        initialTab={userModalTab}
         onClose={() => setIsUserModalOpen(false)}
         currentUser={currentUser}
         onLogin={handleLogin}

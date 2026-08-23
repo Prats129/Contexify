@@ -62,14 +62,26 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
                 key={s.id}
                 className={`session-item ${isActive ? 'active' : ''}`}
                 onClick={() => onSelectSession(s.id)}
+                title={`${s.title} (${isWeb ? 'Web Search' : 'Document RAG'})`}
               >
+                <div className="session-mini-icon">
+                  <i
+                    className={`fa-solid ${
+                      isWeb ? 'fa-globe' : 'fa-message'
+                    }`}
+                  ></i>
+                </div>
                 <div className="session-item-content">
                   <span className="session-item-title" title={s.title}>
                     {s.title}
                   </span>
                   <div className="session-item-meta">
                     <span className="session-tag-mode">
-                      <i className={`fa-solid ${isWeb ? 'fa-globe' : 'fa-file-contract'}`}></i>{' '}
+                      <i
+                        className={`fa-solid ${
+                          isWeb ? 'fa-globe' : 'fa-file-contract'
+                        }`}
+                      ></i>{' '}
                       {isWeb ? 'Web' : 'RAG'}
                     </span>
                     <span>{s.message_count || 0} msgs</span>

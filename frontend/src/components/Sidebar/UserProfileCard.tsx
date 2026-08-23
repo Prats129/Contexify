@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import type { User } from '../../types';
 
 interface UserProfileCardProps {
@@ -12,54 +12,143 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
   onOpenModal,
   onLogout,
 }) => {
-  const isGuest = !currentUser;
-  const initial = (currentUser?.display_name || currentUser?.username || 'G')
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [menuPosition, setMenuPosition] = useState<{ left: number; bottom: number }>({
+    left: 12,
+    bottom: 60,
+  });
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+
+  // Close menu on outside click or Escape
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+        popoverRef.current &&
+        !popoverRef.current.contains(event.target as Node) &&
+        buttonRef.current &&
+        !buttonRef.current.contains(event.target as Node)
+      ) {
+        setIsMenuOpen(false);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsMenuOpen(false);
+      }
+    };
+
+    if (isMenuOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      document.addEventListener('keydown', handleKeyDown);
+    }
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isMenuOpen]);
+
+  // If user is guest, do not render this in the sidebar (guest auth is at the top of chat)
+  if (!currentUser) {
+    return null;
+  }
+
+  const initial = (currentUser.display_name || currentUser.username || 'U')
     .charAt(0)
     .toUpperCase();
-  const avatarBg = isGuest ? '#6B7280' : currentUser?.avatar_color || '#3B82F6';
+  const avatarBg = currentUser.avatar_color || '#3B82F6';
+
+  const handleToggleMenu = () => {
+    if (!isMenuOpen && buttonRef.current) {
+      const rect = buttonRef.current.getBoundingClientRect();
+      setMenuPosition({
+        left: rect.left,
+        bottom: window.innerHeight - rect.top + 8,
+      });
+    }
+    setIsMenuOpen((prev) => !prev);
+  };
+
+  const handleOpenSettings = () => {
+    setIsMenuOpen(false);
+    onOpenModal();
+  };
+
+  const handleLogoutConfirm = () => {
+    setIsMenuOpen(false);
+    if (window.confirm('Are you sure you want to log out of your account?')) {
+      onLogout();
+    }
+  };
 
   return (
-    <div
-      className={`user-profile-card ${isGuest ? 'guest-mode' : ''}`}
-      onClick={onOpenModal}
-      title={isGuest ? 'Click to Sign In or Create Account' : 'Click to View Account Details'}
-    >
-      <div className="user-avatar" style={{ backgroundColor: avatarBg }}>
-        {isGuest ? <i className="fa-solid fa-user"></i> : initial}
-      </div>
-      <div className="user-info">
-        <span className="user-name">
-          {currentUser?.display_name || (isGuest ? 'Guest Visitor' : currentUser?.username)}
-        </span>
-        <span className="user-email">
-          {isGuest ? 'Ephemeral Mode' : `@${currentUser?.username}`}
-        </span>
-      </div>
-      {isGuest ? (
-        <button
-          type="button"
-          className="btn-switch-user"
-          onClick={(e) => {
-            e.stopPropagation();
-            onOpenModal();
+    <div className="user-profile-bottom-wrapper">
+      {/* Fixed position ChatGPT-style popover menu (avoids sidebar overflow-x:hidden clipping) */}
+      {isMenuOpen && (
+        <div
+          className="user-profile-popover"
+          ref={popoverRef}
+          style={{
+            left: `${menuPosition.left}px`,
+            bottom: `${menuPosition.bottom}px`,
           }}
-          title="Sign In / Register"
         >
-          <i className="fa-solid fa-right-to-bracket"></i>
-        </button>
-      ) : (
-        <button
-          type="button"
-          className="btn-logout-user"
-          onClick={(e) => {
-            e.stopPropagation();
-            onLogout();
-          }}
-          title="Log Out"
-        >
-          <i className="fa-solid fa-arrow-right-from-bracket"></i>
-        </button>
+          <div className="popover-user-header">
+            <div
+              className="popover-avatar"
+              style={{ backgroundColor: avatarBg }}
+            >
+              {initial}
+            </div>
+            <div className="popover-user-details">
+              <span className="popover-name">{currentUser.display_name}</span>
+              <span className="popover-handle">@{currentUser.username}</span>
+              <span className="popover-email">{currentUser.email}</span>
+            </div>
+          </div>
+
+          <div className="popover-divider"></div>
+
+          <button
+            type="button"
+            className="popover-item"
+            onClick={handleOpenSettings}
+          >
+            <i className="fa-solid fa-gear"></i>
+            <span>Settings & Account</span>
+          </button>
+
+          <div className="popover-divider"></div>
+
+          <button
+            type="button"
+            className="popover-item logout-item"
+            onClick={handleLogoutConfirm}
+          >
+            <i className="fa-solid fa-arrow-right-from-bracket"></i>
+            <span>Log out</span>
+          </button>
+        </div>
       )}
+
+      {/* Bottom Profile Trigger Pill */}
+      <button
+        ref={buttonRef}
+        type="button"
+        className={`user-profile-pill ${isMenuOpen ? 'active' : ''}`}
+        onClick={handleToggleMenu}
+        title="Account & Settings"
+      >
+        <div className="user-avatar" style={{ backgroundColor: avatarBg }}>
+          {initial}
+        </div>
+        <div className="user-info">
+          <span className="user-name">{currentUser.display_name}</span>
+          <span className="user-email">@{currentUser.username}</span>
+        </div>
+      </button>
     </div>
   );
 };

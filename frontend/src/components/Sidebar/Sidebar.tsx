@@ -35,9 +35,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   return (
     <aside className={`sidebar ${!isOpen ? 'collapsed' : ''}`}>
-      {/* Brand & Collapse Button */}
+      {/* Brand & Collapse / Expand Button */}
       <div className="sidebar-header">
-        <div className="brand">
+        <div
+          className="brand"
+          onClick={!isOpen ? onToggleSidebar : undefined}
+          style={{ cursor: !isOpen ? 'pointer' : 'default' }}
+          title={!isOpen ? 'Contexify AI - Click to expand' : undefined}
+        >
           <div className="brand-icon">
             <i className="fa-solid fa-brain"></i>
           </div>
@@ -50,29 +55,26 @@ export const Sidebar: React.FC<SidebarProps> = ({
           type="button"
           className="btn-toggle-sidebar"
           onClick={onToggleSidebar}
-          title="Collapse sidebar"
+          title={isOpen ? 'Collapse sidebar' : 'Expand sidebar'}
         >
-          <i className="fa-solid fa-angles-left"></i>
+          <i className={`fa-solid ${isOpen ? 'fa-angles-left' : 'fa-angles-right'}`}></i>
         </button>
       </div>
 
-      {/* User Profile Card */}
-      <UserProfileCard
-        currentUser={currentUser}
-        onOpenModal={onOpenUserModal}
-        onLogout={onLogout}
-      />
-
-      {/* New Conversation Button */}
-      <div className="new-chat-wrapper">
-        <button
-          type="button"
-          className="btn-new-conversation"
-          onClick={onNewSession}
-        >
-          <i className="fa-solid fa-plus"></i> New Conversation
-        </button>
-      </div>
+      {/* New Conversation Button (Logged-in users only) */}
+      {currentUser && (
+        <div className="new-chat-wrapper">
+          <button
+            type="button"
+            className="btn-new-conversation"
+            onClick={onNewSession}
+            title="New Conversation"
+          >
+            <i className="fa-solid fa-plus"></i>
+            <span>New Conversation</span>
+          </button>
+        </div>
+      )}
 
       {/* Conversation History */}
       <SessionHistory
@@ -90,13 +92,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
         onDeleteDocument={onDeleteDocument}
       />
 
-      {/* Footer */}
-      <div className="sidebar-footer">
-        <div className="system-status">
-          <span className="status-dot online"></span>
-          <span className="status-text">Relational DB & Chroma Active</span>
+      {/* Bottom Section: Logged in User Profile Card */}
+      {currentUser && (
+        <div className="sidebar-bottom">
+          <UserProfileCard
+            currentUser={currentUser}
+            onOpenModal={onOpenUserModal}
+            onLogout={onLogout}
+          />
         </div>
-      </div>
+      )}
     </aside>
   );
 };

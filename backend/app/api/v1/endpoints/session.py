@@ -8,6 +8,7 @@ from app.schemas.session import (
     SessionHistoryResponse
 )
 from app.services.chat_history_service import chat_history_service
+from app.services.user_service import user_service
 
 router = APIRouter()
 
@@ -17,8 +18,22 @@ class TitleUpdatePayload(BaseModel):
 @router.post("/create", response_model=ChatSessionResponse, status_code=status.HTTP_201_CREATED)
 async def create_session(req: ChatSessionCreate):
     """
-    Create a new chat conversation thread for a given user.
+    Create a new chat conversation thread for a registered user.
+    Guest users cannot create multiple chat sessions.
     """
+    if not req.user_id or req.user_id.startswith("guest"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Guest users cannot create new chat conversations. Please sign in to create and manage multiple chats."
+        )
+    
+    user = user_service.get_user_by_id(req.user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User account not found. Please log in first."
+        )
+
     session = chat_history_service.create_session(
         user_id=req.user_id,
         title=req.title or "New Conversation",
@@ -31,6 +46,8 @@ async def list_sessions(user_id: str):
     """
     List all chat sessions for a given user ordered by most recently active.
     """
+    if not user_id or user_id.startswith("guest"):
+        return []
     return chat_history_service.list_user_sessions(user_id)
 
 @router.get("/{session_id}/history", response_model=SessionHistoryResponse)

@@ -7,6 +7,7 @@ import type {
   Message,
   StreamingMessageState,
   DocumentMetadata,
+  User,
 } from '../../types';
 
 interface ChatWorkspaceProps {
@@ -28,6 +29,8 @@ interface ChatWorkspaceProps {
   onDeleteDocument: (documentId: string) => void;
   isSidebarOpen: boolean;
   onToggleSidebar: () => void;
+  currentUser: User | null;
+  onOpenUserModal: (tab?: 'login' | 'register') => void;
 }
 
 export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
@@ -49,6 +52,8 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
   onDeleteDocument,
   isSidebarOpen,
   onToggleSidebar,
+  currentUser,
+  onOpenUserModal,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const dragCounterRef = useRef(0);
@@ -136,6 +141,8 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
         onNewSession={onNewSession}
         isSidebarOpen={isSidebarOpen}
         onToggleSidebar={onToggleSidebar}
+        currentUser={currentUser}
+        onOpenUserModal={onOpenUserModal}
       />
 
       <MessageList

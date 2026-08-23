@@ -1,5 +1,5 @@
 import React from 'react';
-import type { ChatMode } from '../../types';
+import type { ChatMode, User } from '../../types';
 
 interface ChatHeaderProps {
   currentMode: ChatMode;
@@ -7,6 +7,8 @@ interface ChatHeaderProps {
   onNewSession: () => void;
   isSidebarOpen: boolean;
   onToggleSidebar: () => void;
+  currentUser: User | null;
+  onOpenUserModal: (tab?: 'login' | 'register') => void;
 }
 
 export const ChatHeader: React.FC<ChatHeaderProps> = ({
@@ -15,6 +17,8 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   onNewSession,
   isSidebarOpen,
   onToggleSidebar,
+  currentUser,
+  onOpenUserModal,
 }) => {
   const isWeb = currentMode === 'WEB_SEARCH';
 
@@ -42,14 +46,37 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
       </div>
 
       <div className="header-actions">
-        <button
-          type="button"
-          className="action-btn"
-          onClick={onNewSession}
-          title="Start New Session"
-        >
-          <i className="fa-solid fa-plus"></i> New Chat
-        </button>
+        {/* If user is a Guest, show Log In and Sign Up buttons at top right of chat header */}
+        {!currentUser && (
+          <div className="header-auth-buttons">
+            <button
+              type="button"
+              className="btn-header-login"
+              onClick={() => onOpenUserModal('login')}
+            >
+              <i className="fa-solid fa-right-to-bracket"></i> Log in
+            </button>
+            <button
+              type="button"
+              className="btn-header-signup"
+              onClick={() => onOpenUserModal('register')}
+            >
+              <i className="fa-solid fa-user-plus"></i> Sign up
+            </button>
+          </div>
+        )}
+
+        {/* New Chat Button (Logged-in users only) */}
+        {currentUser && (
+          <button
+            type="button"
+            className="action-btn"
+            onClick={onNewSession}
+            title="Start New Session"
+          >
+            <i className="fa-solid fa-plus"></i> New Chat
+          </button>
+        )}
       </div>
     </header>
   );

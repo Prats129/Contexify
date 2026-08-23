@@ -5,6 +5,7 @@ interface UserModalProps {
   isOpen: boolean;
   onClose: () => void;
   currentUser: User | null;
+  initialTab?: 'login' | 'register';
   onLogin: (usernameOrEmail: string, password: string) => Promise<void>;
   onRegister: (
     displayName: string,
@@ -20,6 +21,7 @@ export const UserModal: React.FC<UserModalProps> = ({
   isOpen,
   onClose,
   currentUser,
+  initialTab = 'login',
   onLogin,
   onRegister,
   onLogout,
@@ -53,9 +55,9 @@ export const UserModal: React.FC<UserModalProps> = ({
       setRegEmail('');
       setRegPassword('');
       setIsSubmitting(false);
-      setActiveTab('login');
+      setActiveTab(initialTab);
     }
-  }, [isOpen]);
+  }, [isOpen, initialTab]);
 
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -171,7 +173,16 @@ export const UserModal: React.FC<UserModalProps> = ({
                 <button
                   type="button"
                   className="btn-modal-logout"
-                  onClick={onLogout}
+                  onClick={() => {
+                    if (
+                      window.confirm(
+                        'Are you sure you want to log out of your account?'
+                      )
+                    ) {
+                      onLogout();
+                      onClose();
+                    }
+                  }}
                 >
                   <i className="fa-solid fa-arrow-right-from-bracket"></i> Log Out of Account
                 </button>
