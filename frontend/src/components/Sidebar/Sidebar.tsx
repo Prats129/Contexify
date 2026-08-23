@@ -1,10 +1,8 @@
 import React from 'react';
 import { UserProfileCard } from './UserProfileCard';
 import { SessionHistory } from './SessionHistory';
-import { ModeSelector } from './ModeSelector';
-import { DocumentDropzone } from './DocumentDropzone';
 import { DocumentList } from './DocumentList';
-import type { User, ChatSession, ChatMode, DocumentMetadata } from '../../types';
+import type { User, ChatSession, DocumentMetadata } from '../../types';
 
 interface SidebarProps {
   currentUser: User | null;
@@ -15,13 +13,8 @@ interface SidebarProps {
   onSelectSession: (sessionId: string) => void;
   onNewSession: () => void;
   onDeleteSession: (sessionId: string) => void;
-  currentMode: ChatMode;
-  onModeChange: (mode: ChatMode) => void;
   documents: DocumentMetadata[];
-  onFileUpload: (file: File) => void;
   onDeleteDocument: (documentId: string) => void;
-  isUploading: boolean;
-  uploadStatusText?: string;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -33,13 +26,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSelectSession,
   onNewSession,
   onDeleteSession,
-  currentMode,
-  onModeChange,
   documents,
-  onFileUpload,
   onDeleteDocument,
-  isUploading,
-  uploadStatusText,
 }) => {
   return (
     <aside className="sidebar">
@@ -84,19 +72,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         onOpenUserModal={onOpenUserModal}
       />
 
-      {/* Engine Mode */}
-      <ModeSelector
-        currentMode={currentMode}
-        onModeChange={onModeChange}
-      />
-
-      {/* Document Upload & List */}
-      <DocumentDropzone
-        onFileUpload={onFileUpload}
-        isUploading={isUploading}
-        uploadStatusText={uploadStatusText}
-      />
-
+      {/* Document List */}
       <DocumentList
         documents={documents}
         onDeleteDocument={onDeleteDocument}

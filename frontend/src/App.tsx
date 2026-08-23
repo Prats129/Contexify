@@ -397,17 +397,13 @@ export const App: React.FC = () => {
         onSelectSession={selectSession}
         onNewSession={handleNewSession}
         onDeleteSession={handleDeleteSession}
-        currentMode={currentMode}
-        onModeChange={handleModeChange}
         documents={documents}
-        onFileUpload={handleFileUpload}
         onDeleteDocument={handleDeleteDocument}
-        isUploading={isUploading}
-        uploadStatusText={uploadStatusText}
       />
 
       <ChatWorkspace
         currentMode={currentMode}
+        onModeChange={handleModeChange}
         activeSessionId={activeSessionId}
         onNewSession={handleNewSession}
         messages={messages}
@@ -417,6 +413,11 @@ export const App: React.FC = () => {
         setInputQuery={setInputQuery}
         onSendMessage={handleSendMessage}
         isSending={isSending}
+        onFileUpload={handleFileUpload}
+        isUploading={isUploading}
+        uploadStatusText={uploadStatusText}
+        documents={documents}
+        onDeleteDocument={handleDeleteDocument}
       />
 
       <UserModal
