@@ -1,7 +1,7 @@
 import json
 import requests
 
-BASE_URL = "http://127.0.0.1:8000/api/v1"
+BASE_URL = "http://127.0.0.1:8001/api/v1"
 SESSION_ID = "test_verification_session_1"
 
 def test_pipeline():

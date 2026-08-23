@@ -87,9 +87,9 @@ Start both backend and frontend servers with a single command:
 npm run dev
 ```
 
-* **Frontend App**: `http://localhost:5173`
-* **FastAPI Backend**: `http://127.0.0.1:8000`
-* **Interactive API Docs (Swagger)**: `http://127.0.0.1:8000/docs`
+* **Frontend App**: `http://localhost:8000`
+* **FastAPI Backend**: `http://127.0.0.1:8001`
+* **Interactive API Docs (Swagger)**: `http://127.0.0.1:8001/docs`
 
 ---
 
