@@ -50,9 +50,8 @@ export const MessageItem: React.FC<MessageItemProps> = ({
 
   return (
     <div
-      className={`flex items-start gap-3 w-full animate-[fadeIn_0.15s_ease-out] ${
-        isUser ? 'justify-end' : 'justify-start'
-      }`}
+      className={`flex items-start gap-2 w-full animate-[fadeIn_0.15s_ease-out] ${isUser ? 'justify-end' : 'justify-start'
+        }`}
     >
       {!isUser && (
         <div className="w-8 h-8 rounded-full bg-primary-theme flex items-center justify-center text-white text-sm shrink-0 mt-1">
@@ -61,16 +60,14 @@ export const MessageItem: React.FC<MessageItemProps> = ({
       )}
 
       <div
-        className={`flex flex-col gap-2 max-w-[85%] md:max-w-[75%] ${
-          isUser ? 'items-end' : 'items-start'
-        }`}
+        className={`flex flex-col gap-2 max-w-[85%] md:max-w-[75%] ${isUser ? 'items-end' : 'items-start mt-1'
+          }`}
       >
         <div
-          className={`p-4 rounded-2xl text-sm leading-relaxed ${
-            isUser
-              ? 'bg-primary-theme text-white rounded-br-none'
-              : 'bg-(--bg-card) border border-(--border-subtle) text-(--text-main) rounded-tl-none shadow-sm'
-          }`}
+          className={`px-4 py-1 rounded-2xl text-sm leading-relaxed ${isUser
+            ? 'bg-primary-theme text-white rounded-br-none'
+            : 'bg-(--bg-card) border border-(--border-subtle) text-(--text-main) rounded-tl-none shadow-sm'
+            }`}
         >
           {isError ? (
             <span className="text-red-500 flex items-center gap-1.5">
