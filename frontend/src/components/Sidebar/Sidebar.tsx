@@ -36,26 +36,32 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onDeleteDocument,
 }) => {
   return (
-    <aside className={`sidebar ${!isOpen ? 'collapsed' : ''}`}>
-      {/* Brand & Collapse / Expand Button */}
-      <div className="sidebar-header">
-        <div
-          className="brand"
-          onClick={!isOpen ? onToggleSidebar : undefined}
-          style={{ cursor: !isOpen ? 'pointer' : 'default' }}
-          title={!isOpen ? 'Contexify AI - Click to expand' : undefined}
-        >
-          <div className="brand-icon">
-            <LuBrain size={20} />
+    <aside
+      className={`h-screen bg-gray-900 border-r border-white/10 flex flex-col gap-3 shrink-0 overflow-y-auto overflow-x-hidden transition-all duration-200 ${
+        isOpen ? 'w-[290px] p-3.5' : 'w-[68px] p-2.5 items-center'
+      }`}
+    >
+      {/* Brand & Toggle Sidebar Button */}
+      <div
+        className={`flex items-center pb-2.5 border-b border-white/10 w-full ${
+          isOpen ? 'justify-between gap-2' : 'justify-center'
+        }`}
+      >
+        {isOpen && (
+          <div className="flex items-center gap-3 overflow-hidden">
+            <div className="w-9 h-9 rounded-lg bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center text-white shadow-md shadow-blue-500/20 shrink-0">
+              <LuBrain size={20} />
+            </div>
+            <div className="flex flex-col min-w-0">
+              <h1 className="text-sm font-bold text-gray-100 truncate">Contexify AI</h1>
+              <span className="text-[11px] text-gray-400 truncate">Enterprise RAG & Search</span>
+            </div>
           </div>
-          <div className="brand-text">
-            <h1>Contexify AI</h1>
-            <span>Enterprise RAG & Search</span>
-          </div>
-        </div>
+        )}
+
         <button
           type="button"
-          className="btn-toggle-sidebar"
+          className="w-8 h-8 rounded-md bg-white/5 hover:bg-white/10 text-gray-400 hover:text-gray-200 border border-white/10 flex items-center justify-center transition-all cursor-pointer shrink-0"
           onClick={onToggleSidebar}
           title={isOpen ? 'Collapse sidebar' : 'Expand sidebar'}
         >
@@ -65,21 +71,24 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* New Conversation Button (Logged-in users only) */}
       {currentUser && (
-        <div className="new-chat-wrapper">
+        <div className="w-full flex justify-center">
           <button
             type="button"
-            className="btn-new-conversation"
+            className={`w-full flex items-center justify-center gap-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-semibold rounded-lg shadow-sm shadow-blue-500/20 transition-all cursor-pointer ${
+              isOpen ? 'py-2.5 px-4 text-xs' : 'w-10 h-10 p-0 text-sm'
+            }`}
             onClick={onNewSession}
             title="New Conversation"
           >
             <LuPlus size={18} />
-            <span>New Conversation</span>
+            {isOpen && <span>New Conversation</span>}
           </button>
         </div>
       )}
 
       {/* Conversation History */}
       <SessionHistory
+        isOpen={isOpen}
         currentUser={currentUser}
         sessions={sessions}
         activeSessionId={activeSessionId}
@@ -90,14 +99,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Document List */}
       <DocumentList
+        isOpen={isOpen}
         documents={documents}
         onDeleteDocument={onDeleteDocument}
       />
 
       {/* Bottom Section: Logged in User Profile Card */}
       {currentUser && (
-        <div className="sidebar-bottom">
+        <div className="mt-auto pt-2 w-full">
           <UserProfileCard
+            isOpen={isOpen}
             currentUser={currentUser}
             onOpenModal={onOpenUserModal}
             onLogout={onLogout}

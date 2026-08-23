@@ -3,12 +3,14 @@ import { LuSettings, LuLogOut } from 'react-icons/lu';
 import type { User } from '../../types';
 
 interface UserProfileCardProps {
+  isOpen?: boolean;
   currentUser: User | null;
   onOpenModal: () => void;
   onLogout: () => void;
 }
 
 export const UserProfileCard: React.FC<UserProfileCardProps> = ({
+  isOpen = true,
   currentUser,
   onOpenModal,
   onLogout,
@@ -85,50 +87,50 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
   };
 
   return (
-    <div className="user-profile-bottom-wrapper">
+    <div className="relative w-full">
       {/* Fixed position ChatGPT-style popover menu */}
       {isMenuOpen && (
         <div
-          className="user-profile-popover"
           ref={popoverRef}
+          className="fixed w-64 bg-gray-900 border border-blue-500/30 rounded-xl shadow-2xl shadow-black/80 z-[1000] p-2 flex flex-col gap-1 backdrop-blur-xl animate-[popoverIn_0.18s_ease-out]"
           style={{
             left: `${menuPosition.left}px`,
             bottom: `${menuPosition.bottom}px`,
           }}
         >
-          <div className="popover-user-header">
+          <div className="flex items-center gap-2.5 p-2 border-b border-white/10">
             <div
-              className="popover-avatar"
+              className="w-9 h-9 rounded-full flex items-center justify-center font-bold text-white text-sm shrink-0"
               style={{ backgroundColor: avatarBg }}
             >
               {initial}
             </div>
-            <div className="popover-user-details">
-              <span className="popover-name">{currentUser.display_name}</span>
-              <span className="popover-handle">@{currentUser.username}</span>
-              <span className="popover-email">{currentUser.email}</span>
+            <div className="flex flex-col overflow-hidden min-w-0">
+              <span className="text-xs font-semibold text-gray-100 truncate">
+                {currentUser.display_name}
+              </span>
+              <span className="text-[11px] text-gray-400 truncate">@{currentUser.username}</span>
+              <span className="text-[10px] text-gray-500 truncate">{currentUser.email}</span>
             </div>
           </div>
 
-          <div className="popover-divider"></div>
-
           <button
             type="button"
-            className="popover-item"
+            className="flex items-center gap-2 px-2.5 py-2 text-xs font-medium text-gray-300 hover:text-white hover:bg-white/10 rounded-lg transition-colors cursor-pointer text-left w-full"
             onClick={handleOpenSettings}
           >
-            <LuSettings />
+            <LuSettings size={15} />
             <span>Settings & Account</span>
           </button>
 
-          <div className="popover-divider"></div>
+          <div className="h-px bg-white/10 my-0.5"></div>
 
           <button
             type="button"
-            className="popover-item logout-item"
+            className="flex items-center gap-2 px-2.5 py-2 text-xs font-medium text-red-400 hover:text-red-300 hover:bg-red-500/15 rounded-lg transition-colors cursor-pointer text-left w-full"
             onClick={handleLogoutConfirm}
           >
-            <LuLogOut />
+            <LuLogOut size={15} />
             <span>Log out</span>
           </button>
         </div>
@@ -138,17 +140,24 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
       <button
         ref={buttonRef}
         type="button"
-        className={`user-profile-pill ${isMenuOpen ? 'active' : ''}`}
+        className={`flex items-center gap-2.5 p-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl transition-all cursor-pointer text-left ${
+          isOpen ? 'w-full' : 'w-10 h-10 justify-center mx-auto rounded-full p-0'
+        } ${isMenuOpen ? 'border-blue-500/50 bg-white/10' : ''}`}
         onClick={handleToggleMenu}
         title="Account & Settings"
       >
-        <div className="user-avatar" style={{ backgroundColor: avatarBg }}>
+        <div
+          className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-white text-xs shrink-0"
+          style={{ backgroundColor: avatarBg }}
+        >
           {initial}
         </div>
-        <div className="user-info">
-          <span className="user-name">{currentUser.display_name}</span>
-          <span className="user-email">@{currentUser.username}</span>
-        </div>
+        {isOpen && (
+          <div className="flex flex-col min-w-0 overflow-hidden">
+            <span className="text-xs font-semibold text-gray-200 truncate">{currentUser.display_name}</span>
+            <span className="text-[11px] text-gray-400 truncate">@{currentUser.username}</span>
+          </div>
+        )}
       </button>
     </div>
   );

@@ -12,8 +12,6 @@ interface ChatHeaderProps {
   currentMode: ChatMode;
   sessionId: string | null;
   onNewSession: () => void;
-  isSidebarOpen: boolean;
-  onToggleSidebar: () => void;
   currentUser: User | null;
   onOpenUserModal: (tab?: 'login' | 'register') => void;
 }
@@ -28,36 +26,42 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   const isWeb = currentMode === 'WEB_SEARCH';
 
   return (
-    <header className="workspace-header">
-      <div className="header-left">
-        <div className="header-mode-indicator">
-          <span className={`mode-badge ${isWeb ? 'WEB' : 'RAG'}`}>
-            {isWeb ? <LuGlobe size={15} /> : <LuShieldCheck size={15} />}
+    <header className="h-14 border-b border-white/10 flex items-center justify-between px-5 bg-gray-900/50 backdrop-blur-md shrink-0">
+      <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3">
+          <span
+            className={`px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5 border transition-colors ${
+              isWeb
+                ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                : 'bg-blue-500/15 text-blue-400 border-blue-500/30'
+            }`}
+          >
+            {isWeb ? <LuGlobe size={14} /> : <LuShieldCheck size={14} />}
             {isWeb ? 'Live Web Search' : 'Document Grounded RAG'}
           </span>
-          <span className="session-tag">
-            Session: <code>{sessionId ? sessionId.substring(0, 8) : '...'}</code>
+          <span className="text-xs text-gray-500 hidden sm:inline-block">
+            Session: <code className="font-mono text-gray-300">{sessionId ? sessionId.substring(0, 8) : '...'}</code>
           </span>
         </div>
       </div>
 
-      <div className="header-actions">
-        {/* If user is a Guest, show Log In and Sign Up buttons at top right of chat header */}
+      <div className="flex items-center gap-2.5">
+        {/* If user is a Guest, show Log In and Sign Up buttons */}
         {!currentUser && (
-          <div className="header-auth-buttons">
+          <div className="flex items-center gap-2">
             <button
               type="button"
-              className="btn-header-login"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-200 bg-white/5 hover:bg-white/10 border border-white/10 rounded-md transition-all cursor-pointer"
               onClick={() => onOpenUserModal('login')}
             >
-              <LuLogIn size={15} /> Log in
+              <LuLogIn size={14} /> Log in
             </button>
             <button
               type="button"
-              className="btn-header-signup"
+              className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-500 shadow-sm shadow-blue-500/30 rounded-md transition-all cursor-pointer"
               onClick={() => onOpenUserModal('register')}
             >
-              <LuUserPlus size={15} /> Sign up
+              <LuUserPlus size={14} /> Sign up
             </button>
           </div>
         )}
@@ -66,7 +70,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
         {currentUser && (
           <button
             type="button"
-            className="action-btn"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-200 bg-white/5 hover:bg-white/10 border border-white/10 rounded-md transition-all cursor-pointer"
             onClick={onNewSession}
             title="Start New Session"
           >

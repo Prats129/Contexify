@@ -3,58 +3,78 @@ import { LuFolderOpen, LuFileText, LuFileCode, LuFile, LuTrash2 } from 'react-ic
 import type { DocumentMetadata } from '../../types';
 
 interface DocumentListProps {
+  isOpen?: boolean;
   documents: DocumentMetadata[];
   onDeleteDocument: (documentId: string) => void;
 }
 
 export const DocumentList: React.FC<DocumentListProps> = ({
+  isOpen = true,
   documents,
   onDeleteDocument,
 }) => {
   const getFileIcon = (fileType: string) => {
-    if (fileType === '.pdf') return <LuFileText />;
-    if (fileType === '.txt' || fileType === '.md') return <LuFileCode />;
-    return <LuFile />;
+    if (fileType === '.pdf') return <LuFileText size={15} className="text-red-400 shrink-0" />;
+    if (fileType === '.txt' || fileType === '.md')
+      return <LuFileCode size={15} className="text-blue-400 shrink-0" />;
+    return <LuFile size={15} className="text-gray-400 shrink-0" />;
   };
 
   return (
-    <div className="sidebar-section docs-section">
-      <div className="section-header">
-        <label className="section-label">
-          <LuFolderOpen /> Session Documents
-        </label>
-        <span className="doc-count-badge">{documents.length} files</span>
-      </div>
+    <div className="flex flex-col gap-2 w-full">
+      {isOpen && (
+        <div className="flex items-center justify-between px-1">
+          <label className="text-[11px] font-semibold uppercase tracking-wider text-gray-400 flex items-center gap-1.5">
+            <LuFolderOpen size={13} /> Session Documents
+          </label>
+          <span className="text-[10px] bg-white/10 px-2 py-0.5 rounded-full text-gray-400">
+            {documents.length} files
+          </span>
+        </div>
+      )}
 
-      <div className="document-list">
+      <div className="flex flex-col gap-1.5 max-h-40 overflow-y-auto w-full">
         {documents.length === 0 ? (
-          <div className="empty-docs-placeholder">
-            <LuFileText />
-            <p>No documents in this session.</p>
-            <span>Drop a PDF/TXT to start RAG QA</span>
-          </div>
+          isOpen ? (
+            <div className="text-center py-3 text-gray-500 text-xs">
+              <LuFileText size={16} className="mx-auto mb-1 opacity-50" />
+              <p>No documents attached.</p>
+              <span className="text-[10px] text-gray-600">Drop a PDF or TXT into chat</span>
+            </div>
+          ) : null
         ) : (
           documents.map((doc) => (
-            <div key={doc.document_id} className="doc-card">
-              <div className="doc-info">
+            <div
+              key={doc.document_id}
+              className={`group flex items-center justify-between p-2 rounded-lg border border-white/5 bg-white/[0.02] hover:bg-white/[0.06] hover:border-white/15 transition-all ${
+                isOpen ? 'w-full' : 'w-10 h-10 justify-center mx-auto p-0'
+              }`}
+              title={doc.filename}
+            >
+              <div className="flex items-center gap-2 overflow-hidden min-w-0">
                 {getFileIcon(doc.file_type)}
-                <div className="doc-details">
-                  <span className="doc-name" title={doc.filename}>
-                    {doc.filename}
-                  </span>
-                  <span className="doc-meta">
-                    {doc.total_chunks} chunks • {(doc.file_size_bytes / 1024).toFixed(1)} KB
-                  </span>
-                </div>
+                {isOpen && (
+                  <div className="flex flex-col min-w-0 overflow-hidden">
+                    <span className="text-xs font-medium text-gray-200 truncate">
+                      {doc.filename}
+                    </span>
+                    <span className="text-[10px] text-gray-500">
+                      {doc.total_chunks} chunks • {(doc.file_size_bytes / 1024).toFixed(1)} KB
+                    </span>
+                  </div>
+                )}
               </div>
-              <button
-                type="button"
-                className="btn-delete-doc"
-                onClick={() => onDeleteDocument(doc.document_id)}
-                title="Delete Document"
-              >
-                <LuTrash2 />
-              </button>
+
+              {isOpen && (
+                <button
+                  type="button"
+                  className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-red-400 hover:bg-red-500/15 rounded transition-all cursor-pointer"
+                  onClick={() => onDeleteDocument(doc.document_id)}
+                  title="Delete Document"
+                >
+                  <LuTrash2 size={13} />
+                </button>
+              )}
             </div>
           ))
         )}

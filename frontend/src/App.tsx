@@ -400,7 +400,7 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="app-container">
+    <div className="flex h-screen w-screen overflow-hidden bg-gray-950 text-gray-100 font-sans">
       <Sidebar
         isOpen={isSidebarOpen}
         onToggleSidebar={handleToggleSidebar}
@@ -417,8 +417,6 @@ export const App: React.FC = () => {
       />
 
       <ChatWorkspace
-        isSidebarOpen={isSidebarOpen}
-        onToggleSidebar={handleToggleSidebar}
         currentUser={currentUser}
         onOpenUserModal={handleOpenUserModal}
         currentMode={currentMode}
