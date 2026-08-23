@@ -136,6 +136,7 @@ export const MessageList: React.FC<MessageListProps> = ({
             citations={msg.citations}
             userAvatarUrl={currentUser?.avatar_url}
             userAvatarColor={currentUser?.avatar_color}
+            userDisplayName={currentUser?.display_name || currentUser?.username}
           />
         ))}
 
@@ -148,6 +149,7 @@ export const MessageList: React.FC<MessageListProps> = ({
             isError={streamingMessage.isError}
             userAvatarUrl={currentUser?.avatar_url}
             userAvatarColor={currentUser?.avatar_color}
+            userDisplayName={currentUser?.display_name || currentUser?.username}
           />
         )}
 

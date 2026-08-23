@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { LuBrain, LuUser, LuTriangleAlert, LuCopy, LuCheck } from 'react-icons/lu';
+import { LuBrain, LuTriangleAlert, LuCopy, LuCheck } from 'react-icons/lu';
 import { CitationsBox } from './CitationsBox';
 import type { Citation } from '../../types';
 
@@ -11,6 +11,7 @@ interface MessageItemProps {
   isError?: boolean;
   userAvatarUrl?: string | null;
   userAvatarColor?: string;
+  userDisplayName?: string;
 }
 
 export const MessageItem: React.FC<MessageItemProps> = ({
@@ -21,6 +22,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   isError,
   userAvatarUrl,
   userAvatarColor,
+  userDisplayName,
 }) => {
   const isUser = role === 'user';
   const [copied, setCopied] = useState(false);
@@ -147,10 +149,10 @@ export const MessageItem: React.FC<MessageItemProps> = ({
           />
         ) : (
           <div
-            className="w-8 h-8 rounded-full flex items-center justify-center text-white text-sm shrink-0 mt-1"
+            className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-white text-xs shrink-0 mt-1"
             style={{ backgroundColor: userAvatarColor || 'var(--color-primary)' }}
           >
-            <LuUser size={16} />
+            {userDisplayName ? userDisplayName.charAt(0).toUpperCase() : 'U'}
           </div>
         )
       )}

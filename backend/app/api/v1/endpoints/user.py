@@ -79,7 +79,7 @@ async def get_avatar(user_id: str):
         )
     return FileResponse(
         path=path,
-        headers={"Cache-Control": "public, max-age=86400"}
+        headers={"Cache-Control": "no-cache, must-revalidate"}
     )
 
 @router.delete("/avatar", response_model=UserResponse)
