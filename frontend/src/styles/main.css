@@ -41,6 +41,12 @@ textarea {
   color: var(--text-main);
 }
 
+/* Hide default browser password reveal button in Edge/Chromium */
+input::-ms-reveal,
+input::-ms-clear {
+  display: none;
+}
+
 /* Dynamic Accent Utility Classes */
 .bg-primary-theme {
   background-color: var(--color-primary) !important;
