@@ -15,26 +15,45 @@ import type {
 import './styles/main.css';
 
 function generateGuestSessionId(): string {
-  return `guest-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+  return crypto.randomUUID();
 }
 
-function getSessionIdFromUrl(): string | null {
+interface UrlRouteInfo {
+  sessionId: string | null;
+  isUnauthenticated: boolean;
+}
+
+function getUrlRouteInfo(): UrlRouteInfo {
   const path = window.location.pathname;
-  const match = path.match(/^\/c\/([^/]+)/);
-  if (match && match[1]) {
-    return decodeURIComponent(match[1]);
+  // Authenticated chat: /c/:id
+  const authMatch = path.match(/^\/c\/([^/]+)/);
+  if (authMatch && authMatch[1]) {
+    return { sessionId: decodeURIComponent(authMatch[1]), isUnauthenticated: false };
   }
+  // Unauthenticated guest temp chat: /uc/:id
+  const guestMatch = path.match(/^\/uc\/([^/]+)/);
+  if (guestMatch && guestMatch[1]) {
+    return { sessionId: decodeURIComponent(guestMatch[1]), isUnauthenticated: true };
+  }
+  // Query parameters fallback
   const params = new URLSearchParams(window.location.search);
+  const ucParam = params.get('uc');
+  if (ucParam) {
+    return { sessionId: ucParam, isUnauthenticated: true };
+  }
   const cParam = params.get('c');
-  if (cParam) return cParam;
-  return null;
+  if (cParam) {
+    return { sessionId: cParam, isUnauthenticated: false };
+  }
+  return { sessionId: null, isUnauthenticated: false };
 }
 
-function updateUrlForSession(sessionId: string | null) {
-  if (sessionId && !sessionId.startsWith('guest-')) {
-    const targetPath = `/c/${encodeURIComponent(sessionId)}`;
+function updateUrlForSession(sessionId: string | null, isUnauthenticated: boolean = false) {
+  if (sessionId) {
+    const prefix = isUnauthenticated ? '/uc' : '/c';
+    const targetPath = `${prefix}/${encodeURIComponent(sessionId)}`;
     if (window.location.pathname !== targetPath) {
-      window.history.pushState({ sessionId }, '', targetPath);
+      window.history.pushState({ sessionId, isUnauthenticated }, '', targetPath);
     }
   } else {
     if (window.location.pathname !== '/' && window.location.pathname !== '') {
@@ -81,15 +100,15 @@ export const App: React.FC = () => {
 
   // --- 1. Select / Switch Active Session ---
   const selectSession = useCallback(
-    async (sessionId: string, pushUrl: boolean = true) => {
+    async (sessionId: string, pushUrl: boolean = true, isUnauthenticated: boolean = false) => {
       if (!sessionId) return;
       setActiveSessionId(sessionId);
       setStreamingMessage(null);
 
-      if (currentUser?.id) {
+      if (currentUser?.id && !isUnauthenticated) {
         localStorage.setItem('contexify_active_session', sessionId);
         if (pushUrl) {
-          updateUrlForSession(sessionId);
+          updateUrlForSession(sessionId, false);
         }
         try {
           const history = await apiService.getSessionHistory(sessionId);
@@ -103,7 +122,7 @@ export const App: React.FC = () => {
         }
       } else {
         if (pushUrl) {
-          updateUrlForSession(null);
+          updateUrlForSession(sessionId, true);
         }
       }
     },
@@ -133,24 +152,29 @@ export const App: React.FC = () => {
         setCurrentUser(null);
         localStorage.removeItem('contexify_user');
         localStorage.removeItem('contexify_active_session');
-        const ephemeralGuestId = generateGuestSessionId();
-        setActiveSessionId(ephemeralGuestId);
         setSessions([]);
         setMessages([]);
         setDocuments([]);
-        const urlSessionId = getSessionIdFromUrl();
+        
+        const { sessionId: urlSessionId, isUnauthenticated } = getUrlRouteInfo();
         if (urlSessionId) {
-          // Prompt user to log in if trying to access a direct session URL
-          setIsUserModalOpen(true);
-          setUserModalTab('login');
+          if (isUnauthenticated) {
+            // Guest active temp chat from URL
+            setActiveSessionId(urlSessionId);
+          } else {
+            // User attempting to open private /c/:id without session
+            setIsUserModalOpen(true);
+            setUserModalTab('login');
+          }
         } else {
+          setActiveSessionId(null);
           updateUrlForSession(null);
         }
       }
     } catch (e) {
       console.error('Failed to initialize user:', e);
       setCurrentUser(null);
-      setActiveSessionId(generateGuestSessionId());
+      setActiveSessionId(null);
     }
   };
 
@@ -160,14 +184,13 @@ export const App: React.FC = () => {
       const sessionList = await apiService.listSessions(userId);
       setSessions(sessionList || []);
 
-      const urlSessionId = getSessionIdFromUrl();
-      const savedActiveSessionId = localStorage.getItem('contexify_active_session');
+      const { sessionId: urlSessionId, isUnauthenticated } = getUrlRouteInfo();
 
-      // 1. Check if URL specifies a target session ID
-      if (urlSessionId) {
+      // If URL explicitly specifies a session ID (/c/:id or ?c=:id), select it
+      if (urlSessionId && !isUnauthenticated) {
         const matchingUrlSession = sessionList.find((s) => s.id === urlSessionId);
         if (matchingUrlSession) {
-          await selectSession(matchingUrlSession.id, false);
+          await selectSession(matchingUrlSession.id, false, false);
           return;
         }
         // If not directly in list, attempt to fetch history directly (e.g. valid session)
@@ -175,34 +198,23 @@ export const App: React.FC = () => {
           const hist = await apiService.getSessionHistory(urlSessionId);
           if (hist.session) {
             setSessions((prev) => [hist.session, ...prev.filter(s => s.id !== hist.session.id)]);
-            await selectSession(hist.session.id, false);
+            await selectSession(hist.session.id, false, false);
             return;
           }
         } catch {
-          // If session doesn't exist, ignore and fallback
+          // If session doesn't exist, ignore and fallback to root new chat
         }
       }
 
-      // 2. Check localStorage saved session
-      const matchingSaved = sessionList.find((s) => s.id === savedActiveSessionId);
-      if (matchingSaved) {
-        await selectSession(matchingSaved.id, true);
-      } else if (sessionList.length > 0) {
-        await selectSession(sessionList[0].id, true);
-      } else {
-        // 3. Create initial session for logged-in user
-        const newSess = await apiService.createSession(
-          userId,
-          'New Conversation',
-          currentMode
-        );
-        setSessions([newSess]);
-        await selectSession(newSess.id, true);
-      }
+      // If on root '/', start on clean new chat (no ID in URL)
+      setActiveSessionId(null);
+      setMessages([]);
+      setDocuments([]);
+      updateUrlForSession(null);
     } catch (e) {
       console.error('Failed to load user sessions:', e);
     }
-  }, [currentMode, selectSession]);
+  }, [selectSession]);
 
   useEffect(() => {
     if (currentUser?.id) {
@@ -213,11 +225,19 @@ export const App: React.FC = () => {
   // --- 4. Listen to Browser Back / Forward History Navigation ---
   useEffect(() => {
     const handlePopState = () => {
-      const targetSessionId = getSessionIdFromUrl();
-      if (targetSessionId && currentUser?.id) {
-        selectSession(targetSessionId, false);
-      } else if (!targetSessionId && currentUser?.id && sessions.length > 0) {
-        selectSession(sessions[0].id, false);
+      const { sessionId: targetSessionId, isUnauthenticated } = getUrlRouteInfo();
+      if (targetSessionId) {
+        if (currentUser?.id && !isUnauthenticated) {
+          selectSession(targetSessionId, false, false);
+        } else if (isUnauthenticated) {
+          setActiveSessionId(targetSessionId);
+        }
+      } else {
+        // Navigated back to root '/'
+        setActiveSessionId(null);
+        setMessages([]);
+        setDocuments([]);
+        setStreamingMessage(null);
       }
     };
 
@@ -225,26 +245,15 @@ export const App: React.FC = () => {
     return () => window.removeEventListener('popstate', handlePopState);
   }, [currentUser, sessions, selectSession]);
 
-  // --- 4. Create New Session ---
-  const handleNewSession = async () => {
-    if (!currentUser?.id) {
-      setIsUserModalOpen(true);
-      return;
-    }
-    // Persistent session for logged in user
-    try {
-      const newSess = await apiService.createSession(
-        currentUser.id,
-        'New Conversation',
-        currentMode
-      );
-      setSessions((prev) => [newSess, ...prev]);
-      await selectSession(newSess.id);
-      setInputQuery('');
-    } catch (e: unknown) {
-      const err = e instanceof Error ? e.message : String(e);
-      alert(`Failed to create new conversation: ${err}`);
-    }
+  // --- 5. Start New Chat / Conversation ---
+  const handleNewSession = () => {
+    setActiveSessionId(null);
+    setMessages([]);
+    setDocuments([]);
+    setStreamingMessage(null);
+    setInputQuery('');
+    updateUrlForSession(null);
+    localStorage.removeItem('contexify_active_session');
   };
 
   // --- 5. Delete Session ---
@@ -261,17 +270,12 @@ export const App: React.FC = () => {
       setSessions(updated);
 
       if (activeSessionId === sessionId) {
-        if (updated.length > 0) {
-          selectSession(updated[0].id);
-        } else {
-          const newSess = await apiService.createSession(
-            currentUser.id,
-            'New Conversation',
-            currentMode
-          );
-          setSessions([newSess]);
-          selectSession(newSess.id);
-        }
+        setActiveSessionId(null);
+        setMessages([]);
+        setDocuments([]);
+        setStreamingMessage(null);
+        updateUrlForSession(null);
+        localStorage.removeItem('contexify_active_session');
       }
     } catch (e: unknown) {
       const err = e instanceof Error ? e.message : String(e);
@@ -296,12 +300,36 @@ export const App: React.FC = () => {
 
   // --- 7. Document Upload & Delete ---
   const handleFileUpload = async (file: File) => {
-    if (!activeSessionId) return;
+    let targetSessionId = activeSessionId;
+    if (!targetSessionId) {
+      if (currentUser?.id) {
+        try {
+          const newSess = await apiService.createSession(
+            currentUser.id,
+            'New Conversation',
+            currentMode
+          );
+          targetSessionId = newSess.id;
+          setActiveSessionId(newSess.id);
+          setSessions((prev) => [newSess, ...prev]);
+          updateUrlForSession(newSess.id, false);
+          localStorage.setItem('contexify_active_session', newSess.id);
+        } catch (err) {
+          console.error('Failed to create session on file upload:', err);
+          return;
+        }
+      } else {
+        targetSessionId = generateGuestSessionId();
+        setActiveSessionId(targetSessionId);
+        updateUrlForSession(targetSessionId, true);
+      }
+    }
+
     setIsUploading(true);
     setUploadStatusText(`Vectorizing '${file.name}'...`);
 
     try {
-      const res = await apiService.uploadDocument(file, activeSessionId, currentUser?.id);
+      const res = await apiService.uploadDocument(file, targetSessionId, currentUser?.id);
       // Update local document state
       setDocuments((prev) => {
         const exists = prev.some(
@@ -320,6 +348,7 @@ export const App: React.FC = () => {
 
 
   const handleDeleteDocument = async (documentId: string) => {
+    if (!activeSessionId) return;
     if (
       !window.confirm(
         'Are you sure you want to remove this document and purge its vectors?'
@@ -328,7 +357,7 @@ export const App: React.FC = () => {
       return;
     }
     try {
-      await apiService.deleteDocument(documentId, activeSessionId!);
+      await apiService.deleteDocument(documentId, activeSessionId);
       setDocuments((prev) => prev.filter((d) => d.document_id !== documentId));
     } catch (e: unknown) {
       const err = e instanceof Error ? e.message : String(e);
@@ -357,7 +386,32 @@ export const App: React.FC = () => {
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     const query = inputQuery.trim();
-    if (!query || !activeSessionId || isSending) return;
+    if (!query || isSending) return;
+
+    let targetSessionId = activeSessionId;
+    if (!targetSessionId) {
+      if (currentUser?.id) {
+        try {
+          const newSess = await apiService.createSession(
+            currentUser.id,
+            'New Conversation',
+            currentMode
+          );
+          targetSessionId = newSess.id;
+          setActiveSessionId(newSess.id);
+          setSessions((prev) => [newSess, ...prev]);
+          updateUrlForSession(newSess.id, false);
+          localStorage.setItem('contexify_active_session', newSess.id);
+        } catch (err) {
+          console.error('Failed to create session on message send:', err);
+          return;
+        }
+      } else {
+        targetSessionId = generateGuestSessionId();
+        setActiveSessionId(targetSessionId);
+        updateUrlForSession(targetSessionId, true);
+      }
+    }
 
     // Reset input
     setInputQuery('');
@@ -366,7 +420,7 @@ export const App: React.FC = () => {
     // Append optimistic user message
     const userMsg: Message = {
       id: `user-${Date.now()}`,
-      session_id: activeSessionId,
+      session_id: targetSessionId,
       role: 'user',
       content: query,
       created_at: new Date().toISOString(),
@@ -385,7 +439,7 @@ export const App: React.FC = () => {
       isError: false,
     });
 
-    await apiService.streamChat(activeSessionId, query, currentMode, {
+    await apiService.streamChat(targetSessionId, query, currentMode, {
       onCitations: (citations) => {
         receivedCitations = citations;
         setStreamingMessage((prev) =>
@@ -424,7 +478,7 @@ export const App: React.FC = () => {
         setIsSending(false);
         const finishedAssistantMsg: Message = {
           id: `asst-${Date.now()}`,
-          session_id: activeSessionId,
+          session_id: targetSessionId,
           role: 'assistant',
           content: accumulatedText,
           citations: receivedCitations,
