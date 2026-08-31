@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional, Literal
+from typing import List, Optional, Literal, Dict, Any
 from enum import Enum
 from app.schemas.document import ChunkMetadata
 
@@ -30,4 +30,5 @@ class SessionState(BaseModel):
     session_id: str
     mode: ChatMode
     document_ids: List[str] = []
+    messages: List[Dict[str, Any]] = []
     created_at: str

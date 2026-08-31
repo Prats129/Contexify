@@ -66,6 +66,19 @@ class SessionStoreRepository:
     def list_all_documents(self) -> List[DocumentMetadata]:
         return list(self._documents.values())
 
+    def get_history_messages(self, session_id: str) -> List[Dict[str, str]]:
+        """Retrieve conversation history for a session from SQLite or in-memory state."""
+        db_messages = chat_history_service.get_session_messages(session_id)
+        if db_messages:
+            return [{"role": m.role, "content": m.content} for m in db_messages]
+        session = self.get_or_create_session(session_id)
+        return [{"role": m.get("role", "user"), "content": m.get("content", "")} for m in session.messages]
+
+    def record_message(self, session_id: str, role: str, content: str):
+        """Record an in-memory message for active/guest sessions."""
+        session = self.get_or_create_session(session_id)
+        session.messages.append({"role": role, "content": content})
+
     def remove_document(self, document_id: str):
         if document_id in self._documents:
             del self._documents[document_id]

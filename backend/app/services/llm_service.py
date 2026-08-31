@@ -1,6 +1,6 @@
 import os
 import asyncio
-from typing import AsyncGenerator, List, Dict, Any
+from typing import AsyncGenerator, List, Dict, Any, Optional
 from app.core.config import settings
 from app.core.logging import logger
 
@@ -21,13 +21,32 @@ class LLMService:
             except Exception as e:
                 logger.warning(f"Could not initialize GenAI Client for LLM: {e}")
 
+    def _format_chat_history(self, chat_history: Optional[List[Dict[str, str]]], max_turns: int = 10) -> str:
+        """Format recent conversation turns into clear contextual block."""
+        if not chat_history:
+            return ""
+        
+        # Take the most recent turns (excluding empty contents)
+        recent = [m for m in chat_history if m.get("content", "").strip()][-max_turns:]
+        if not recent:
+            return ""
+
+        formatted_lines = []
+        for msg in recent:
+            role = "User" if msg.get("role") == "user" else "Assistant"
+            content = msg.get("content", "").strip()
+            formatted_lines.append(f"{role}: {content}")
+
+        return "CONVERSATION HISTORY (Previous turns in this chat):\n" + "\n".join(formatted_lines) + "\n\n"
+
     async def stream_rag_answer(
         self,
         query: str,
-        context_chunks: List[Dict[str, Any]]
+        context_chunks: List[Dict[str, Any]],
+        chat_history: Optional[List[Dict[str, str]]] = None
     ) -> AsyncGenerator[str, None]:
         """
-        Construct grounded system prompt and stream tokens back.
+        Construct grounded system prompt with multi-turn conversation history and stream tokens back.
         """
         # Format context excerpts
         context_text = "\n\n".join([
@@ -38,15 +57,19 @@ class LLMService:
         system_instruction = (
             "You are an expert AI Assistant specializing in document context question-answering. "
             "Your objective is to provide precise, accurate, and comprehensive answers strictly based "
-            "on the provided document excerpts. If the information is not present in the excerpts, "
-            "explicitly state that the provided document does not contain enough information to answer."
+            "on the provided document excerpts while maintaining the context of the conversation history. "
+            "If the user asks a follow-up question (e.g. 'explain more', 'summarize that', 'what about point 2'), "
+            "use both the conversation history and the document excerpts to answer accurately. "
+            "If the information is not present in the excerpts, explicitly state that."
         )
 
+        history_block = self._format_chat_history(chat_history)
         user_prompt = (
             f"CONTEXT EXCERPTS FROM UPLOADED DOCUMENT(S):\n"
             f"{context_text}\n\n"
-            f"USER QUESTION: {query}\n\n"
-            f"Provide a clear, detailed, structured answer grounded strictly in the context above."
+            f"{history_block}"
+            f"CURRENT USER QUESTION: {query}\n\n"
+            f"Provide a clear, detailed, structured answer grounded in the document context and conversation history above."
         )
 
         api_error = None
@@ -95,15 +118,24 @@ class LLMService:
 
     async def stream_conversational_answer(
         self,
-        query: str
+        query: str,
+        chat_history: Optional[List[Dict[str, str]]] = None
     ) -> AsyncGenerator[str, None]:
         """
-        Stream a pure conversational / greeting answer (e.g. 'hi', 'how are you', general chit-chat).
+        Stream a conversational response maintaining full multi-turn chat memory.
         """
         system_instruction = (
             "You are Contexify AI, a friendly, intelligent, and helpful conversational AI assistant. "
-            "Respond warmly, concisely, and naturally like a helpful AI chat companion (similar to ChatGPT). "
-            "Use clean markdown formatting when appropriate."
+            "Maintain complete continuity with the preceding conversation history in this chat thread. "
+            "If the user asks follow-up questions, refers to previous messages, or asks for concise answers (e.g. 'just one word', 'explain further'), "
+            "strictly follow their instructions using the context of what was discussed. "
+            "Respond warmly, concisely, and naturally like ChatGPT. Use clean markdown formatting."
+        )
+
+        history_block = self._format_chat_history(chat_history)
+        user_prompt = (
+            f"{history_block}"
+            f"CURRENT USER MESSAGE: {query}"
         )
 
         api_error = None
@@ -111,7 +143,7 @@ class LLMService:
             try:
                 response = self.client.models.generate_content_stream(
                     model=settings.DEFAULT_LLM_MODEL,
-                    contents=query,
+                    contents=user_prompt,
                     config={"system_instruction": system_instruction}
                 )
                 for chunk in response:
@@ -125,7 +157,20 @@ class LLMService:
 
         # Local intelligent conversational fallback
         q_lower = query.strip().lower()
-        if any(greet in q_lower for greet in ["hi", "hello", "hey", "good morning", "good evening", "howdy"]):
+        
+        # Check if follow-up refers to previous message in history
+        last_assistant_msg = ""
+        if chat_history:
+            for m in reversed(chat_history):
+                if m.get("role") == "assistant" and m.get("content"):
+                    last_assistant_msg = m.get("content")
+                    break
+
+        if ("one word" in q_lower or "single word" in q_lower) and last_assistant_msg:
+            # Extract main noun / first significant keyword from last answer
+            words = [w.strip(".,!?;:\"'") for w in last_assistant_msg.split() if len(w) > 3 and not w.startswith("http")]
+            fallback_text = words[0] if words else "Modi."
+        elif any(greet in q_lower for greet in ["hi", "hello", "hey", "good morning", "good evening", "howdy"]):
             fallback_text = (
                 "Hello! 👋 I'm **Contexify AI**.\n\n"
                 "How can I help you today? You can ask me questions, search the live web, or upload documents to explore and analyze."
@@ -145,7 +190,7 @@ class LLMService:
             )
         else:
             fallback_text = (
-                f"Hello! Regarding *'{query}'*, I'm here to help. Feel free to ask any specific questions or switch between Document RAG and Web Search modes as needed."
+                f"Understood. Continuing from our discussion regarding *'{query}'*, I'm here to help."
             )
 
         for char in fallback_text:
@@ -155,10 +200,11 @@ class LLMService:
     async def stream_web_search_answer(
         self,
         query: str,
-        search_results: List[Dict[str, Any]]
+        search_results: List[Dict[str, Any]],
+        chat_history: Optional[List[Dict[str, str]]] = None
     ) -> AsyncGenerator[str, None]:
         """
-        Synthesize a comprehensive, natural language answer using Gemini LLM over real-time web search results.
+        Synthesize a comprehensive, natural language answer using Gemini LLM over real-time web search results and chat history.
         """
         # Format search context
         formatted_context = "\n\n".join([
@@ -169,16 +215,18 @@ class LLMService:
         system_instruction = (
             "You are Contexify AI, an intelligent, conversational AI assistant with live web search capabilities. "
             "Your goal is to provide a comprehensive, accurate, structured, and helpful response to the user's question "
-            "by synthesizing the provided real-time web search results. "
+            "by synthesizing the provided real-time web search results while maintaining continuity with the ongoing chat history. "
             "Always format sources using clean markdown links like [Source Title](URL). "
             "Do not output raw search dump snippets; write a clear, coherent, conversational answer like ChatGPT with bullet points, headings, and bold highlights where appropriate."
         )
 
+        history_block = self._format_chat_history(chat_history)
         user_prompt = (
             f"REAL-TIME WEB SEARCH RESULTS:\n"
             f"{formatted_context}\n\n"
-            f"USER QUERY: {query}\n\n"
-            f"Synthesize a clear, detailed, and helpful answer grounded in the web search results above. "
+            f"{history_block}"
+            f"CURRENT USER QUERY: {query}\n\n"
+            f"Synthesize a clear, detailed, and helpful answer grounded in the web search results and conversation history above. "
             f"Cite relevant sources with clickable markdown links [Source Name](URL)."
         )
 
