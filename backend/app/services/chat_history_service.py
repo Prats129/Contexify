@@ -16,7 +16,7 @@ class ChatHistoryService:
         user_id: str,
         session_id: Optional[str] = None,
         title: str = "New Conversation",
-        mode: ChatMode = ChatMode.DOCUMENT_RAG
+        mode: ChatMode = ChatMode.WEB_SEARCH
     ) -> ChatSessionResponse:
         session_id = session_id or str(uuid.uuid4())
         now = datetime.utcnow().isoformat()

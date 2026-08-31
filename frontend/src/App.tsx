@@ -48,7 +48,7 @@ export const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
-  const [currentMode, setCurrentMode] = useState<ChatMode>('DOCUMENT_RAG');
+  const [currentMode, setCurrentMode] = useState<ChatMode>('WEB_SEARCH');
   const [documents, setDocuments] = useState<DocumentMetadata[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
 

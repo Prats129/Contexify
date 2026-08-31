@@ -72,7 +72,7 @@ def init_db():
                 id TEXT PRIMARY KEY,
                 user_id TEXT NOT NULL,
                 title TEXT NOT NULL,
-                mode TEXT NOT NULL DEFAULT 'DOCUMENT_RAG',
+                mode TEXT NOT NULL DEFAULT 'WEB_SEARCH',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE

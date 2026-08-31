@@ -114,9 +114,74 @@ class ChatOrchestrator:
 
         yield f"data: {json.dumps({'event': 'done', 'data': '[DONE]'})}\n\n"
 
+    def _is_conversational_query(self, query: str) -> bool:
+        """Check if a query is a greeting, polite chatter, or conversational prompt that doesn't need web search."""
+        q = query.strip().lower().rstrip("?!.,")
+        if not q or len(q) < 2:
+            return True
+        
+        conversational_phrases = {
+            "hi", "hello", "hey", "hola", "howdy", "sup",
+            "good morning", "good afternoon", "good evening", "good night",
+            "how are you", "how are you doing", "how r u", "how are u",
+            "who are you", "what are you", "what is your name", "what can you do",
+            "thank you", "thanks", "thanks a lot", "thx", "ty",
+            "tell me a joke", "help me", "what's up", "whats up", "nice to meet you"
+        }
+        
+        if q in conversational_phrases:
+            return True
+            
+        words = q.split()
+        if len(words) <= 3 and any(w in conversational_phrases for w in words):
+            return True
+            
+        return False
+
     async def _execute_web_search(self, query: str, session_id: str) -> AsyncGenerator[str, None]:
-        results = web_search_service.search(query)
         full_answer = ""
+        citations_data = []
+
+        # 1. Handle Conversational Greetings directly like ChatGPT
+        if self._is_conversational_query(query):
+            logger.info(f"Routing query '{query}' to conversational assistant (no web search needed)")
+            try:
+                async for token in llm_service.stream_conversational_answer(query):
+                    full_answer += token
+                    yield f"data: {json.dumps({'event': 'token', 'data': token})}\n\n"
+            except Exception as e:
+                logger.error(f"Error during Conversational LLM streaming: {e}")
+                err_str = f"Error generating response: {str(e)}"
+                yield f"data: {json.dumps({'event': 'error', 'data': err_str})}\n\n"
+                full_answer = err_str
+
+            chat_history_service.save_message(
+                session_id=session_id,
+                role="assistant",
+                content=full_answer
+            )
+            yield f"data: {json.dumps({'event': 'done', 'data': '[DONE]'})}\n\n"
+            return
+
+        # 2. Informational Search Query: Execute Search & Emit Sources
+        results = web_search_service.search(query)
+        
+        if results:
+            citations = [
+                Citation(
+                    document_id="",
+                    filename=r.get("title", "Web Source"),
+                    page_number=None,
+                    chunk_index=idx,
+                    snippet=f"{r.get('url', '')}\n{r.get('snippet', '')[:160]}",
+                    similarity_score=1.0
+                )
+                for idx, r in enumerate(results) if r.get("title") and r.get("url")
+            ]
+            citations_data = [c.model_dump() for c in citations]
+            if citations_data:
+                yield f"data: {json.dumps({'event': 'citations', 'data': '', 'citations': citations_data})}\n\n"
+
         try:
             async for token in llm_service.stream_web_search_answer(query, results):
                 full_answer += token
@@ -127,11 +192,12 @@ class ChatOrchestrator:
             yield f"data: {json.dumps({'event': 'error', 'data': err_str})}\n\n"
             full_answer = err_str
 
-        # Persist completed assistant message to SQLite
+        # Persist completed assistant message with citations to SQLite
         chat_history_service.save_message(
             session_id=session_id,
             role="assistant",
-            content=full_answer
+            content=full_answer,
+            citations=citations_data
         )
             
         yield f"data: {json.dumps({'event': 'done', 'data': '[DONE]'})}\n\n"

@@ -6,7 +6,7 @@ from app.schemas.document import DocumentMetadata
 class ChatSessionCreate(BaseModel):
     user_id: str
     title: Optional[str] = "New Conversation"
-    mode: Optional[ChatMode] = ChatMode.DOCUMENT_RAG
+    mode: Optional[ChatMode] = ChatMode.WEB_SEARCH
 
 class ChatSessionUpdate(BaseModel):
     title: Optional[str] = None

@@ -93,20 +93,133 @@ class LLMService:
             yield char
             await asyncio.sleep(0.005)
 
+    async def stream_conversational_answer(
+        self,
+        query: str
+    ) -> AsyncGenerator[str, None]:
+        """
+        Stream a pure conversational / greeting answer (e.g. 'hi', 'how are you', general chit-chat).
+        """
+        system_instruction = (
+            "You are Contexify AI, a friendly, intelligent, and helpful conversational AI assistant. "
+            "Respond warmly, concisely, and naturally like a helpful AI chat companion (similar to ChatGPT). "
+            "Use clean markdown formatting when appropriate."
+        )
+
+        api_error = None
+        if self.client:
+            try:
+                response = self.client.models.generate_content_stream(
+                    model=settings.DEFAULT_LLM_MODEL,
+                    contents=query,
+                    config={"system_instruction": system_instruction}
+                )
+                for chunk in response:
+                    if chunk.text:
+                        yield chunk.text
+                        await asyncio.sleep(0.01)
+                return
+            except Exception as e:
+                api_error = str(e)
+                logger.error(f"GenAI Conversational Streaming Error: {e}")
+
+        # Local intelligent conversational fallback
+        q_lower = query.strip().lower()
+        if any(greet in q_lower for greet in ["hi", "hello", "hey", "good morning", "good evening", "howdy"]):
+            fallback_text = (
+                "Hello! 👋 I'm **Contexify AI**.\n\n"
+                "How can I help you today? You can ask me questions, search the live web, or upload documents to explore and analyze."
+            )
+        elif "who are you" in q_lower or "what are you" in q_lower:
+            fallback_text = (
+                "I am **Contexify AI**, your enterprise AI assistant. "
+                "I can help you search the web in real time, analyze and answer questions from your uploaded documents, and assist with writing, coding, and research."
+            )
+        elif "how are you" in q_lower:
+            fallback_text = (
+                "I'm doing great, thank you for asking! 😊 How are things going with you? What would you like to explore or work on today?"
+            )
+        elif any(thanks in q_lower for thanks in ["thank", "thanks"]):
+            fallback_text = (
+                "You're very welcome! Feel free to ask anytime if you need more help. 😊"
+            )
+        else:
+            fallback_text = (
+                f"Hello! Regarding *'{query}'*, I'm here to help. Feel free to ask any specific questions or switch between Document RAG and Web Search modes as needed."
+            )
+
+        for char in fallback_text:
+            yield char
+            await asyncio.sleep(0.005)
+
     async def stream_web_search_answer(
         self,
         query: str,
         search_results: List[Dict[str, Any]]
     ) -> AsyncGenerator[str, None]:
-        """Stream response for Web Search Mode (Priority 2)."""
-        header = f"🌐 **Web Search Results for:** *'{query}'*\n\n"
-        for char in header:
+        """
+        Synthesize a comprehensive, natural language answer using Gemini LLM over real-time web search results.
+        """
+        # Format search context
+        formatted_context = "\n\n".join([
+            f"--- [Source {idx+1}: {r.get('title')}] ---\nURL: {r.get('url')}\nExcerpt: {r.get('snippet')}"
+            for idx, r in enumerate(search_results)
+        ])
+
+        system_instruction = (
+            "You are Contexify AI, an intelligent, conversational AI assistant with live web search capabilities. "
+            "Your goal is to provide a comprehensive, accurate, structured, and helpful response to the user's question "
+            "by synthesizing the provided real-time web search results. "
+            "Always format sources using clean markdown links like [Source Title](URL). "
+            "Do not output raw search dump snippets; write a clear, coherent, conversational answer like ChatGPT with bullet points, headings, and bold highlights where appropriate."
+        )
+
+        user_prompt = (
+            f"REAL-TIME WEB SEARCH RESULTS:\n"
+            f"{formatted_context}\n\n"
+            f"USER QUERY: {query}\n\n"
+            f"Synthesize a clear, detailed, and helpful answer grounded in the web search results above. "
+            f"Cite relevant sources with clickable markdown links [Source Name](URL)."
+        )
+
+        api_error = None
+        if self.client:
+            try:
+                response = self.client.models.generate_content_stream(
+                    model=settings.DEFAULT_LLM_MODEL,
+                    contents=user_prompt,
+                    config={"system_instruction": system_instruction}
+                )
+                for chunk in response:
+                    if chunk.text:
+                        yield chunk.text
+                        await asyncio.sleep(0.01)
+                return
+            except Exception as e:
+                api_error = str(e)
+                logger.error(f"GenAI Web Search Streaming Error: {e}. Falling back to structured synthesis.")
+
+        # Local Structured Fallback if LLM API is unavailable
+        fallback_header = f"🌐 **Search Summary for:** *{query}*\n\n"
+        for char in fallback_header:
             yield char
             await asyncio.sleep(0.005)
 
-        for res in search_results:
-            text = f"### [{res.get('title')}]({res.get('url')})\n{res.get('snippet')}\n\n"
-            for char in text:
+        for idx, res in enumerate(search_results):
+            title = res.get("title", "Web Source")
+            url = res.get("url", "#")
+            snippet = res.get("snippet", "")
+            item_text = f"### {idx+1}. [{title}]({url})\n{snippet}\n\n"
+            for char in item_text:
+                yield char
+                await asyncio.sleep(0.005)
+
+        if api_error:
+            if "429" in api_error or "RESOURCE_EXHAUSTED" in api_error:
+                note = "\n\n⚠️ *(Gemini API free quota reached on current key — showing direct web source results)*"
+            else:
+                note = f"\n\n*(Note: Showing direct web sources — Gemini API error: {api_error[:100]})*"
+            for char in note:
                 yield char
                 await asyncio.sleep(0.005)
 

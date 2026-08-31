@@ -157,7 +157,7 @@ export const apiService = {
   async createSession(
     userId: string,
     title: string = 'New Conversation',
-    mode: ChatMode = 'DOCUMENT_RAG'
+    mode: ChatMode = 'WEB_SEARCH'
   ): Promise<ChatSession> {
     const response = await fetch(`${API_BASE_URL}/session/create`, {
       method: 'POST',

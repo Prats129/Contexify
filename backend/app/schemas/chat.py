@@ -11,7 +11,7 @@ class ChatMode(str, Enum):
 class ChatRequest(BaseModel):
     session_id: str = Field(..., description="Unique identifier for chat thread")
     message: str = Field(..., min_length=1, description="User question or query")
-    mode: Optional[ChatMode] = Field(default=ChatMode.DOCUMENT_RAG)
+    mode: Optional[ChatMode] = Field(default=ChatMode.WEB_SEARCH)
 
 class Citation(BaseModel):
     document_id: str

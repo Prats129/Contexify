@@ -10,7 +10,7 @@ class SessionStoreRepository:
         self._sessions: Dict[str, SessionState] = {}
         self._documents: Dict[str, DocumentMetadata] = {}
 
-    def get_or_create_session(self, session_id: str, default_mode: ChatMode = ChatMode.DOCUMENT_RAG, user_id: Optional[str] = None) -> SessionState:
+    def get_or_create_session(self, session_id: str, default_mode: ChatMode = ChatMode.WEB_SEARCH, user_id: Optional[str] = None) -> SessionState:
         if session_id not in self._sessions:
             # Check if exists in DB (logged-in user session)
             db_session = chat_history_service.get_session(session_id)
