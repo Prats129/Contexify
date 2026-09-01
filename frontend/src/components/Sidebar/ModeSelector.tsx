@@ -18,18 +18,6 @@ export const ModeSelector: React.FC<ModeSelectorProps> = ({
       <div className="mode-selector">
         <button
           type="button"
-          className={`mode-btn ${currentMode === 'DOCUMENT_RAG' ? 'active' : ''}`}
-          onClick={() => onModeChange('DOCUMENT_RAG')}
-        >
-          <i className="fa-solid fa-file-contract"></i>
-          <div className="mode-info">
-            <span className="mode-title">Document RAG</span>
-            <span className="mode-desc">Grounded Context QA</span>
-          </div>
-        </button>
-
-        <button
-          type="button"
           className={`mode-btn ${currentMode === 'WEB_SEARCH' ? 'active' : ''}`}
           onClick={() => onModeChange('WEB_SEARCH')}
         >
@@ -37,6 +25,18 @@ export const ModeSelector: React.FC<ModeSelectorProps> = ({
           <div className="mode-info">
             <span className="mode-title">Web Search</span>
             <span className="mode-desc">Live Internet Access</span>
+          </div>
+        </button>
+
+        <button
+          type="button"
+          className={`mode-btn ${currentMode === 'DOCUMENT_RAG' ? 'active' : ''}`}
+          onClick={() => onModeChange('DOCUMENT_RAG')}
+        >
+          <i className="fa-solid fa-file-contract"></i>
+          <div className="mode-info">
+            <span className="mode-title">Document RAG</span>
+            <span className="mode-desc">Grounded Context QA</span>
           </div>
         </button>
 

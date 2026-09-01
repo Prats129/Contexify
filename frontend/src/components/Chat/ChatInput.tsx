@@ -109,17 +109,17 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
   const getModeDetails = (mode: ChatMode) => {
     switch (mode) {
-      case 'DOCUMENT_RAG':
-        return {
-          title: 'Document RAG',
-          desc: 'Grounded Context QA',
-          icon: <LuFileText size={15} />,
-        };
       case 'WEB_SEARCH':
         return {
           title: 'Web Search',
           desc: 'Live Internet Access',
           icon: <LuGlobe size={15} />,
+        };
+      case 'DOCUMENT_RAG':
+        return {
+          title: 'Document RAG',
+          desc: 'Grounded Context QA',
+          icon: <LuFileText size={15} />,
         };
       case 'MULTIMODAL':
         return {
@@ -241,24 +241,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
                   <button
                     type="button"
-                    className={`flex items-center justify-between p-2 rounded-lg text-left text-xs cursor-pointer w-full ${currentMode === 'DOCUMENT_RAG'
-                      ? 'bg-primary-light-theme text-primary-theme font-medium'
-                      : 'hover:bg-(--border-subtle) text-(--text-main)'
-                      }`}
-                    onClick={() => handleSelectMode('DOCUMENT_RAG')}
-                  >
-                    <div className="flex items-center gap-2">
-                      <LuFileText size={16} className="text-primary-theme" />
-                      <div className="flex flex-col">
-                        <span className="font-semibold">Document RAG</span>
-                        <span className="text-[10px] text-(--text-muted)">Grounded Context QA</span>
-                      </div>
-                    </div>
-                    {currentMode === 'DOCUMENT_RAG' && <LuCheck size={14} className="text-primary-theme" />}
-                  </button>
-
-                  <button
-                    type="button"
                     className={`flex items-center justify-between p-2 rounded-lg text-left text-xs cursor-pointer w-full ${currentMode === 'WEB_SEARCH'
                       ? 'bg-emerald-500/15 text-emerald-500 dark:text-emerald-400 font-medium'
                       : 'hover:bg-(--border-subtle) text-(--text-main)'
@@ -273,6 +255,24 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                       </div>
                     </div>
                     {currentMode === 'WEB_SEARCH' && <LuCheck size={14} className="text-emerald-500 dark:text-emerald-400" />}
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`flex items-center justify-between p-2 rounded-lg text-left text-xs cursor-pointer w-full ${currentMode === 'DOCUMENT_RAG'
+                      ? 'bg-primary-light-theme text-primary-theme font-medium'
+                      : 'hover:bg-(--border-subtle) text-(--text-main)'
+                      }`}
+                    onClick={() => handleSelectMode('DOCUMENT_RAG')}
+                  >
+                    <div className="flex items-center gap-2">
+                      <LuFileText size={16} className="text-primary-theme" />
+                      <div className="flex flex-col">
+                        <span className="font-semibold">Document RAG</span>
+                        <span className="text-[10px] text-(--text-muted)">Grounded Context QA</span>
+                      </div>
+                    </div>
+                    {currentMode === 'DOCUMENT_RAG' && <LuCheck size={14} className="text-primary-theme" />}
                   </button>
 
                   <button
