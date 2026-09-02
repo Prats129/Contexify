@@ -11,16 +11,22 @@ interface MessageItemProps {
   userAvatarUrl?: string | null;
   userAvatarColor?: string;
   userDisplayName?: string;
+  queryTitle?: string;
+  isSourcesActive?: boolean;
+  onToggleSources?: (citations: Citation[]) => void;
 }
 
-export const MessageItem: React.FC<MessageItemProps> = ({
+export const MessageItem: React.FC<MessageItemProps> = React.memo(({
   role,
   content,
+  citations,
   isStreaming,
   isError,
   userAvatarUrl,
   userAvatarColor,
   userDisplayName,
+  isSourcesActive,
+  onToggleSources,
 }) => {
   const isUser = role === 'user';
   const [copied, setCopied] = useState(false);
@@ -146,35 +152,39 @@ export const MessageItem: React.FC<MessageItemProps> = ({
         );
       }
 
-      // Bullet List item: - text or * text
-      if (line.startsWith('- ') || line.startsWith('* ')) {
+      // Bullet points: - item or * item
+      if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
+        const bulletContent = trimmed.slice(2);
         return (
-          <div key={lineIdx} className="flex items-start gap-2 my-1 pl-2">
-            <span className="text-primary-theme text-xs mt-1 shrink-0">•</span>
-            <span className="flex-1 leading-relaxed">{renderInline(line.slice(2), lineIdx)}</span>
+          <div key={lineIdx} className="flex items-start gap-2 my-1 pl-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-primary-theme shrink-0 mt-2"></span>
+            <div className="flex-1 min-w-0">{renderInline(bulletContent, lineIdx)}</div>
           </div>
         );
       }
 
-      // Numbered List item: 1. text, 2. text
-      const numMatch = line.match(/^(\d+)\.\s+(.*)$/);
+      // Numbered points: 1. item
+      const numMatch = trimmed.match(/^(\d+)\.\s+(.*)$/);
       if (numMatch) {
+        const [, num, itemContent] = numMatch;
         return (
-          <div key={lineIdx} className="flex items-start gap-2 my-1 pl-2">
-            <span className="font-semibold text-primary-theme text-xs mt-0.5 shrink-0">{numMatch[1]}.</span>
-            <span className="flex-1 leading-relaxed">{renderInline(numMatch[2], lineIdx)}</span>
+          <div key={lineIdx} className="flex items-start gap-2 my-1 pl-1">
+            <span className="text-xs font-bold text-primary-theme shrink-0 mt-0.5 min-w-[1.2rem]">
+              {num}.
+            </span>
+            <div className="flex-1 min-w-0">{renderInline(itemContent, lineIdx)}</div>
           </div>
         );
       }
 
-      // Empty line -> paragraph spacing
-      if (trimmed === '') {
+      // Empty line / paragraph break
+      if (!trimmed) {
         return <div key={lineIdx} className="h-2" />;
       }
 
-      // Regular line
+      // Regular paragraph line
       return (
-        <div key={lineIdx} className="leading-relaxed">
+        <div key={lineIdx} className="my-0.5">
           {renderInline(line, lineIdx)}
         </div>
       );
@@ -183,7 +193,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
 
   return (
     <div
-      className={`group flex items-start gap-2 w-full animate-[fadeIn_0.15s_ease-out] ${isUser ? 'justify-end' : 'justify-start'
+      className={`group flex items-start gap-2 w-full ${isUser ? 'justify-end' : 'justify-start'
         }`}
     >
       {!isUser && (
@@ -197,7 +207,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
           }`}
       >
         <div
-          className={`px-4 py-1 rounded-2xl text-sm leading-relaxed ${isUser
+          className={`px-4 py-2 rounded-2xl text-sm leading-relaxed ${isUser
             ? 'bg-primary-theme text-white rounded-br-none'
             : 'bg-(--bg-card) border border-(--border-subtle) text-(--text-main) rounded-tl-none shadow-sm'
             }`}
@@ -216,27 +226,80 @@ export const MessageItem: React.FC<MessageItemProps> = ({
           )}
         </div>
 
-        {/* Action toolbar on hover (ChatGPT style) */}
+        {/* Action toolbar (ChatGPT & Perplexity style) */}
         {content && !isStreaming && (
-          <div
-            className={`flex items-center gap-1 mt-0.5 transition-opacity duration-150 ${copied ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
-              }`}
-          >
-            <button
-              type="button"
-              onClick={handleCopy}
-              className="flex items-center gap-1 text-[11px] text-(--text-muted) hover:text-(--text-main) hover:bg-(--border-subtle) px-1.5 py-0.5 rounded cursor-pointer transition-colors"
-              title={copied ? 'Copied to clipboard' : 'Copy message'}
+          <div className="flex items-center justify-between w-full mt-1 px-1">
+            {/* Left side actions: Copy button */}
+            <div
+              className={`flex items-center gap-1 transition-opacity duration-150 ${copied ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+                }`}
             >
-              {copied ? (
-                <>
-                  <LuCheck size={12} className="text-emerald-500" />
-                  <span className="text-emerald-500 text-[10px] font-medium">Copied</span>
-                </>
-              ) : (
-                <LuCopy size={12} />
-              )}
-            </button>
+              <button
+                type="button"
+                onClick={handleCopy}
+                className="flex items-center gap-1 text-[11px] text-(--text-muted) hover:text-(--text-main) hover:bg-(--border-subtle) px-1.5 py-0.5 rounded cursor-pointer transition-colors"
+                title={copied ? 'Copied to clipboard' : 'Copy message'}
+              >
+                {copied ? (
+                  <>
+                    <LuCheck size={12} className="text-emerald-500" />
+                    <span className="text-emerald-500 text-[10px] font-medium">Copied</span>
+                  </>
+                ) : (
+                  <LuCopy size={12} />
+                )}
+              </button>
+            </div>
+
+            {/* Right side: Perplexity-style Sources Pill Button */}
+            {!isUser && citations && citations.length > 0 && onToggleSources && (
+              <button
+                type="button"
+                onClick={() => onToggleSources(citations)}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-medium cursor-pointer transition-all shadow-2xs hover:scale-[1.02] ${isSourcesActive
+                  ? 'bg-primary-light-theme border-primary-theme text-primary-theme font-semibold'
+                  : 'bg-(--border-subtle) hover:bg-(--border-hover) border-(--border-subtle) text-(--text-muted) hover:text-(--text-main)'
+                  }`}
+                title="Toggle sources on the right"
+              >
+                {/* Grouped overlapping icons */}
+                <div className="flex items-center -space-x-1.5">
+                  {citations.slice(0, 3).map((c, i) => {
+                    const lines = c.snippet.split('\n');
+                    let domain = '';
+                    if (lines[0].startsWith('http')) {
+                      try {
+                        domain = new URL(lines[0]).hostname.replace(/^www\./, '');
+                      } catch {
+                        domain = '';
+                      }
+                    }
+                    return (
+                      <div
+                        key={i}
+                        className="w-4 h-4 rounded-full bg-(--bg-card) border border-(--border-subtle) flex items-center justify-center overflow-hidden shrink-0"
+                      >
+                        {domain ? (
+                          <img
+                            src={`https://www.google.com/s2/favicons?domain=${domain}&sz=32`}
+                            alt=""
+                            className="w-3 h-3 object-contain"
+                            onError={(e) => {
+                              (e.currentTarget as HTMLElement).style.display = 'none';
+                            }}
+                          />
+                        ) : (
+                          <span className="w-1.5 h-1.5 rounded-full bg-primary-theme" />
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                <span>
+                  {citations.length} {citations.length === 1 ? 'source' : 'sources'}
+                </span>
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -259,4 +322,4 @@ export const MessageItem: React.FC<MessageItemProps> = ({
       )}
     </div>
   );
-};
+});
