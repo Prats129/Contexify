@@ -1,14 +1,16 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { LuCloudUpload } from 'react-icons/lu';
 import { ChatHeader } from './ChatHeader';
 import { MessageList } from './MessageList';
 import { ChatInput } from './ChatInput';
+import { SourcesPopover } from './SourcesPopover';
 import type {
   ChatMode,
   Message,
   StreamingMessageState,
   DocumentMetadata,
   User,
+  Citation,
 } from '../../types';
 
 interface ChatWorkspaceProps {
@@ -51,7 +53,38 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
   onClearChat,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
+  const [activeSources, setActiveSources] = useState<{
+    messageId: string;
+    citations: Citation[];
+    queryTitle?: string;
+  } | null>(null);
+  const [isSourcesCollapsed, setIsSourcesCollapsed] = useState(false);
   const dragCounterRef = useRef(0);
+
+  const handleToggleSources = useCallback(
+    (msgId: string, citations: Citation[], queryTitle?: string) => {
+      setActiveSources((prev) => {
+        if (prev?.messageId === msgId) {
+          if (isSourcesCollapsed) {
+            setIsSourcesCollapsed(false);
+            return prev;
+          }
+          return null;
+        }
+        setIsSourcesCollapsed(false);
+        return { messageId: msgId, citations, queryTitle };
+      });
+    },
+    [isSourcesCollapsed],
+  );
+
+  const handleHideSources = useCallback(() => {
+    setActiveSources(null);
+  }, []);
+
+  const handleToggleCollapse = useCallback(() => {
+    setIsSourcesCollapsed((prev) => !prev);
+  }, []);
 
   useEffect(() => {
     const handleDragEnter = (e: DragEvent) => {
@@ -139,26 +172,58 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
         hasMessages={messages.length > 0 || !!streamingMessage}
       />
 
-      <MessageList
-        messages={messages}
-        streamingMessage={streamingMessage}
-        onSelectPrompt={onSelectPrompt}
-        currentUser={currentUser}
-      />
+      {/* Main Workspace: Chat Column + Sources Card anchored to right */}
+      <div
+        className={`flex-1 flex overflow-hidden w-full px-2 sm:px-6 transition-all duration-150 ${
+          activeSources ? 'justify-between' : 'justify-center'
+        }`}
+      >
+        {/* Main Conversation Column: MessageList + ChatInput */}
+        <div
+          className={`flex-1 flex flex-col h-full min-w-0 ${
+            activeSources
+              ? 'max-w-4xl mx-auto lg:mr-auto lg:ml-4'
+              : 'max-w-3xl mx-auto'
+          }`}
+        >
+          <MessageList
+            messages={messages}
+            streamingMessage={streamingMessage}
+            onSelectPrompt={onSelectPrompt}
+            currentUser={currentUser}
+            activeSourcesMessageId={activeSources?.messageId}
+            onToggleSources={handleToggleSources}
+          />
 
-      <ChatInput
-        inputQuery={inputQuery}
-        setInputQuery={setInputQuery}
-        onSubmit={onSendMessage}
-        isSending={isSending}
-        currentMode={currentMode}
-        onModeChange={onModeChange}
-        onFileUpload={onFileUpload}
-        isUploading={isUploading}
-        uploadStatusText={uploadStatusText}
-        documents={documents}
-        onDeleteDocument={onDeleteDocument}
-      />
+          <ChatInput
+            inputQuery={inputQuery}
+            setInputQuery={setInputQuery}
+            onSubmit={onSendMessage}
+            isSending={isSending}
+            currentMode={currentMode}
+            onModeChange={onModeChange}
+            onFileUpload={onFileUpload}
+            isUploading={isUploading}
+            uploadStatusText={uploadStatusText}
+            documents={documents}
+            onDeleteDocument={onDeleteDocument}
+          />
+        </div>
+
+        {/* Right side floating Perplexity Sources Card */}
+        {activeSources && (
+          <div className="hidden lg:block shrink-0 sticky top-2 h-fit pt-4 pl-4 mr-2 animate-[fadeIn_0.15s_ease-out]">
+            <SourcesPopover
+              isOpen={!!activeSources}
+              onHide={handleHideSources}
+              citations={activeSources.citations}
+              queryTitle={activeSources.queryTitle}
+              isCollapsed={isSourcesCollapsed}
+              onToggleCollapse={handleToggleCollapse}
+            />
+          </div>
+        )}
+      </div>
     </main>
   );
 };
