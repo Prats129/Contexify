@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { LuBrain, LuTriangleAlert, LuCopy, LuCheck, LuExternalLink } from 'react-icons/lu';
-import { CitationsBox } from './CitationsBox';
 import type { Citation } from '../../types';
 
 interface MessageItemProps {
@@ -17,7 +16,6 @@ interface MessageItemProps {
 export const MessageItem: React.FC<MessageItemProps> = ({
   role,
   content,
-  citations,
   isStreaming,
   isError,
   userAvatarUrl,
@@ -239,12 +237,6 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                 <LuCopy size={12} />
               )}
             </button>
-          </div>
-        )}
-
-        {!isUser && citations && citations.length > 0 && (
-          <div className="w-full mt-1">
-            <CitationsBox citations={citations} />
           </div>
         )}
       </div>
