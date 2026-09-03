@@ -1,28 +1,42 @@
 # Contexify 🧠⚡
 
-**Contexify** is an enterprise-grade AI knowledge engine combining Document Retrieval-Augmented Generation (RAG) and real-time Web Search. Powered by a high-performance **FastAPI** backend with **ChromaDB** vector storage and a sleek, modern **React + TypeScript (Vite)** frontend.
+**Contexify** is an enterprise-grade AI knowledge engine combining Document Retrieval-Augmented Generation (RAG) and real-time Web Search. Powered by a high-performance **FastAPI** backend with **ChromaDB** vector storage and a sleek, modern **React + TypeScript (Vite) + Tailwind CSS** frontend.
 
 ---
 
-## 🌟 Key Features
+## 🌟 Key Features & Enhancements
 
-### 📄 1. Document-Grounded RAG (`DOCUMENT_RAG`)
-- **Multi-Format Ingestion**: Upload PDF, TXT, MD, CSV, and DOCX files with drag-and-drop support.
-- **Vector Search with ChromaDB**: Automatic text extraction, semantic chunking, and embedding into ChromaDB.
-- **Accurate Citations & Metrics**: Real-time streaming answers with verifiable source snippets, document references, and similarity match percentages.
+### 🔍 1. Interactive Perplexity-Style Citation Engine
+- **Collapsible Sources Card**: Real-time right-hand sources card with dual controls (collapse into a compact pill bar or hide completely).
+- **Rich Source Attribution**: Verifiable citations with auto-detected domain favicons, source URLs with external link navigation, and matching text previews.
+- **Optimized Chat Layout**: Fluid conversation column with docked input container strictly below messages, preserving a clean workspace.
 
-### 🌐 2. Live Web Search Engine (`WEB_SEARCH`)
-- Real-time search query formulation and web synthesis.
-- Streaming responses with live source links and search grounding.
+### 📄 2. Document-Grounded RAG (`DOCUMENT_RAG`)
+- **Multi-Format Ingestion**: Upload PDF, TXT, MD, CSV, JSON, and DOCX files with native drag-and-drop workspace overlay.
+- **Vector Search with ChromaDB**: Semantic chunking, persistent vector embeddings, and similarity-scored context injection.
+- **Document Management**: Multi-document attachments, per-document deletion, and isolated user workspace scoping.
 
-### 👥 3. User & Session Management
-- **Guest & User Accounts**: Fast guest access or authenticated user profile support.
-- **Persistent Chat History**: Session switching, deletion, and conversation tagging saved in a relational database.
+### 🌐 3. Real-Time Live Web Search (`WEB_SEARCH`)
+- **Web Grounding Engine**: Real-time search query formulation and synthesis (default search mode).
+- **Crisp & Concise Output**: Synthesized answers calibrated for fast readability, offering in-depth explanations on demand.
+- **Multi-Turn Conversation Memory**: Context-aware chat history retention across message turns within each session.
 
-### 💻 4. Modern React + TypeScript UI
-- **Tech Stack**: React 18, TypeScript 5, Vite 8, `react-icons`, and modular CSS.
-- **Real-Time Streaming**: Smooth Server-Sent Events (SSE) token streaming.
-- **Glassmorphism / Dark Theme**: Premium dark-mode UI with intuitive layout, status indicators, and responsive modals.
+### 👥 4. Authentication & Profile Management
+- **User Accounts & Guest Mode**:
+  - **Authenticated Users**: Persistent relational chat sessions, profile customization, and session history management.
+  - **Guest Access**: Ephemeral, memory-only session mode with zero database footprint.
+- **Profile Photo & Avatar Studio**: Upload custom profile photos (PNG, JPG, WEBP, GIF up to 2MB) with live circular preview, photo removal, and fallback initials.
+- **Account Security**: Password updates with old password verification and bcrypt encryption.
+- **Chat Management**: "Clear Chat" feature to reset message history while preserving active uploaded documents.
+
+### 🎨 5. Theme & Appearance Customization
+- **Theme Modes**: One-click switching between Dark Mode and Light Mode.
+- **Accent Color Palettes**: 7 vibrant accent color themes (*Ocean Blue, Royal Purple, Emerald Forest, Sunset Rose, Amber Gold, Cyan Wave, Indigo Night*).
+- **Access Control**: Appearance preferences are securely tied to authenticated user accounts.
+
+### 💻 6. Modern Tech Stack
+- **Frontend**: React 18, TypeScript 5, Vite, Tailwind CSS, `react-icons`, and Server-Sent Events (SSE) streaming.
+- **Backend**: Python 3.11+, FastAPI, ChromaDB, Google Gemini API, SQLite / SQLAlchemy, and Pydantic v2.
 
 ---
 
@@ -31,22 +45,33 @@
 ```text
 Contexify/
 ├── backend/
-│   ├── app/                 # FastAPI routers, services, repositories & models
+│   ├── app/
+│   │   ├── api/v1/          # Endpoints (auth, users, sessions, chat, documents, health)
+│   │   ├── core/            # Config, security (JWT, hashing), database session
+│   │   ├── models/          # SQLAlchemy relational models (User, Session, Message, Doc)
+│   │   ├── schemas/         # Pydantic data contracts
+│   │   └── services/        # LLM (Gemini), RAG, ChromaDB embeddings, Web search
 │   ├── data/
 │   │   ├── chroma_db/       # Persistent Chroma vector store (git-ignored)
-│   │   └── uploads/         # Ingested documents (git-ignored)
+│   │   ├── uploads/         # Uploaded documents and avatars (git-ignored)
+│   │   └── contexify.db     # SQLite relational database
 │   ├── requirements.txt     # Python backend dependencies
 │   ├── reset_db.py          # Database & vector store reset utility
 │   ├── verify_rag.py        # Automated RAG & LLM verification script
-│   └── verify_persistence.py# Database & auth persistence verification
+│   └── verify_persistence.py# Database & auth persistence test script
 ├── frontend/
-│   ├── src/                 # React UI components, styling, services & state
+│   ├── src/
+│   │   ├── components/
+│   │   │   ├── Chat/        # ChatWorkspace, MessageList, MessageItem, SourcesPopover, ChatInput, ChatHeader
+│   │   │   ├── Sidebar/     # Sidebar, SessionHistory, DocumentList, UserProfileCard
+│   │   │   └── Modals/      # UserModal (Login, Register, Profile, Security, Themes)
+│   │   ├── context/         # ThemeContext (Mode & Accent palette management)
+│   │   ├── services/        # API client & SSE streaming services
+│   │   └── types/           # TypeScript interface definitions
 │   ├── package.json         # Frontend dependencies & Vite scripts
 │   ├── tsconfig.json        # TypeScript configuration
-│   └── vite.config.ts       # Vite build & API proxy configuration
-├── .vscode/
-│   └── tasks.json           # IDE compound task runner (separate tabs)
-├── package.json             # Root monorepo script runner
+│   └── vite.config.ts       # Vite configuration & backend API proxy
+├── package.json             # Monorepo root script runner (concurrently)
 └── README.md                # Project documentation
 ```
 
@@ -61,10 +86,10 @@ Contexify/
 ---
 
 ### 1. Install & Setup Project
-From the root repository folder (`Contexify/`), run:
+From the repository root (`Contexify/`):
 
 ```powershell
-# Install root runner and automatically set up frontend & backend virtualenv
+# Install root script runner and setup both frontend & backend virtualenv
 npm install
 npm run setup
 ```
@@ -81,37 +106,37 @@ GEMINI_API_KEY=your_google_gemini_api_key_here
 ---
 
 ### 3. Run the Application
-Start both backend and frontend servers with a single command:
+Start both the FastAPI backend and Vite frontend concurrently:
 
 ```powershell
 npm run dev
 ```
 
-* **Frontend App**: `http://localhost:8000`
-* **FastAPI Backend**: `http://127.0.0.1:8001`
-* **Interactive API Docs (Swagger)**: `http://127.0.0.1:8001/docs`
+* **Frontend Application**: [http://localhost:8000](http://localhost:8000)
+* **FastAPI Backend**: [http://127.0.0.1:8001](http://127.0.0.1:8001)
+* **Interactive API Documentation (Swagger UI)**: [http://127.0.0.1:8001/docs](http://127.0.0.1:8001/docs)
 
 ---
 
-## 🛠️ Available Root NPM Scripts
+## 🛠️ Available NPM Scripts
 
-All common workflows can be executed directly from the root `Contexify/` directory:
+Run all common commands from the repository root:
 
 | Command | Description |
 | :--- | :--- |
-| **`npm run dev`** | Starts **both** FastAPI backend and React frontend concurrently. |
-| **`npm run dev:backend`** | Starts only the FastAPI backend server (with auto-reload). |
-| **`npm run dev:frontend`** | Starts only the Vite frontend dev server (with HMR). |
-| **`npm run setup`** | Installs frontend dependencies, creates backend `venv`, and installs all Python requirements. |
-| **`npm run setup:backend`** | Creates backend `venv` and installs all `requirements.txt` packages. |
-| **`npm run build:frontend`** | Builds the production bundle of the React frontend into `frontend/dist/`. |
-| **`npm run db:reset`** | Runs `backend/reset_db.py` to wipe ChromaDB vectors, uploaded files, and chat history. |
+| **`npm run dev`** | Runs **both** FastAPI backend and React frontend concurrently. |
+| **`npm run dev:backend`** | Runs only the FastAPI backend server (with auto-reload). |
+| **`npm run dev:frontend`** | Runs only the Vite frontend dev server (with HMR). |
+| **`npm run setup`** | Installs frontend dependencies, creates backend `venv`, and installs Python packages. |
+| **`npm run setup:backend`** | Creates backend `venv` and installs `requirements.txt`. |
+| **`npm run build:frontend`** | Compiles TypeScript and builds the production bundle into `frontend/dist/`. |
+| **`npm run db:reset`** | Runs `reset_db.py` to clear ChromaDB vector embeddings, uploaded files, and chat history. |
 
 ---
 
 ## 🧪 Verification & Testing
 
-To test document ingestion, Chroma vector retrieval, and authentication persistence:
+Verify vector indexing, retrieval accuracy, and database persistence:
 
 ```powershell
 # From backend directory with venv activated:
