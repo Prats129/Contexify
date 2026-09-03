@@ -11,6 +11,7 @@ import type {
   Message,
   StreamingMessageState,
   Citation,
+  GoogleAuthRequest,
 } from './types';
 import './styles/main.css';
 
@@ -519,6 +520,40 @@ export const App: React.FC = () => {
     await loadSessions(user.id);
   };
 
+  const handleLoginWithOtp = async (usernameOrEmail: string, otp: string) => {
+    const user = await apiService.loginWithOtp(usernameOrEmail, otp);
+    setCurrentUser(user);
+    localStorage.setItem('contexify_user', JSON.stringify(user));
+    setIsUserModalOpen(false);
+    setActiveSessionId(null);
+    await loadSessions(user.id);
+  };
+
+  const handleGoogleAuth = async (data: GoogleAuthRequest) => {
+    const user = await apiService.loginWithGoogle(data);
+    setCurrentUser(user);
+    localStorage.setItem('contexify_user', JSON.stringify(user));
+    setIsUserModalOpen(false);
+    setActiveSessionId(null);
+    await loadSessions(user.id);
+  };
+
+  const handleSendOtp = async (usernameOrEmail: string) => {
+    return await apiService.sendLoginOtp(usernameOrEmail);
+  };
+
+  const handleSendPasswordResetOtp = async (usernameOrEmail: string) => {
+    return await apiService.sendPasswordResetOtp(usernameOrEmail);
+  };
+
+  const handleResetPasswordWithOtp = async (
+    usernameOrEmail: string,
+    otp: string,
+    newPassword: string
+  ) => {
+    return await apiService.resetPasswordWithOtp(usernameOrEmail, otp, newPassword);
+  };
+
   const handleRegister = async (
     displayName: string,
     username: string,
@@ -626,6 +661,11 @@ export const App: React.FC = () => {
         onClose={() => setIsUserModalOpen(false)}
         currentUser={currentUser}
         onLogin={handleLogin}
+        onLoginWithOtp={handleLoginWithOtp}
+        onGoogleAuth={handleGoogleAuth}
+        onSendOtp={handleSendOtp}
+        onSendPasswordResetOtp={handleSendPasswordResetOtp}
+        onResetPasswordWithOtp={handleResetPasswordWithOtp}
         onRegister={handleRegister}
         onLogout={handleLogout}
         onContinueAsGuest={handleContinueAsGuest}

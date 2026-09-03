@@ -76,3 +76,63 @@ class UserPasswordChangeRequest(BaseModel):
     old_password: str = Field(..., min_length=1, description="Current password")
     new_password: str = Field(..., min_length=6, max_length=128, description="New password (min 6 characters)")
 
+class SendOtpRequest(BaseModel):
+    email_or_username: str = Field(..., min_length=2, description="Registered email or username")
+
+    @field_validator("email_or_username")
+    @classmethod
+    def validate_identifier(cls, v: str) -> str:
+        clean = v.strip().lower()
+        if not clean:
+            raise ValueError("Email or username is required.")
+        return clean
+
+class SendOtpResponse(BaseModel):
+    message: str
+    email: str
+    masked_email: str
+    expires_in_seconds: int
+    cooldown_seconds: int
+
+class VerifyOtpLoginRequest(BaseModel):
+    email_or_username: str = Field(..., min_length=2, description="Registered email or username")
+    otp: str = Field(..., min_length=6, max_length=6, description="6-digit verification code")
+
+    @field_validator("email_or_username")
+    @classmethod
+    def validate_identifier(cls, v: str) -> str:
+        return v.strip().lower()
+
+    @field_validator("otp")
+    @classmethod
+    def validate_otp(cls, v: str) -> str:
+        clean = v.strip()
+        if not re.match(r"^\d{6}$", clean):
+            raise ValueError("OTP must be a 6-digit numeric code.")
+        return clean
+
+class ResetPasswordWithOtpRequest(BaseModel):
+    email_or_username: str = Field(..., min_length=2, description="Registered email or username")
+    otp: str = Field(..., min_length=6, max_length=6, description="6-digit verification code")
+    new_password: str = Field(..., min_length=6, max_length=128, description="New password (min 6 characters)")
+
+    @field_validator("email_or_username")
+    @classmethod
+    def validate_identifier(cls, v: str) -> str:
+        return v.strip().lower()
+
+    @field_validator("otp")
+    @classmethod
+    def validate_otp(cls, v: str) -> str:
+        clean = v.strip()
+        if not re.match(r"^\d{6}$", clean):
+            raise ValueError("OTP must be a 6-digit numeric code.")
+        return clean
+
+class GoogleAuthRequest(BaseModel):
+    credential: Optional[str] = Field(default=None, description="Google ID Token JWT")
+    email: Optional[str] = Field(default=None, description="Google account email")
+    name: Optional[str] = Field(default=None, description="Google account display name")
+    picture: Optional[str] = Field(default=None, description="Google avatar image URL")
+    google_id: Optional[str] = Field(default=None, description="Google user unique subject ID")
+

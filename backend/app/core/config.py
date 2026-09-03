@@ -30,9 +30,25 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = Field(default="", env="GEMINI_API_KEY")
     DEFAULT_EMBEDDING_MODEL: str = "models/text-embedding-004"
     DEFAULT_LLM_MODEL: str = "gemini-2.5-flash"
-    
+    GOOGLE_CLIENT_ID: str = Field(default="", env="GOOGLE_CLIENT_ID")
+
+    # SMTP Email Configuration
+    SMTP_HOST: str = Field(default="", env="SMTP_HOST")
+    SMTP_PORT: int = Field(default=587, env="SMTP_PORT")
+    SMTP_USER: str = Field(default="", env="SMTP_USER")
+    SMTP_PASSWORD: str = Field(default="", env="SMTP_PASSWORD")
+    SMTP_FROM_EMAIL: str = Field(default="noreply@contexify.ai", env="SMTP_FROM_EMAIL")
+    SMTP_FROM_NAME: str = Field(default="Contexify", env="SMTP_FROM_NAME")
+    SMTP_USE_TLS: bool = Field(default=True, env="SMTP_USE_TLS")
+    SMTP_USE_SSL: bool = Field(default=False, env="SMTP_USE_SSL")
+
+    # OTP Authentication Settings
+    OTP_EXPIRY_SECONDS: int = 180  # 3 minutes
+    OTP_RESEND_COOLDOWN_SECONDS: int = 30  # 0.5 minute between OTP resends
+    OTP_MAX_ATTEMPTS: int = 3
+
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=[str(BASE_DIR / ".env"), ".env"],
         env_file_encoding="utf-8",
         extra="ignore"
     )

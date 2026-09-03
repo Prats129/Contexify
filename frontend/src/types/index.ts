@@ -39,6 +39,37 @@ export interface UserPasswordChangeRequest {
   new_password: string;
 }
 
+export interface SendOtpRequest {
+  email_or_username: string;
+}
+
+export interface SendOtpResponse {
+  message: string;
+  email: string;
+  masked_email: string;
+  expires_in_seconds: number;
+  cooldown_seconds: number;
+}
+
+export interface VerifyOtpLoginRequest {
+  email_or_username: string;
+  otp: string;
+}
+
+export interface ResetPasswordWithOtpRequest {
+  email_or_username: string;
+  otp: string;
+  new_password: string;
+}
+
+export interface GoogleAuthRequest {
+  credential?: string;
+  email?: string;
+  name?: string;
+  picture?: string;
+  google_id?: string;
+}
+
 
 export interface Citation {
   document_id: string;

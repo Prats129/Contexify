@@ -6,6 +6,8 @@ import type {
   DocumentUploadResponse,
   DocumentListResponse,
   StreamHandlers,
+  SendOtpResponse,
+  GoogleAuthRequest,
 } from '../types';
 
 const API_BASE_URL = '/api/v1';
@@ -50,6 +52,89 @@ export const apiService = {
     if (!response.ok) {
       const err = await response.json().catch(() => ({ detail: 'Authentication failed' }));
       throw new Error(err.detail || 'Invalid username/email or password');
+    }
+    return await response.json();
+  },
+
+  async loginWithGoogle(data: GoogleAuthRequest): Promise<User> {
+    const response = await fetch(`${API_BASE_URL}/user/auth/google`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ detail: 'Google authentication failed' }));
+      throw new Error(err.detail || 'Google authentication failed');
+    }
+    return await response.json();
+  },
+
+  async sendLoginOtp(emailOrUsername: string): Promise<SendOtpResponse> {
+    const response = await fetch(`${API_BASE_URL}/user/otp/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email_or_username: emailOrUsername,
+      }),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ detail: 'Failed to send verification code' }));
+      throw new Error(err.detail || 'Failed to send verification code');
+    }
+    return await response.json();
+  },
+
+  async loginWithOtp(
+    emailOrUsername: string,
+    otp: string
+  ): Promise<User> {
+    const response = await fetch(`${API_BASE_URL}/user/otp/verify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email_or_username: emailOrUsername,
+        otp,
+      }),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ detail: 'Invalid verification code' }));
+      throw new Error(err.detail || 'Invalid verification code');
+    }
+    return await response.json();
+  },
+
+  async sendPasswordResetOtp(emailOrUsername: string): Promise<SendOtpResponse> {
+    const response = await fetch(`${API_BASE_URL}/user/password-reset/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email_or_username: emailOrUsername,
+      }),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ detail: 'Failed to send password reset code' }));
+      throw new Error(err.detail || 'Failed to send password reset code');
+    }
+    return await response.json();
+  },
+
+  async resetPasswordWithOtp(
+    emailOrUsername: string,
+    otp: string,
+    newPassword: string
+  ): Promise<{ message: string }> {
+    const response = await fetch(`${API_BASE_URL}/user/password-reset/verify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email_or_username: emailOrUsername,
+        otp,
+        new_password: newPassword,
+      }),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ detail: 'Failed to reset password' }));
+      throw new Error(err.detail || 'Failed to reset password');
     }
     return await response.json();
   },

@@ -5,7 +5,12 @@ from app.schemas.user import (
     UserLoginRequest,
     UserResponse,
     UserProfileUpdateRequest,
-    UserPasswordChangeRequest
+    UserPasswordChangeRequest,
+    SendOtpRequest,
+    SendOtpResponse,
+    VerifyOtpLoginRequest,
+    ResetPasswordWithOtpRequest,
+    GoogleAuthRequest
 )
 from app.services.user_service import user_service
 
@@ -24,6 +29,41 @@ async def login(req: UserLoginRequest):
     Authenticate an existing user using username/email and password.
     """
     return user_service.authenticate_user(req)
+
+@router.post("/auth/google", response_model=UserResponse, status_code=status.HTTP_200_OK)
+async def auth_google(req: GoogleAuthRequest):
+    """
+    Authenticate or register a user with Google OAuth credentials.
+    """
+    return await user_service.authenticate_with_google(req)
+
+@router.post("/otp/send", response_model=SendOtpResponse, status_code=status.HTTP_200_OK)
+async def send_otp(req: SendOtpRequest):
+    """
+    Generate and send a 6-digit OTP verification code to the user's registered email address.
+    """
+    return await user_service.send_login_otp(req.email_or_username)
+
+@router.post("/otp/verify", response_model=UserResponse, status_code=status.HTTP_200_OK)
+async def verify_otp(req: VerifyOtpLoginRequest):
+    """
+    Verify 6-digit OTP code and sign in the user.
+    """
+    return user_service.verify_login_otp(req.email_or_username, req.otp)
+
+@router.post("/password-reset/send", response_model=SendOtpResponse, status_code=status.HTTP_200_OK)
+async def send_password_reset_otp(req: SendOtpRequest):
+    """
+    Generate and send a 6-digit password reset verification code to the user's registered email address.
+    """
+    return await user_service.send_password_reset_otp(req.email_or_username)
+
+@router.post("/password-reset/verify", status_code=status.HTTP_200_OK)
+async def verify_password_reset_otp(req: ResetPasswordWithOtpRequest):
+    """
+    Verify 6-digit OTP code and reset the user's password directly without requiring login.
+    """
+    return user_service.reset_password_with_otp(req)
 
 @router.get("/me", response_model=UserResponse)
 async def get_current_user(user_id: str):
