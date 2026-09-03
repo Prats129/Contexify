@@ -168,4 +168,4 @@ python verify_persistence.py
 
 ## 📜 License
 
-This project is licensed under the MIT License.
+Copyright © 2026 Contexify. All rights reserved.
