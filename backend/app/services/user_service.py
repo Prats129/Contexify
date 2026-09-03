@@ -4,6 +4,7 @@ import random
 import hashlib
 import secrets
 import time
+import asyncio
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
@@ -416,18 +417,14 @@ class UserService:
                 (otp_id, user_email, otp_code, expires_at, created_at)
             )
 
-        # Dispatch email asynchronously
-        sent = await email_service.send_otp_email(
-            to_email=user_email,
-            otp_code=otp_code,
-            display_name=user_display_name
-        )
-
-        if settings.SMTP_HOST and not sent:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to send OTP verification email. Please check your SMTP server settings or connection."
+        # Dispatch email asynchronously in non-blocking background task for instant UI response
+        asyncio.create_task(
+            email_service.send_otp_email(
+                to_email=user_email,
+                otp_code=otp_code,
+                display_name=user_display_name
             )
+        )
 
         logger.info(f"Dispatched login OTP to '{user_email}' for user '{user['username']}'")
         masked = mask_email(user_email)
@@ -596,18 +593,14 @@ class UserService:
                 (otp_id, user_email, otp_code, expires_at, created_at)
             )
 
-        # Dispatch Password Reset email asynchronously
-        sent = await email_service.send_password_reset_otp_email(
-            to_email=user_email,
-            otp_code=otp_code,
-            display_name=user_display_name
-        )
-
-        if settings.SMTP_HOST and not sent:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to send password reset email. Please check your SMTP server settings or connection."
+        # Dispatch Password Reset email asynchronously in non-blocking background task for instant UI response
+        asyncio.create_task(
+            email_service.send_password_reset_otp_email(
+                to_email=user_email,
+                otp_code=otp_code,
+                display_name=user_display_name
             )
+        )
 
         logger.info(f"Dispatched password reset OTP to '{user_email}' for user '{user['username']}'")
         masked = mask_email(user_email)
