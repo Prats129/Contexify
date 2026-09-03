@@ -6,6 +6,7 @@ import type {
   DocumentUploadResponse,
   DocumentListResponse,
   StreamHandlers,
+  SendOtpResponse,
 } from '../types';
 
 const API_BASE_URL = '/api/v1';
@@ -50,6 +51,40 @@ export const apiService = {
     if (!response.ok) {
       const err = await response.json().catch(() => ({ detail: 'Authentication failed' }));
       throw new Error(err.detail || 'Invalid username/email or password');
+    }
+    return await response.json();
+  },
+
+  async sendLoginOtp(emailOrUsername: string): Promise<SendOtpResponse> {
+    const response = await fetch(`${API_BASE_URL}/user/otp/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email_or_username: emailOrUsername,
+      }),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ detail: 'Failed to send verification code' }));
+      throw new Error(err.detail || 'Failed to send verification code');
+    }
+    return await response.json();
+  },
+
+  async loginWithOtp(
+    emailOrUsername: string,
+    otp: string
+  ): Promise<User> {
+    const response = await fetch(`${API_BASE_URL}/user/otp/verify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email_or_username: emailOrUsername,
+        otp,
+      }),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ detail: 'Invalid verification code' }));
+      throw new Error(err.detail || 'Invalid verification code');
     }
     return await response.json();
   },

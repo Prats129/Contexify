@@ -107,9 +107,23 @@ def init_db():
             );
         """)
         
+        # 5. Email OTPs Table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS email_otps (
+                id TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                otp_code TEXT NOT NULL,
+                expires_at REAL NOT NULL,
+                attempts INTEGER DEFAULT 0,
+                is_used INTEGER DEFAULT 0,
+                created_at TEXT NOT NULL
+            );
+        """)
+
         # Indexes for fast querying
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON chat_sessions(user_id);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_documents_session_id ON documents(session_id);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_email_otps_email ON email_otps(email);")
         
         logger.info("SQLite database initialized successfully.")

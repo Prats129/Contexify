@@ -519,6 +519,19 @@ export const App: React.FC = () => {
     await loadSessions(user.id);
   };
 
+  const handleLoginWithOtp = async (usernameOrEmail: string, otp: string) => {
+    const user = await apiService.loginWithOtp(usernameOrEmail, otp);
+    setCurrentUser(user);
+    localStorage.setItem('contexify_user', JSON.stringify(user));
+    setIsUserModalOpen(false);
+    setActiveSessionId(null);
+    await loadSessions(user.id);
+  };
+
+  const handleSendOtp = async (usernameOrEmail: string) => {
+    return await apiService.sendLoginOtp(usernameOrEmail);
+  };
+
   const handleRegister = async (
     displayName: string,
     username: string,
@@ -626,6 +639,8 @@ export const App: React.FC = () => {
         onClose={() => setIsUserModalOpen(false)}
         currentUser={currentUser}
         onLogin={handleLogin}
+        onLoginWithOtp={handleLoginWithOtp}
+        onSendOtp={handleSendOtp}
         onRegister={handleRegister}
         onLogout={handleLogout}
         onContinueAsGuest={handleContinueAsGuest}
