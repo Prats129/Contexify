@@ -15,7 +15,51 @@ import type {
 import './styles/main.css';
 
 function generateGuestSessionId(): string {
-  return `guest-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+  return crypto.randomUUID();
+}
+
+interface UrlRouteInfo {
+  sessionId: string | null;
+  isUnauthenticated: boolean;
+}
+
+function getUrlRouteInfo(): UrlRouteInfo {
+  const path = window.location.pathname;
+  // Authenticated chat: /c/:id
+  const authMatch = path.match(/^\/c\/([^/]+)/);
+  if (authMatch && authMatch[1]) {
+    return { sessionId: decodeURIComponent(authMatch[1]), isUnauthenticated: false };
+  }
+  // Unauthenticated guest temp chat: /uc/:id
+  const guestMatch = path.match(/^\/uc\/([^/]+)/);
+  if (guestMatch && guestMatch[1]) {
+    return { sessionId: decodeURIComponent(guestMatch[1]), isUnauthenticated: true };
+  }
+  // Query parameters fallback
+  const params = new URLSearchParams(window.location.search);
+  const ucParam = params.get('uc');
+  if (ucParam) {
+    return { sessionId: ucParam, isUnauthenticated: true };
+  }
+  const cParam = params.get('c');
+  if (cParam) {
+    return { sessionId: cParam, isUnauthenticated: false };
+  }
+  return { sessionId: null, isUnauthenticated: false };
+}
+
+function updateUrlForSession(sessionId: string | null, isUnauthenticated: boolean = false) {
+  if (sessionId) {
+    const prefix = isUnauthenticated ? '/uc' : '/c';
+    const targetPath = `${prefix}/${encodeURIComponent(sessionId)}`;
+    if (window.location.pathname !== targetPath) {
+      window.history.pushState({ sessionId, isUnauthenticated }, '', targetPath);
+    }
+  } else {
+    if (window.location.pathname !== '/' && window.location.pathname !== '') {
+      window.history.pushState({}, '', '/');
+    }
+  }
 }
 
 export const App: React.FC = () => {
@@ -23,7 +67,7 @@ export const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
-  const [currentMode, setCurrentMode] = useState<ChatMode>('DOCUMENT_RAG');
+  const [currentMode, setCurrentMode] = useState<ChatMode>('WEB_SEARCH');
   const [documents, setDocuments] = useState<DocumentMetadata[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
 
@@ -35,8 +79,57 @@ export const App: React.FC = () => {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadStatusText, setUploadStatusText] = useState('');
   const [isUserModalOpen, setIsUserModalOpen] = useState(false);
+  const [userModalTab, setUserModalTab] = useState<'login' | 'register'>('login');
+  const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(() => {
+    const saved = localStorage.getItem('contexify_sidebar_open');
+    return saved !== null ? JSON.parse(saved) : true;
+  });
 
-  // --- 1. User Initialization (Guest vs Logged In) ---
+  const handleOpenUserModal = (tab: 'login' | 'register' = 'login') => {
+    setUserModalTab(tab);
+    setIsUserModalOpen(true);
+  };
+
+  const handleToggleSidebar = () => {
+    setIsSidebarOpen((prev) => {
+      const next = !prev;
+      localStorage.setItem('contexify_sidebar_open', JSON.stringify(next));
+      return next;
+    });
+  };
+
+  // --- 1. Select / Switch Active Session ---
+  const selectSession = useCallback(
+    async (sessionId: string, pushUrl: boolean = true, isUnauthenticated: boolean = false) => {
+      if (!sessionId) return;
+      setActiveSessionId(sessionId);
+      setStreamingMessage(null);
+
+      if (currentUser?.id && !isUnauthenticated) {
+        localStorage.setItem('contexify_active_session', sessionId);
+        if (pushUrl) {
+          updateUrlForSession(sessionId, false);
+        }
+        try {
+          const history = await apiService.getSessionHistory(sessionId);
+          if (history.session?.mode) {
+            setCurrentMode(history.session.mode);
+          }
+          setDocuments(history.documents || []);
+          setMessages(history.messages || []);
+        } catch (e) {
+          console.error('Failed to load session history:', e);
+        }
+      } else {
+        if (pushUrl) {
+          updateUrlForSession(sessionId, true);
+        }
+      }
+    },
+    [currentUser]
+  );
+
+  // --- 2. User Initialization (Guest vs Logged In) ---
   useEffect(() => {
     initUser();
   }, []);
@@ -59,107 +152,108 @@ export const App: React.FC = () => {
         setCurrentUser(null);
         localStorage.removeItem('contexify_user');
         localStorage.removeItem('contexify_active_session');
-        const ephemeralGuestId = generateGuestSessionId();
-        setActiveSessionId(ephemeralGuestId);
         setSessions([]);
         setMessages([]);
         setDocuments([]);
+        
+        const { sessionId: urlSessionId, isUnauthenticated } = getUrlRouteInfo();
+        if (urlSessionId) {
+          if (isUnauthenticated) {
+            // Guest active temp chat from URL
+            setActiveSessionId(urlSessionId);
+          } else {
+            // User attempting to open private /c/:id without session
+            setIsUserModalOpen(true);
+            setUserModalTab('login');
+          }
+        } else {
+          setActiveSessionId(null);
+          updateUrlForSession(null);
+        }
       }
     } catch (e) {
       console.error('Failed to initialize user:', e);
       setCurrentUser(null);
-      setActiveSessionId(generateGuestSessionId());
+      setActiveSessionId(null);
     }
   };
 
-  // --- 2. Load Sessions when Logged In ---
-  useEffect(() => {
-    if (currentUser?.id) {
-      loadSessions(currentUser.id);
-    }
-  }, [currentUser]);
-
-  const loadSessions = async (userId: string) => {
+  // --- 3. Load Sessions when Logged In ---
+  const loadSessions = useCallback(async (userId: string) => {
     try {
       const sessionList = await apiService.listSessions(userId);
       setSessions(sessionList || []);
 
-      const savedActiveSessionId = localStorage.getItem(
-        'contexify_active_session'
-      );
-      const matchingSession = sessionList.find(
-        (s) => s.id === savedActiveSessionId
-      );
+      const { sessionId: urlSessionId, isUnauthenticated } = getUrlRouteInfo();
 
-      if (matchingSession) {
-        selectSession(matchingSession.id);
-      } else if (sessionList.length > 0) {
-        selectSession(sessionList[0].id);
-      } else {
-        // Create initial session for logged-in user
-        const newSess = await apiService.createSession(
-          userId,
-          'New Conversation',
-          currentMode
-        );
-        setSessions([newSess]);
-        selectSession(newSess.id);
+      // If URL explicitly specifies a session ID (/c/:id or ?c=:id), select it
+      if (urlSessionId && !isUnauthenticated) {
+        const matchingUrlSession = sessionList.find((s) => s.id === urlSessionId);
+        if (matchingUrlSession) {
+          await selectSession(matchingUrlSession.id, false, false);
+          return;
+        }
+        // If not directly in list, attempt to fetch history directly (e.g. valid session)
+        try {
+          const hist = await apiService.getSessionHistory(urlSessionId);
+          if (hist.session) {
+            setSessions((prev) => [hist.session, ...prev.filter(s => s.id !== hist.session.id)]);
+            await selectSession(hist.session.id, false, false);
+            return;
+          }
+        } catch {
+          // If session doesn't exist, ignore and fallback to root new chat
+        }
       }
+
+      // If on root '/', start on clean new chat (no ID in URL)
+      setActiveSessionId(null);
+      setMessages([]);
+      setDocuments([]);
+      updateUrlForSession(null);
     } catch (e) {
       console.error('Failed to load user sessions:', e);
     }
-  };
+  }, [selectSession]);
 
-  // --- 3. Select / Switch Active Session ---
-  const selectSession = useCallback(
-    async (sessionId: string) => {
-      if (!sessionId) return;
-      setActiveSessionId(sessionId);
-      setStreamingMessage(null);
-
-      // Only save active session in localStorage if user is logged in
-      if (currentUser?.id) {
-        localStorage.setItem('contexify_active_session', sessionId);
-        try {
-          const history = await apiService.getSessionHistory(sessionId);
-          if (history.session?.mode) {
-            setCurrentMode(history.session.mode);
-          }
-          setDocuments(history.documents || []);
-          setMessages(history.messages || []);
-        } catch (e) {
-          console.error('Failed to load session history:', e);
-        }
-      }
-    },
-    [currentUser]
-  );
-
-  // --- 4. Create New Session ---
-  const handleNewSession = async () => {
+  useEffect(() => {
     if (currentUser?.id) {
-      // Persistent session for logged in user
-      try {
-        const newSess = await apiService.createSession(
-          currentUser.id,
-          'New Conversation',
-          currentMode
-        );
-        setSessions((prev) => [newSess, ...prev]);
-        await selectSession(newSess.id);
-        setInputQuery('');
-      } catch (e: unknown) {
-        const err = e instanceof Error ? e.message : String(e);
-        alert(`Failed to create new conversation: ${err}`);
-      }
-    } else {
-      // Ephemeral new session for guest
-      const newGuestId = generateGuestSessionId();
-      setActiveSessionId(newGuestId);
-      setMessages([]);
-      setDocuments([]);
-      setInputQuery('');
+      loadSessions(currentUser.id);
     }
+  }, [currentUser, loadSessions]);
+
+  // --- 4. Listen to Browser Back / Forward History Navigation ---
+  useEffect(() => {
+    const handlePopState = () => {
+      const { sessionId: targetSessionId, isUnauthenticated } = getUrlRouteInfo();
+      if (targetSessionId) {
+        if (currentUser?.id && !isUnauthenticated) {
+          selectSession(targetSessionId, false, false);
+        } else if (isUnauthenticated) {
+          setActiveSessionId(targetSessionId);
+        }
+      } else {
+        // Navigated back to root '/'
+        setActiveSessionId(null);
+        setMessages([]);
+        setDocuments([]);
+        setStreamingMessage(null);
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [currentUser, sessions, selectSession]);
+
+  // --- 5. Start New Chat / Conversation ---
+  const handleNewSession = () => {
+    setActiveSessionId(null);
+    setMessages([]);
+    setDocuments([]);
+    setStreamingMessage(null);
+    setInputQuery('');
+    updateUrlForSession(null);
+    localStorage.removeItem('contexify_active_session');
   };
 
   // --- 5. Delete Session ---
@@ -176,17 +270,12 @@ export const App: React.FC = () => {
       setSessions(updated);
 
       if (activeSessionId === sessionId) {
-        if (updated.length > 0) {
-          selectSession(updated[0].id);
-        } else {
-          const newSess = await apiService.createSession(
-            currentUser.id,
-            'New Conversation',
-            currentMode
-          );
-          setSessions([newSess]);
-          selectSession(newSess.id);
-        }
+        setActiveSessionId(null);
+        setMessages([]);
+        setDocuments([]);
+        setStreamingMessage(null);
+        updateUrlForSession(null);
+        localStorage.removeItem('contexify_active_session');
       }
     } catch (e: unknown) {
       const err = e instanceof Error ? e.message : String(e);
@@ -195,18 +284,52 @@ export const App: React.FC = () => {
   };
 
   // --- 6. Mode Switch ---
-  const handleModeChange = (mode: ChatMode) => {
+  const handleModeChange = async (mode: ChatMode) => {
     setCurrentMode(mode);
+    if (activeSessionId && currentUser?.id) {
+      try {
+        await apiService.updateSessionMode(activeSessionId, mode);
+        setSessions((prev) =>
+          prev.map((s) => (s.id === activeSessionId ? { ...s, mode } : s))
+        );
+      } catch (err) {
+        console.error('Failed to persist session mode switch:', err);
+      }
+    }
   };
 
   // --- 7. Document Upload & Delete ---
   const handleFileUpload = async (file: File) => {
-    if (!activeSessionId) return;
+    let targetSessionId = activeSessionId;
+    if (!targetSessionId) {
+      if (currentUser?.id) {
+        try {
+          const newSess = await apiService.createSession(
+            currentUser.id,
+            'New Conversation',
+            currentMode
+          );
+          targetSessionId = newSess.id;
+          setActiveSessionId(newSess.id);
+          setSessions((prev) => [newSess, ...prev]);
+          updateUrlForSession(newSess.id, false);
+          localStorage.setItem('contexify_active_session', newSess.id);
+        } catch (err) {
+          console.error('Failed to create session on file upload:', err);
+          return;
+        }
+      } else {
+        targetSessionId = generateGuestSessionId();
+        setActiveSessionId(targetSessionId);
+        updateUrlForSession(targetSessionId, true);
+      }
+    }
+
     setIsUploading(true);
     setUploadStatusText(`Vectorizing '${file.name}'...`);
 
     try {
-      const res = await apiService.uploadDocument(file, activeSessionId);
+      const res = await apiService.uploadDocument(file, targetSessionId, currentUser?.id);
       // Update local document state
       setDocuments((prev) => {
         const exists = prev.some(
@@ -223,7 +346,9 @@ export const App: React.FC = () => {
     }
   };
 
+
   const handleDeleteDocument = async (documentId: string) => {
+    if (!activeSessionId) return;
     if (
       !window.confirm(
         'Are you sure you want to remove this document and purge its vectors?'
@@ -232,7 +357,7 @@ export const App: React.FC = () => {
       return;
     }
     try {
-      await apiService.deleteDocument(documentId, activeSessionId!);
+      await apiService.deleteDocument(documentId, activeSessionId);
       setDocuments((prev) => prev.filter((d) => d.document_id !== documentId));
     } catch (e: unknown) {
       const err = e instanceof Error ? e.message : String(e);
@@ -240,11 +365,53 @@ export const App: React.FC = () => {
     }
   };
 
+  // --- Clear Messages in Active Conversation (Authenticated Users Only) ---
+  const handleClearMessages = async () => {
+    if (!currentUser || !activeSessionId || (messages.length === 0 && !streamingMessage)) return;
+    if (!window.confirm('Clear all messages in this conversation? Attached documents and vectors will remain intact.')) {
+      return;
+    }
+    try {
+      await apiService.clearSessionMessages(activeSessionId);
+      setMessages([]);
+      setStreamingMessage(null);
+    } catch (e: unknown) {
+      const err = e instanceof Error ? e.message : String(e);
+      alert(`Failed to clear messages: ${err}`);
+    }
+  };
+
+
   // --- 8. Send Chat Message & SSE Stream ---
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     const query = inputQuery.trim();
-    if (!query || !activeSessionId || isSending) return;
+    if (!query || isSending) return;
+
+    let targetSessionId = activeSessionId;
+    if (!targetSessionId) {
+      if (currentUser?.id) {
+        try {
+          const newSess = await apiService.createSession(
+            currentUser.id,
+            'New Conversation',
+            currentMode
+          );
+          targetSessionId = newSess.id;
+          setActiveSessionId(newSess.id);
+          setSessions((prev) => [newSess, ...prev]);
+          updateUrlForSession(newSess.id, false);
+          localStorage.setItem('contexify_active_session', newSess.id);
+        } catch (err) {
+          console.error('Failed to create session on message send:', err);
+          return;
+        }
+      } else {
+        targetSessionId = generateGuestSessionId();
+        setActiveSessionId(targetSessionId);
+        updateUrlForSession(targetSessionId, true);
+      }
+    }
 
     // Reset input
     setInputQuery('');
@@ -253,7 +420,7 @@ export const App: React.FC = () => {
     // Append optimistic user message
     const userMsg: Message = {
       id: `user-${Date.now()}`,
-      session_id: activeSessionId,
+      session_id: targetSessionId,
       role: 'user',
       content: query,
       created_at: new Date().toISOString(),
@@ -272,15 +439,15 @@ export const App: React.FC = () => {
       isError: false,
     });
 
-    await apiService.streamChat(activeSessionId, query, currentMode, {
+    await apiService.streamChat(targetSessionId, query, currentMode, {
       onCitations: (citations) => {
         receivedCitations = citations;
         setStreamingMessage((prev) =>
           prev
             ? {
-                ...prev,
-                citations,
-              }
+              ...prev,
+              citations,
+            }
             : null
         );
       },
@@ -289,11 +456,11 @@ export const App: React.FC = () => {
         setStreamingMessage((prev) =>
           prev
             ? {
-                ...prev,
-                content: accumulatedText,
-                citations: receivedCitations,
-                isStreaming: true,
-              }
+              ...prev,
+              content: accumulatedText,
+              citations: receivedCitations,
+              isStreaming: true,
+            }
             : null
         );
       },
@@ -311,7 +478,7 @@ export const App: React.FC = () => {
         setIsSending(false);
         const finishedAssistantMsg: Message = {
           id: `asst-${Date.now()}`,
-          session_id: activeSessionId,
+          session_id: targetSessionId,
           role: 'assistant',
           content: accumulatedText,
           citations: receivedCitations,
@@ -371,6 +538,36 @@ export const App: React.FC = () => {
     await loadSessions(user.id);
   };
 
+  const handleUpdateProfile = async (displayName: string, avatarColor: string) => {
+    if (!currentUser?.id) return;
+    const updated = await apiService.updateUserProfile(
+      currentUser.id,
+      displayName,
+      avatarColor
+    );
+    setCurrentUser(updated);
+    localStorage.setItem('contexify_user', JSON.stringify(updated));
+  };
+
+  const handleChangePassword = async (oldPassword: string, newPassword: string) => {
+    if (!currentUser?.id) return;
+    await apiService.changePassword(currentUser.id, oldPassword, newPassword);
+  };
+
+  const handleUploadAvatar = async (file: File) => {
+    if (!currentUser?.id) return;
+    const updated = await apiService.uploadAvatar(currentUser.id, file);
+    setCurrentUser(updated);
+    localStorage.setItem('contexify_user', JSON.stringify(updated));
+  };
+
+  const handleDeleteAvatar = async () => {
+    if (!currentUser?.id) return;
+    const updated = await apiService.deleteAvatar(currentUser.id);
+    setCurrentUser(updated);
+    localStorage.setItem('contexify_user', JSON.stringify(updated));
+  };
+
   const handleLogout = () => {
     localStorage.removeItem('contexify_user');
     localStorage.removeItem('contexify_active_session');
@@ -387,29 +584,27 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="app-container">
+    <div className="flex h-screen w-screen overflow-hidden bg-gray-950 text-gray-100 font-sans">
       <Sidebar
+        isOpen={isSidebarOpen}
+        onToggleSidebar={handleToggleSidebar}
         currentUser={currentUser}
-        onOpenUserModal={() => setIsUserModalOpen(true)}
+        onOpenUserModal={() => handleOpenUserModal('login')}
         onLogout={handleLogout}
         sessions={sessions}
         activeSessionId={activeSessionId}
         onSelectSession={selectSession}
         onNewSession={handleNewSession}
         onDeleteSession={handleDeleteSession}
-        currentMode={currentMode}
-        onModeChange={handleModeChange}
         documents={documents}
-        onFileUpload={handleFileUpload}
         onDeleteDocument={handleDeleteDocument}
-        isUploading={isUploading}
-        uploadStatusText={uploadStatusText}
       />
 
       <ChatWorkspace
+        currentUser={currentUser}
+        onOpenUserModal={handleOpenUserModal}
         currentMode={currentMode}
-        activeSessionId={activeSessionId}
-        onNewSession={handleNewSession}
+        onModeChange={handleModeChange}
         messages={messages}
         streamingMessage={streamingMessage}
         onSelectPrompt={handleSelectPrompt}
@@ -417,20 +612,32 @@ export const App: React.FC = () => {
         setInputQuery={setInputQuery}
         onSendMessage={handleSendMessage}
         isSending={isSending}
+        onFileUpload={handleFileUpload}
+        isUploading={isUploading}
+        uploadStatusText={uploadStatusText}
+        documents={documents}
+        onDeleteDocument={handleDeleteDocument}
+        onClearChat={handleClearMessages}
       />
 
       <UserModal
         isOpen={isUserModalOpen}
+        initialTab={userModalTab}
         onClose={() => setIsUserModalOpen(false)}
         currentUser={currentUser}
         onLogin={handleLogin}
         onRegister={handleRegister}
         onLogout={handleLogout}
         onContinueAsGuest={handleContinueAsGuest}
+        onUpdateProfile={handleUpdateProfile}
+        onChangePassword={handleChangePassword}
+        onUploadAvatar={handleUploadAvatar}
+        onDeleteAvatar={handleDeleteAvatar}
       />
     </div>
   );
 };
 
 export default App;
+
 

@@ -49,7 +49,30 @@ class UserResponse(BaseModel):
     email: str
     display_name: str
     avatar_color: Optional[str] = "#3B82F6"
+    avatar_url: Optional[str] = None
     created_at: str
 
     class Config:
         from_attributes = True
+
+class UserProfileUpdateRequest(BaseModel):
+    user_id: str = Field(..., description="ID of the user to update")
+    display_name: Optional[str] = Field(None, min_length=2, max_length=50, description="New display name")
+    avatar_color: Optional[str] = Field(None, max_length=30, description="Avatar hex color or preset name")
+    avatar_url: Optional[str] = Field(None, description="Custom avatar image URL or relative path")
+
+    @field_validator("display_name")
+    @classmethod
+    def validate_display_name(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            clean = v.strip()
+            if len(clean) < 2:
+                raise ValueError("Display name must be at least 2 characters long.")
+            return clean
+        return v
+
+class UserPasswordChangeRequest(BaseModel):
+    user_id: str = Field(..., description="ID of the user")
+    old_password: str = Field(..., min_length=1, description="Current password")
+    new_password: str = Field(..., min_length=6, max_length=128, description="New password (min 6 characters)")
+

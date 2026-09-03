@@ -25,3 +25,16 @@ class ChunkMetadata(BaseModel):
     page_number: Optional[int] = None
     source_excerpt: str
     similarity_score: float
+
+class DocumentChunkItem(BaseModel):
+    chunk_id: str
+    chunk_index: int
+    page_number: Optional[int] = None
+    text: str
+
+class DocumentChunksResponse(BaseModel):
+    document_id: str
+    filename: str
+    total_chunks: int
+    chunks: List[DocumentChunkItem]
+

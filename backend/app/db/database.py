@@ -51,17 +51,20 @@ def init_db():
                 password_hash TEXT NOT NULL,
                 password_salt TEXT NOT NULL,
                 avatar_color TEXT DEFAULT '#3B82F6',
+                avatar_url TEXT DEFAULT '',
                 created_at TEXT NOT NULL
             );
         """)
         
-        # Schema migration check: ensure password columns exist if table was previously created
+        # Schema migration check: ensure password & avatar columns exist if table was previously created
         cursor.execute("PRAGMA table_info(users);")
         columns = [row["name"] for row in cursor.fetchall()]
         if "password_hash" not in columns:
             cursor.execute("ALTER TABLE users ADD COLUMN password_hash TEXT DEFAULT '';")
         if "password_salt" not in columns:
             cursor.execute("ALTER TABLE users ADD COLUMN password_salt TEXT DEFAULT '';")
+        if "avatar_url" not in columns:
+            cursor.execute("ALTER TABLE users ADD COLUMN avatar_url TEXT DEFAULT '';")
         
         # 2. Chat Sessions Table
         cursor.execute("""
@@ -69,7 +72,7 @@ def init_db():
                 id TEXT PRIMARY KEY,
                 user_id TEXT NOT NULL,
                 title TEXT NOT NULL,
-                mode TEXT NOT NULL DEFAULT 'DOCUMENT_RAG',
+                mode TEXT NOT NULL DEFAULT 'WEB_SEARCH',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE

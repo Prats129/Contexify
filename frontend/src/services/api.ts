@@ -62,6 +62,89 @@ export const apiService = {
     return await response.json();
   },
 
+  async updateUserProfile(
+    userId: string,
+    displayName?: string,
+    avatarColor?: string
+  ): Promise<User> {
+    const response = await fetch(`${API_BASE_URL}/user/profile`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_id: userId,
+        display_name: displayName,
+        avatar_color: avatarColor,
+      }),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ detail: 'Profile update failed' }));
+      throw new Error(err.detail || 'Profile update failed');
+    }
+    return await response.json();
+  },
+
+  async changePassword(
+    userId: string,
+    oldPassword: string,
+    newPassword: string
+  ): Promise<{ message: string }> {
+    const response = await fetch(`${API_BASE_URL}/user/change-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_id: userId,
+        old_password: oldPassword,
+        new_password: newPassword,
+      }),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ detail: 'Password change failed' }));
+      throw new Error(err.detail || 'Password change failed');
+    }
+    return await response.json();
+  },
+
+  async uploadAvatar(userId: string, file: File): Promise<User> {
+    const MAX_SIZE = 2 * 1024 * 1024; // 2MB
+    if (file.size > MAX_SIZE) {
+      throw new Error('Avatar image exceeds maximum file size limit of 2MB.');
+    }
+
+    const allowedTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif'];
+    if (!allowedTypes.includes(file.type.toLowerCase()) && !/\.(png|jpg|jpeg|webp|gif)$/i.test(file.name)) {
+      throw new Error('Invalid image format. Allowed formats: PNG, JPG, JPEG, WEBP, GIF.');
+    }
+
+    const formData = new FormData();
+    formData.append('user_id', userId);
+    formData.append('file', file);
+
+    const response = await fetch(`${API_BASE_URL}/user/avatar`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ detail: 'Avatar upload failed' }));
+      throw new Error(err.detail || 'Avatar upload failed');
+    }
+
+    return await response.json();
+  },
+
+  async deleteAvatar(userId: string): Promise<User> {
+    const response = await fetch(`${API_BASE_URL}/user/avatar?user_id=${encodeURIComponent(userId)}`, {
+      method: 'DELETE',
+    });
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ detail: 'Avatar deletion failed' }));
+      throw new Error(err.detail || 'Avatar deletion failed');
+    }
+
+    return await response.json();
+  },
+
   // --- Session Endpoints ---
   async listSessions(userId: string): Promise<ChatSession[]> {
     const response = await fetch(`${API_BASE_URL}/session/list?user_id=${encodeURIComponent(userId)}`);
@@ -74,7 +157,7 @@ export const apiService = {
   async createSession(
     userId: string,
     title: string = 'New Conversation',
-    mode: ChatMode = 'DOCUMENT_RAG'
+    mode: ChatMode = 'WEB_SEARCH'
   ): Promise<ChatSession> {
     const response = await fetch(`${API_BASE_URL}/session/create`, {
       method: 'POST',
@@ -112,6 +195,28 @@ export const apiService = {
     return await response.json();
   },
 
+  async updateSessionMode(sessionId: string, mode: ChatMode): Promise<{ message: string; mode: ChatMode }> {
+    const response = await fetch(`${API_BASE_URL}/session/${encodeURIComponent(sessionId)}/mode`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode }),
+    });
+    if (!response.ok) {
+      throw new Error('Failed to update session mode');
+    }
+    return await response.json();
+  },
+
+  async clearSessionMessages(sessionId: string): Promise<{ message: string }> {
+    const response = await fetch(`${API_BASE_URL}/session/${encodeURIComponent(sessionId)}/messages`, {
+      method: 'DELETE',
+    });
+    if (!response.ok) {
+      throw new Error('Failed to clear messages');
+    }
+    return await response.json();
+  },
+
   async deleteSession(sessionId: string): Promise<{ message: string }> {
     const response = await fetch(`${API_BASE_URL}/session/${encodeURIComponent(sessionId)}`, {
       method: 'DELETE',
@@ -123,10 +228,13 @@ export const apiService = {
   },
 
   // --- Document Endpoints ---
-  async uploadDocument(file: File, sessionId: string): Promise<DocumentUploadResponse> {
+  async uploadDocument(file: File, sessionId: string, userId?: string): Promise<DocumentUploadResponse> {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('session_id', sessionId);
+    if (userId) {
+      formData.append('user_id', userId);
+    }
 
     const response = await fetch(`${API_BASE_URL}/document/upload`, {
       method: 'POST',
@@ -149,6 +257,14 @@ export const apiService = {
     return await response.json();
   },
 
+  async getDocumentChunks(documentId: string): Promise<import('../types').DocumentChunksResponse> {
+    const response = await fetch(`${API_BASE_URL}/document/${encodeURIComponent(documentId)}/chunks`);
+    if (!response.ok) {
+      throw new Error('Failed to fetch document chunks');
+    }
+    return await response.json();
+  },
+
   async deleteDocument(documentId: string, sessionId: string): Promise<{ message: string }> {
     const response = await fetch(
       `${API_BASE_URL}/document/${encodeURIComponent(documentId)}?session_id=${encodeURIComponent(sessionId)}`,
@@ -161,6 +277,7 @@ export const apiService = {
     }
     return await response.json();
   },
+
 
   // --- Streaming Chat (SSE) ---
   async streamChat(
@@ -193,6 +310,14 @@ export const apiService = {
       const reader = response.body.getReader();
       const decoder = new TextDecoder('utf-8');
       let buffer = '';
+      let hasCompleted = false;
+
+      const triggerDone = () => {
+        if (!hasCompleted) {
+          hasCompleted = true;
+          if (onDone) onDone();
+        }
+      };
 
       while (true) {
         const { value, done } = await reader.read();
@@ -216,8 +341,8 @@ export const apiService = {
                 onToken(parsed.data);
               } else if (parsed.event === 'error' && onError) {
                 onError(parsed.data);
-              } else if (parsed.event === 'done' && onDone) {
-                onDone();
+              } else if (parsed.event === 'done') {
+                triggerDone();
               }
             } catch (e) {
               console.error('Failed to parse SSE line:', line, e);
@@ -226,10 +351,11 @@ export const apiService = {
         }
       }
 
-      if (onDone) onDone();
+      triggerDone();
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       if (onError) onError(errorMessage);
     }
   },
 };
+

@@ -1,24 +1,38 @@
 from fastapi import APIRouter, HTTPException, status
 from typing import List
-from pydantic import BaseModel
 from app.schemas.session import (
     ChatSessionCreate,
     ChatSessionResponse,
     ChatSessionUpdate,
-    SessionHistoryResponse
+    SessionHistoryResponse,
+    TitleUpdatePayload,
+    ModeUpdatePayload
 )
 from app.services.chat_history_service import chat_history_service
+from app.services.user_service import user_service
+from app.repositories.session_store import session_store_repo
 
 router = APIRouter()
-
-class TitleUpdatePayload(BaseModel):
-    title: str
 
 @router.post("/create", response_model=ChatSessionResponse, status_code=status.HTTP_201_CREATED)
 async def create_session(req: ChatSessionCreate):
     """
-    Create a new chat conversation thread for a given user.
+    Create a new chat conversation thread for a registered user.
+    Guest users cannot create multiple chat sessions.
     """
+    if not req.user_id or req.user_id.startswith("guest"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Guest users cannot create new chat conversations. Please sign in to create and manage multiple chats."
+        )
+    
+    user = user_service.get_user_by_id(req.user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User account not found. Please log in first."
+        )
+
     session = chat_history_service.create_session(
         user_id=req.user_id,
         title=req.title or "New Conversation",
@@ -31,6 +45,8 @@ async def list_sessions(user_id: str):
     """
     List all chat sessions for a given user ordered by most recently active.
     """
+    if not user_id or user_id.startswith("guest"):
+        return []
     return chat_history_service.list_user_sessions(user_id)
 
 @router.get("/{session_id}/history", response_model=SessionHistoryResponse)
@@ -58,6 +74,22 @@ async def update_session_title(session_id: str, payload: TitleUpdatePayload):
         raise HTTPException(status_code=404, detail="Session not found.")
     return {"message": "Title updated successfully", "title": payload.title.strip()}
 
+@router.patch("/{session_id}/mode")
+async def update_session_mode(session_id: str, payload: ModeUpdatePayload):
+    """
+    Update the active chat mode (DOCUMENT_RAG or WEB_SEARCH) for a session.
+    """
+    session_store_repo.set_session_mode(session_id, payload.mode)
+    return {"message": "Session mode updated successfully", "mode": payload.mode}
+
+@router.delete("/{session_id}/messages")
+async def clear_session_messages(session_id: str):
+    """
+    Clear all messages in a session while keeping documents and the session intact.
+    """
+    chat_history_service.clear_session_messages(session_id)
+    return {"message": f"All messages cleared for session '{session_id}'."}
+
 @router.delete("/{session_id}")
 async def delete_session(session_id: str):
     """
@@ -67,3 +99,4 @@ async def delete_session(session_id: str):
     if not success:
         raise HTTPException(status_code=404, detail="Session not found.")
     return {"message": f"Session '{session_id}' deleted successfully."}
+

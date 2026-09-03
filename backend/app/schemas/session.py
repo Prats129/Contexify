@@ -6,11 +6,18 @@ from app.schemas.document import DocumentMetadata
 class ChatSessionCreate(BaseModel):
     user_id: str
     title: Optional[str] = "New Conversation"
-    mode: Optional[ChatMode] = ChatMode.DOCUMENT_RAG
+    mode: Optional[ChatMode] = ChatMode.WEB_SEARCH
 
 class ChatSessionUpdate(BaseModel):
     title: Optional[str] = None
     mode: Optional[ChatMode] = None
+
+class TitleUpdatePayload(BaseModel):
+    title: str = Field(..., min_length=1, max_length=100, description="New title for the session")
+
+class ModeUpdatePayload(BaseModel):
+    mode: ChatMode = Field(..., description="Target chat mode (DOCUMENT_RAG or WEB_SEARCH)")
+
 
 class ChatSessionResponse(BaseModel):
     id: str

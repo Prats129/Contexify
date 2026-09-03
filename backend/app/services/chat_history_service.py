@@ -16,7 +16,7 @@ class ChatHistoryService:
         user_id: str,
         session_id: Optional[str] = None,
         title: str = "New Conversation",
-        mode: ChatMode = ChatMode.DOCUMENT_RAG
+        mode: ChatMode = ChatMode.WEB_SEARCH
     ) -> ChatSessionResponse:
         session_id = session_id or str(uuid.uuid4())
         now = datetime.utcnow().isoformat()
@@ -136,6 +136,18 @@ class ChatHistoryService:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM chat_sessions WHERE id = ?", (session_id,))
             return cursor.rowcount > 0
+
+    def clear_session_messages(self, session_id: str) -> bool:
+        now = datetime.utcnow().isoformat()
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
+            cursor.execute(
+                "UPDATE chat_sessions SET updated_at = ? WHERE id = ?",
+                (now, session_id)
+            )
+            return True
+
 
     def save_message(
         self,

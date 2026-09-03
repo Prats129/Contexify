@@ -10,6 +10,7 @@ export interface User {
   email: string;
   display_name: string;
   avatar_color?: string;
+  avatar_url?: string | null;
   created_at: string;
 }
 
@@ -24,6 +25,20 @@ export interface UserLoginRequest {
   username_or_email: string;
   password: string;
 }
+
+export interface UserProfileUpdateRequest {
+  user_id: string;
+  display_name?: string;
+  avatar_color?: string;
+  avatar_url?: string | null;
+}
+
+export interface UserPasswordChangeRequest {
+  user_id: string;
+  old_password: string;
+  new_password: string;
+}
+
 
 export interface Citation {
   document_id: string;
@@ -72,6 +87,21 @@ export interface DocumentListResponse {
   documents: DocumentMetadata[];
   total_count: number;
 }
+
+export interface DocumentChunkItem {
+  chunk_id: string;
+  chunk_index: number;
+  page_number?: number | null;
+  text: string;
+}
+
+export interface DocumentChunksResponse {
+  document_id: string;
+  filename: string;
+  total_chunks: number;
+  chunks: DocumentChunkItem[];
+}
+
 
 export interface SessionHistoryResponse {
   session: ChatSession;

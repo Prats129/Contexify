@@ -1,40 +1,95 @@
 import React from 'react';
-import type { ChatMode } from '../../types';
+import {
+  LuGlobe,
+  LuShieldCheck,
+  LuLogIn,
+  LuUserPlus,
+  LuSun,
+  LuMoon,
+  LuEraser,
+} from 'react-icons/lu';
+import { useTheme } from '../../context/ThemeContext';
+import type { ChatMode, User } from '../../types';
 
 interface ChatHeaderProps {
   currentMode: ChatMode;
-  sessionId: string | null;
-  onNewSession: () => void;
+  currentUser: User | null;
+  onOpenUserModal: (tab?: 'login' | 'register') => void;
+  onClearChat?: () => void;
+  hasMessages?: boolean;
 }
 
 export const ChatHeader: React.FC<ChatHeaderProps> = ({
   currentMode,
-  sessionId,
-  onNewSession,
+  currentUser,
+  onOpenUserModal,
+  onClearChat,
+  hasMessages = false,
 }) => {
   const isWeb = currentMode === 'WEB_SEARCH';
+  const { mode, toggleMode } = useTheme();
 
   return (
-    <header className="workspace-header">
-      <div className="header-mode-indicator">
-        <span className={`mode-badge ${isWeb ? 'WEB' : 'RAG'}`}>
-          <i className={`fa-solid ${isWeb ? 'fa-globe' : 'fa-shield-halved'}`}></i>{' '}
+    <header className="h-14 border-b border-(--border-subtle) flex items-center justify-between px-5 bg-(--bg-app)/80 backdrop-blur-md shrink-0">
+      <div className="flex items-center gap-3">
+        <span
+          className={`px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5 border ${isWeb
+            ? 'bg-emerald-500/15 text-emerald-500 dark:text-emerald-400 border-emerald-500/30'
+            : 'bg-primary-light-theme text-primary-theme border-primary-theme'
+            }`}
+        >
+          {isWeb ? <LuGlobe size={14} /> : <LuShieldCheck size={14} />}
           {isWeb ? 'Live Web Search' : 'Document Grounded RAG'}
         </span>
-        <span className="session-tag">
-          Session: <code>{sessionId ? sessionId.substring(0, 8) : '...'}</code>
-        </span>
       </div>
-      <div className="header-actions">
-        <button
-          type="button"
-          className="action-btn"
-          onClick={onNewSession}
-          title="Start New Session"
-        >
-          <i className="fa-solid fa-plus"></i> New Chat
-        </button>
+
+      <div className="flex items-center gap-2.5">
+        {/* Clear Chat Button (only available for authenticated account holders) */}
+        {Boolean(currentUser && hasMessages && onClearChat) && (
+          <button
+            type="button"
+            onClick={onClearChat}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-(--text-muted) hover:text-red-500 hover:bg-red-500/10 rounded-lg cursor-pointer transition-colors"
+            title="Clear message history (keeps documents)"
+          >
+            <LuEraser size={14} />
+            <span className="hidden sm:inline">Clear Chat</span>
+          </button>
+        )}
+
+        {/* Quick Light / Dark Mode Toggle Button (Authenticated Users Only) */}
+        {currentUser && (
+          <button
+            type="button"
+            onClick={toggleMode}
+            className="w-8 h-8 rounded-lg flex items-center justify-center text-(--text-muted) hover:text-(--text-main) bg-(--border-subtle) hover:bg-(--border-hover) cursor-pointer border border-(--border-subtle)"
+            title={mode === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+          >
+            {mode === 'dark' ? <LuSun size={16} /> : <LuMoon size={16} />}
+          </button>
+        )}
+
+        {/* If user is a Guest, show Log In and Sign Up buttons */}
+        {!currentUser && (
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-(--text-main) bg-(--border-subtle) hover:bg-(--border-hover) border border-(--border-subtle) rounded-lg cursor-pointer"
+              onClick={() => onOpenUserModal('login')}
+            >
+              <LuLogIn size={14} /> Log in
+            </button>
+            <button
+              type="button"
+              className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-primary-theme hover:opacity-90 rounded-lg cursor-pointer"
+              onClick={() => onOpenUserModal('register')}
+            >
+              <LuUserPlus size={14} /> Sign up
+            </button>
+          </div>
+        )}
       </div>
     </header>
   );
 };
+

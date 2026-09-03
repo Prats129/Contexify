@@ -10,7 +10,7 @@ class SessionStoreRepository:
         self._sessions: Dict[str, SessionState] = {}
         self._documents: Dict[str, DocumentMetadata] = {}
 
-    def get_or_create_session(self, session_id: str, default_mode: ChatMode = ChatMode.DOCUMENT_RAG, user_id: Optional[str] = None) -> SessionState:
+    def get_or_create_session(self, session_id: str, default_mode: ChatMode = ChatMode.WEB_SEARCH, user_id: Optional[str] = None) -> SessionState:
         if session_id not in self._sessions:
             # Check if exists in DB (logged-in user session)
             db_session = chat_history_service.get_session(session_id)
@@ -65,6 +65,19 @@ class SessionStoreRepository:
 
     def list_all_documents(self) -> List[DocumentMetadata]:
         return list(self._documents.values())
+
+    def get_history_messages(self, session_id: str) -> List[Dict[str, str]]:
+        """Retrieve conversation history for a session from SQLite or in-memory state."""
+        db_messages = chat_history_service.get_session_messages(session_id)
+        if db_messages:
+            return [{"role": m.role, "content": m.content} for m in db_messages]
+        session = self.get_or_create_session(session_id)
+        return [{"role": m.get("role", "user"), "content": m.get("content", "")} for m in session.messages]
+
+    def record_message(self, session_id: str, role: str, content: str):
+        """Record an in-memory message for active/guest sessions."""
+        session = self.get_or_create_session(session_id)
+        session.messages.append({"role": role, "content": content})
 
     def remove_document(self, document_id: str):
         if document_id in self._documents:
