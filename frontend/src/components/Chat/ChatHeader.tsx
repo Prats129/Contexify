@@ -57,15 +57,17 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
           </button>
         )}
 
-        {/* Quick Light / Dark Mode Toggle Button */}
-        <button
-          type="button"
-          onClick={toggleMode}
-          className="w-8 h-8 rounded-lg flex items-center justify-center text-(--text-muted) hover:text-(--text-main) bg-(--border-subtle) hover:bg-(--border-hover) cursor-pointer border border-(--border-subtle)"
-          title={mode === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-        >
-          {mode === 'dark' ? <LuSun size={16} /> : <LuMoon size={16} />}
-        </button>
+        {/* Quick Light / Dark Mode Toggle Button (Authenticated Users Only) */}
+        {currentUser && (
+          <button
+            type="button"
+            onClick={toggleMode}
+            className="w-8 h-8 rounded-lg flex items-center justify-center text-(--text-muted) hover:text-(--text-main) bg-(--border-subtle) hover:bg-(--border-hover) cursor-pointer border border-(--border-subtle)"
+            title={mode === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+          >
+            {mode === 'dark' ? <LuSun size={16} /> : <LuMoon size={16} />}
+          </button>
+        )}
 
         {/* If user is a Guest, show Log In and Sign Up buttons */}
         {!currentUser && (

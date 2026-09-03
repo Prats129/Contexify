@@ -65,7 +65,6 @@ export const UserModal: React.FC<UserModalProps> = ({
 
   // Edit Profile State
   const [editDisplayName, setEditDisplayName] = useState('');
-  const [selectedAvatarColor, setSelectedAvatarColor] = useState('#3B82F6');
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [profileSuccessMsg, setProfileSuccessMsg] = useState<string | null>(null);
 
@@ -119,7 +118,6 @@ export const UserModal: React.FC<UserModalProps> = ({
       setIsAvatarRemoved(false);
       if (currentUser) {
         setEditDisplayName(currentUser.display_name);
-        setSelectedAvatarColor(currentUser.avatar_color || '#3B82F6');
       }
       setActiveTab(initialTab);
     }
@@ -167,7 +165,6 @@ export const UserModal: React.FC<UserModalProps> = ({
     setErrorMessage(null);
     if (currentUser) {
       setEditDisplayName(currentUser.display_name);
-      setSelectedAvatarColor(currentUser.avatar_color || '#3B82F6');
     }
   };
 
@@ -196,7 +193,7 @@ export const UserModal: React.FC<UserModalProps> = ({
 
       // 2. Commit display name & fallback color
       if (onUpdateProfile) {
-        await onUpdateProfile(trimmedName, selectedAvatarColor);
+        await onUpdateProfile(trimmedName, currentUser.avatar_color || currentAccent.primary);
       }
 
       setProfileSuccessMsg('Profile updated successfully!');
@@ -428,7 +425,7 @@ export const UserModal: React.FC<UserModalProps> = ({
                         ) : (
                           <div
                             className="w-12 h-12 rounded-full flex items-center justify-center font-bold text-white text-base shadow-sm shrink-0"
-                            style={{ backgroundColor: selectedAvatarColor }}
+                            style={{ backgroundColor: currentUser.avatar_color || currentAccent.primary }}
                           >
                             {editDisplayName.charAt(0).toUpperCase() || 'U'}
                           </div>
@@ -487,21 +484,6 @@ export const UserModal: React.FC<UserModalProps> = ({
                       required
                       className="bg-(--bg-card) border border-(--border-subtle) focus:border-primary-theme rounded-lg py-1.5 px-3 text-xs outline-none"
                     />
-                  </div>
-
-                  <div className="flex flex-col gap-1">
-                    <label className="text-[11px] text-(--text-muted)">Fallback Avatar Color</label>
-                    <div className="flex items-center gap-2">
-                      {['#3B82F6', '#10B981', '#8B5CF6', '#F59E0B', '#EC4899', '#06B6D4', '#6366F1'].map((c) => (
-                        <button
-                          key={c}
-                          type="button"
-                          className={`w-6 h-6 rounded-full cursor-pointer transition-transform ${selectedAvatarColor === c ? 'scale-125 ring-2 ring-white/50' : 'opacity-70 hover:opacity-100'}`}
-                          style={{ backgroundColor: c }}
-                          onClick={() => setSelectedAvatarColor(c)}
-                        />
-                      ))}
-                    </div>
                   </div>
 
                   <button
@@ -874,26 +856,6 @@ export const UserModal: React.FC<UserModalProps> = ({
                   </button>
                 </form>
               )}
-
-              {/* Theme Quick Preference Bar for Guests */}
-              <div className="p-2.5 bg-(--border-subtle)/50 border border-(--border-subtle) rounded-xl flex items-center justify-between">
-                <span className="text-[11px] text-(--text-muted) flex items-center gap-1.5 font-medium">
-                  <LuPalette size={13} className="text-primary-theme" /> Theme Accent:
-                </span>
-                <div className="flex items-center gap-1.5">
-                  {(['blue', 'purple', 'emerald', 'rose', 'amber'] as AccentColor[]).map((key) => (
-                    <button
-                      key={key}
-                      type="button"
-                      className={`w-4 h-4 rounded-full cursor-pointer ${accent === key ? 'scale-125 ring-2 ring-white/50' : 'opacity-70 hover:opacity-100'
-                        }`}
-                      style={{ backgroundColor: ACCENT_PALETTES[key].primary }}
-                      onClick={() => setAccent(key)}
-                      title={ACCENT_PALETTES[key].label}
-                    />
-                  ))}
-                </div>
-              </div>
 
               {/* Guest Mode Action */}
               <div className="pt-1 border-t border-(--border-subtle) text-center">
