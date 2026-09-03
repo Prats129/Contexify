@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     # API Keys & Models
     GEMINI_API_KEY: str = Field(default="", env="GEMINI_API_KEY")
     DEFAULT_EMBEDDING_MODEL: str = "models/text-embedding-004"
-    DEFAULT_LLM_MODEL: str = "gemini-3.1-flash-lite"
+    DEFAULT_LLM_MODEL: str = "gemini-2.5-flash"
     
     model_config = SettingsConfigDict(
         env_file=".env",
