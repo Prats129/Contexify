@@ -111,3 +111,21 @@ class VerifyOtpLoginRequest(BaseModel):
             raise ValueError("OTP must be a 6-digit numeric code.")
         return clean
 
+class ResetPasswordWithOtpRequest(BaseModel):
+    email_or_username: str = Field(..., min_length=2, description="Registered email or username")
+    otp: str = Field(..., min_length=6, max_length=6, description="6-digit verification code")
+    new_password: str = Field(..., min_length=6, max_length=128, description="New password (min 6 characters)")
+
+    @field_validator("email_or_username")
+    @classmethod
+    def validate_identifier(cls, v: str) -> str:
+        return v.strip().lower()
+
+    @field_validator("otp")
+    @classmethod
+    def validate_otp(cls, v: str) -> str:
+        clean = v.strip()
+        if not re.match(r"^\d{6}$", clean):
+            raise ValueError("OTP must be a 6-digit numeric code.")
+        return clean
+

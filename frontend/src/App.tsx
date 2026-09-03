@@ -532,6 +532,18 @@ export const App: React.FC = () => {
     return await apiService.sendLoginOtp(usernameOrEmail);
   };
 
+  const handleSendPasswordResetOtp = async (usernameOrEmail: string) => {
+    return await apiService.sendPasswordResetOtp(usernameOrEmail);
+  };
+
+  const handleResetPasswordWithOtp = async (
+    usernameOrEmail: string,
+    otp: string,
+    newPassword: string
+  ) => {
+    return await apiService.resetPasswordWithOtp(usernameOrEmail, otp, newPassword);
+  };
+
   const handleRegister = async (
     displayName: string,
     username: string,
@@ -641,6 +653,8 @@ export const App: React.FC = () => {
         onLogin={handleLogin}
         onLoginWithOtp={handleLoginWithOtp}
         onSendOtp={handleSendOtp}
+        onSendPasswordResetOtp={handleSendPasswordResetOtp}
+        onResetPasswordWithOtp={handleResetPasswordWithOtp}
         onRegister={handleRegister}
         onLogout={handleLogout}
         onContinueAsGuest={handleContinueAsGuest}

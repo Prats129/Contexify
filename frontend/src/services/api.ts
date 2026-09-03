@@ -89,6 +89,42 @@ export const apiService = {
     return await response.json();
   },
 
+  async sendPasswordResetOtp(emailOrUsername: string): Promise<SendOtpResponse> {
+    const response = await fetch(`${API_BASE_URL}/user/password-reset/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email_or_username: emailOrUsername,
+      }),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ detail: 'Failed to send password reset code' }));
+      throw new Error(err.detail || 'Failed to send password reset code');
+    }
+    return await response.json();
+  },
+
+  async resetPasswordWithOtp(
+    emailOrUsername: string,
+    otp: string,
+    newPassword: string
+  ): Promise<{ message: string }> {
+    const response = await fetch(`${API_BASE_URL}/user/password-reset/verify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email_or_username: emailOrUsername,
+        otp,
+        new_password: newPassword,
+      }),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ detail: 'Failed to reset password' }));
+      throw new Error(err.detail || 'Failed to reset password');
+    }
+    return await response.json();
+  },
+
   async getCurrentUser(userId: string): Promise<User> {
     const response = await fetch(`${API_BASE_URL}/user/me?user_id=${encodeURIComponent(userId)}`);
     if (!response.ok) {

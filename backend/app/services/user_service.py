@@ -16,7 +16,8 @@ from app.schemas.user import (
     UserLoginRequest,
     SendOtpRequest,
     SendOtpResponse,
-    VerifyOtpLoginRequest
+    VerifyOtpLoginRequest,
+    ResetPasswordWithOtpRequest
 )
 from app.services.email_service import email_service
 from app.core.logging import logger
@@ -523,6 +524,203 @@ class UserService:
                 avatar_url=user["avatar_url"] or None,
                 created_at=user["created_at"]
             )
+
+    async def send_password_reset_otp(self, identifier: str) -> SendOtpResponse:
+        """
+        Generate and send a 6-digit password reset OTP to the user's registered email.
+        """
+        clean_id = identifier.strip().lower()
+
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id, username, email, display_name
+                FROM users
+                WHERE username = ? OR email = ?
+                """,
+                (clean_id, clean_id)
+            )
+            user = cursor.fetchone()
+
+            if not user:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"No registered account found matching '{clean_id}'."
+                )
+
+            user_email = user["email"]
+            user_display_name = user["display_name"]
+            now_ts = time.time()
+
+            # Enforce cooldown on recent active OTP requests
+            cursor.execute(
+                """
+                SELECT expires_at, created_at, is_used
+                FROM email_otps
+                WHERE email = ? AND is_used = 0
+                ORDER BY expires_at DESC
+                LIMIT 1
+                """,
+                (user_email,)
+            )
+            latest_otp = cursor.fetchone()
+
+            if latest_otp:
+                issued_at = float(latest_otp["expires_at"]) - settings.OTP_EXPIRY_SECONDS
+                elapsed = now_ts - issued_at
+                if elapsed < settings.OTP_RESEND_COOLDOWN_SECONDS:
+                    wait_sec = int(settings.OTP_RESEND_COOLDOWN_SECONDS - elapsed)
+                    raise HTTPException(
+                        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                        detail=f"A code was recently sent. Please wait {wait_sec} seconds before requesting a new code."
+                    )
+
+            # Invalidate all prior unused OTPs for this email
+            cursor.execute(
+                "UPDATE email_otps SET is_used = 1 WHERE email = ? AND is_used = 0",
+                (user_email,)
+            )
+
+            # Generate fresh 6-digit OTP
+            otp_code = f"{secrets.randbelow(900000) + 100000}"
+            otp_id = str(uuid.uuid4())
+            expires_at = now_ts + settings.OTP_EXPIRY_SECONDS
+            created_at = datetime.utcnow().isoformat()
+
+            cursor.execute(
+                """
+                INSERT INTO email_otps (id, email, otp_code, expires_at, attempts, is_used, created_at)
+                VALUES (?, ?, ?, ?, 0, 0, ?)
+                """,
+                (otp_id, user_email, otp_code, expires_at, created_at)
+            )
+
+        # Dispatch Password Reset email asynchronously
+        sent = await email_service.send_password_reset_otp_email(
+            to_email=user_email,
+            otp_code=otp_code,
+            display_name=user_display_name
+        )
+
+        if settings.SMTP_HOST and not sent:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to send password reset email. Please check your SMTP server settings or connection."
+            )
+
+        logger.info(f"Dispatched password reset OTP to '{user_email}' for user '{user['username']}'")
+        masked = mask_email(user_email)
+
+        return SendOtpResponse(
+            message=f"A 6-digit password reset code has been sent to {masked}.",
+            email=user_email,
+            masked_email=masked,
+            expires_in_seconds=settings.OTP_EXPIRY_SECONDS,
+            cooldown_seconds=settings.OTP_RESEND_COOLDOWN_SECONDS
+        )
+
+    def reset_password_with_otp(self, req: ResetPasswordWithOtpRequest) -> dict:
+        """
+        Verify OTP code and reset user's password without requiring login.
+        """
+        clean_id = req.email_or_username.strip().lower()
+        clean_otp = req.otp.strip()
+        new_password = req.new_password
+
+        if len(new_password) < 6:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="New password must be at least 6 characters long."
+            )
+
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id, username, email, password_hash, password_salt
+                FROM users
+                WHERE username = ? OR email = ?
+                """,
+                (clean_id, clean_id)
+            )
+            user = cursor.fetchone()
+
+            if not user:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"No account found matching '{clean_id}'."
+                )
+
+            # Prevent using the same existing password
+            if user["password_salt"] and user["password_hash"]:
+                if verify_password(new_password, user["password_salt"], user["password_hash"]):
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="New password cannot be the same as your current password. Please choose a different password."
+                    )
+
+            user_id = user["id"]
+            user_email = user["email"]
+            now_ts = time.time()
+
+            cursor.execute(
+                """
+                SELECT id, otp_code, expires_at, attempts, is_used
+                FROM email_otps
+                WHERE email = ? AND is_used = 0
+                ORDER BY expires_at DESC
+                LIMIT 1
+                """,
+                (user_email,)
+            )
+            otp_record = cursor.fetchone()
+
+            if not otp_record or float(otp_record["expires_at"]) < now_ts:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Verification code has expired or is invalid. Please request a new reset code."
+                )
+
+            current_attempts = int(otp_record["attempts"])
+            if current_attempts >= settings.OTP_MAX_ATTEMPTS:
+                cursor.execute("UPDATE email_otps SET is_used = 1 WHERE id = ?", (otp_record["id"],))
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Too many invalid attempts. This reset code has been revoked. Please request a new one."
+                )
+
+            if not secrets.compare_digest(otp_record["otp_code"].strip(), clean_otp):
+                new_attempts = current_attempts + 1
+                cursor.execute(
+                    "UPDATE email_otps SET attempts = ? WHERE id = ?",
+                    (new_attempts, otp_record["id"])
+                )
+                remaining = max(0, settings.OTP_MAX_ATTEMPTS - new_attempts)
+                if remaining > 0:
+                    detail_msg = f"Invalid verification code. {remaining} attempt{'s' if remaining != 1 else ''} remaining."
+                else:
+                    cursor.execute("UPDATE email_otps SET is_used = 1 WHERE id = ?", (otp_record["id"],))
+                    detail_msg = "Too many invalid attempts. Please request a new reset code."
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=detail_msg
+                )
+
+            # Mark OTP as used
+            cursor.execute("UPDATE email_otps SET is_used = 1 WHERE id = ?", (otp_record["id"],))
+
+            # Update password hash & salt
+            new_salt = secrets.token_hex(16)
+            new_hash = hash_password(new_password, new_salt)
+
+            cursor.execute(
+                "UPDATE users SET password_hash = ?, password_salt = ? WHERE id = ?",
+                (new_hash, new_salt, user_id)
+            )
+
+            logger.info(f"Password reset successfully via OTP for user '{user['username']}' ({user_id})")
+            return {"message": "Password reset successfully. You can now sign in with your new password."}
 
 user_service = UserService()
 

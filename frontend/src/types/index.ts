@@ -56,6 +56,12 @@ export interface VerifyOtpLoginRequest {
   otp: string;
 }
 
+export interface ResetPasswordWithOtpRequest {
+  email_or_username: string;
+  otp: string;
+  new_password: string;
+}
+
 
 export interface Citation {
   document_id: string;

@@ -24,6 +24,7 @@ import {
   LuMailCheck,
   LuArrowLeft,
   LuRefreshCw,
+  LuKeyRound,
 } from 'react-icons/lu';
 import { useTheme, ACCENT_PALETTES, type AccentColor } from '../../context/ThemeContext';
 import type { User, SendOtpResponse } from '../../types';
@@ -36,6 +37,12 @@ interface UserModalProps {
   onLogin?: (usernameOrEmail: string, password: string) => Promise<void>;
   onLoginWithOtp: (usernameOrEmail: string, otp: string) => Promise<void>;
   onSendOtp: (usernameOrEmail: string) => Promise<SendOtpResponse>;
+  onSendPasswordResetOtp?: (usernameOrEmail: string) => Promise<SendOtpResponse>;
+  onResetPasswordWithOtp?: (
+    usernameOrEmail: string,
+    otp: string,
+    newPassword: string
+  ) => Promise<{ message: string }>;
   onRegister: (
     displayName: string,
     username: string,
@@ -58,6 +65,8 @@ export const UserModal: React.FC<UserModalProps> = ({
   onLogin,
   onLoginWithOtp,
   onSendOtp,
+  onSendPasswordResetOtp,
+  onResetPasswordWithOtp,
   onRegister,
   onLogout,
   onContinueAsGuest,
@@ -70,6 +79,7 @@ export const UserModal: React.FC<UserModalProps> = ({
   const [activeTab, setActiveTab] = useState<'login' | 'register'>('login');
   const avatarFileInputRef = useRef<HTMLInputElement>(null);
   const otpInputRef = useRef<HTMLInputElement>(null);
+  const resetOtpInputRef = useRef<HTMLInputElement>(null);
 
   // Edit Profile State
   const [editDisplayName, setEditDisplayName] = useState('');
@@ -81,7 +91,7 @@ export const UserModal: React.FC<UserModalProps> = ({
   const [avatarPreviewUrl, setAvatarPreviewUrl] = useState<string | null>(null);
   const [isAvatarRemoved, setIsAvatarRemoved] = useState(false);
 
-  // Change Password State
+  // Change Password State (Logged in)
   const [isChangingPassword, setIsChangingPassword] = useState(false);
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -89,12 +99,23 @@ export const UserModal: React.FC<UserModalProps> = ({
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [passwordSuccessMsg, setPasswordSuccessMsg] = useState<string | null>(null);
 
-  // Login State (Password primary by default, OTP as secondary option)
-  const [loginMethod, setLoginMethod] = useState<'password' | 'otp'>('password');
+  // Login & OTP State
+  const [loginMethod, setLoginMethod] = useState<'password' | 'otp' | 'forgot_password'>('password');
   const [otpStep, setOtpStep] = useState<'request' | 'verify'>('request');
   const [otpCode, setOtpCode] = useState('');
   const [otpMaskedEmail, setOtpMaskedEmail] = useState('');
   const [resendCountdown, setResendCountdown] = useState(0);
+
+  // Forgot & Reset Password State (Logged out)
+  const [resetStep, setResetStep] = useState<'request' | 'verify_and_set'>('request');
+  const [resetIdentifier, setResetIdentifier] = useState('');
+  const [resetOtp, setResetOtp] = useState('');
+  const [resetNewPassword, setResetNewPassword] = useState('');
+  const [resetConfirmPassword, setResetConfirmPassword] = useState('');
+  const [showResetNewPassword, setShowResetNewPassword] = useState(false);
+  const [showResetConfirmPassword, setShowResetConfirmPassword] = useState(false);
+  const [resetMaskedEmail, setResetMaskedEmail] = useState('');
+  const [authSuccessMsg, setAuthSuccessMsg] = useState<string | null>(null);
 
   // Password Login State
   const [loginIdentifier, setLoginIdentifier] = useState('');
@@ -126,12 +147,21 @@ export const UserModal: React.FC<UserModalProps> = ({
       setErrorMessage(null);
       setProfileSuccessMsg(null);
       setPasswordSuccessMsg(null);
+      setAuthSuccessMsg(null);
       setLoginIdentifier('');
       setLoginPassword('');
       setLoginMethod('password');
       setOtpStep('request');
       setOtpCode('');
       setOtpMaskedEmail('');
+      setResetStep('request');
+      setResetIdentifier('');
+      setResetOtp('');
+      setResetNewPassword('');
+      setResetConfirmPassword('');
+      setShowResetNewPassword(false);
+      setShowResetConfirmPassword(false);
+      setResetMaskedEmail('');
       setResendCountdown(0);
       setRegDisplayName('');
       setRegUsername('');
@@ -315,6 +345,95 @@ export const UserModal: React.FC<UserModalProps> = ({
     try {
       setIsSubmitting(true);
       await onLoginWithOtp(identifier, code);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setErrorMessage(msg);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleSendResetOtpSubmit = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setErrorMessage(null);
+    setAuthSuccessMsg(null);
+
+    const identifier = resetIdentifier.trim();
+    if (!identifier) {
+      setErrorMessage('Please enter your registered email or username.');
+      return;
+    }
+
+    if (!onSendPasswordResetOtp) {
+      setErrorMessage('Password reset service is not available.');
+      return;
+    }
+
+    try {
+      setIsSubmitting(true);
+      const res = await onSendPasswordResetOtp(identifier);
+      setResetMaskedEmail(res.masked_email || res.email);
+      setResendCountdown(res.cooldown_seconds || 30);
+      setResetStep('verify_and_set');
+      setResetOtp('');
+      setResetNewPassword('');
+      setResetConfirmPassword('');
+      setTimeout(() => resetOtpInputRef.current?.focus(), 100);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setErrorMessage(msg);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleResetPasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMessage(null);
+    setAuthSuccessMsg(null);
+
+    const identifier = resetIdentifier.trim();
+    const otp = resetOtp.trim();
+    const newPwd = resetNewPassword;
+    const confirmPwd = resetConfirmPassword;
+
+    if (!identifier) {
+      setErrorMessage('Account identifier is missing. Please start over.');
+      setResetStep('request');
+      return;
+    }
+
+    if (!otp || otp.length !== 6) {
+      setErrorMessage('Please enter the complete 6-digit verification code.');
+      return;
+    }
+
+    if (!newPwd || newPwd.length < 6) {
+      setErrorMessage('New password must be at least 6 characters long.');
+      return;
+    }
+
+    if (newPwd !== confirmPwd) {
+      setErrorMessage('New passwords do not match. Please re-enter.');
+      return;
+    }
+
+    if (!onResetPasswordWithOtp) {
+      setErrorMessage('Password reset service is not available.');
+      return;
+    }
+
+    try {
+      setIsSubmitting(true);
+      const res = await onResetPasswordWithOtp(identifier, otp, newPwd);
+      setAuthSuccessMsg(res.message || 'Password reset successfully! Please sign in with your new password.');
+      setLoginIdentifier(identifier);
+      setLoginPassword('');
+      setLoginMethod('password');
+      setResetStep('request');
+      setResetOtp('');
+      setResetNewPassword('');
+      setResetConfirmPassword('');
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       setErrorMessage(msg);
@@ -782,7 +901,13 @@ export const UserModal: React.FC<UserModalProps> = ({
                 </button>
               </div>
 
-              {/* Error Alert */}
+              {/* Status Alerts for Logged-out Users */}
+              {authSuccessMsg && (
+                <div className="flex items-center gap-2 p-2.5 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-xs text-emerald-500">
+                  <LuCheck size={15} className="shrink-0" />
+                  <span>{authSuccessMsg}</span>
+                </div>
+              )}
               {errorMessage && (
                 <div className="flex items-center gap-2 p-2.5 bg-red-500/10 border border-red-500/30 rounded-xl text-xs text-red-500">
                   <LuCircleAlert size={15} className="shrink-0" />
@@ -813,7 +938,22 @@ export const UserModal: React.FC<UserModalProps> = ({
                       </div>
 
                       <div className="flex flex-col gap-1">
-                        <label className="text-xs text-(--text-main) font-medium">Password *</label>
+                        <div className="flex items-center justify-between">
+                          <label className="text-xs text-(--text-main) font-medium">Password *</label>
+                          <button
+                            type="button"
+                            className="text-[11px] text-primary-theme hover:underline cursor-pointer"
+                            onClick={() => {
+                              setLoginMethod('forgot_password');
+                              setResetStep('request');
+                              setResetIdentifier(loginIdentifier);
+                              setErrorMessage(null);
+                              setAuthSuccessMsg(null);
+                            }}
+                          >
+                            Forgot Password?
+                          </button>
+                        </div>
                         <div className="relative flex items-center">
                           <LuLock size={15} className="absolute left-3 text-(--text-muted) pointer-events-none" />
                           <input
@@ -864,13 +1004,14 @@ export const UserModal: React.FC<UserModalProps> = ({
                           setLoginMethod('otp');
                           setOtpStep('request');
                           setErrorMessage(null);
+                          setAuthSuccessMsg(null);
                         }}
                         className="w-full flex items-center justify-center gap-2 py-2 px-3 bg-(--border-subtle)/70 hover:bg-(--border-subtle) border border-(--border-subtle) text-(--text-main) rounded-xl text-xs font-medium cursor-pointer transition-all"
                       >
                         <LuMail size={14} className="text-primary-theme" /> Sign In with Email OTP
                       </button>
                     </form>
-                  ) : (
+                  ) : loginMethod === 'otp' ? (
                     /* SECONDARY METHOD: EMAIL OTP */
                     otpStep === 'request' ? (
                       /* STEP 1: REQUEST OTP */
@@ -885,6 +1026,7 @@ export const UserModal: React.FC<UserModalProps> = ({
                             onClick={() => {
                               setLoginMethod('password');
                               setErrorMessage(null);
+                              setAuthSuccessMsg(null);
                             }}
                           >
                             <LuLock size={12} /> Use Password
@@ -1016,6 +1158,205 @@ export const UserModal: React.FC<UserModalProps> = ({
                             }}
                           >
                             Password sign in
+                          </button>
+                        </div>
+                      </form>
+                    )
+                  ) : (
+                    /* TERTIARY METHOD: FORGOT & RESET PASSWORD */
+                    resetStep === 'request' ? (
+                      /* RESET STEP 1: REQUEST CODE */
+                      <form onSubmit={handleSendResetOtpSubmit} className="flex flex-col gap-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-semibold text-(--text-main) flex items-center gap-1.5">
+                            <LuKeyRound size={14} className="text-primary-theme" /> Reset Password
+                          </span>
+                          <button
+                            type="button"
+                            className="text-[11px] text-primary-theme hover:underline cursor-pointer flex items-center gap-1"
+                            onClick={() => {
+                              setLoginMethod('password');
+                              setErrorMessage(null);
+                              setAuthSuccessMsg(null);
+                            }}
+                          >
+                            <LuLock size={12} /> Back to Sign In
+                          </button>
+                        </div>
+
+                        <div className="flex flex-col gap-1">
+                          <label className="text-xs text-(--text-main) font-medium">Registered Username or Email *</label>
+                          <div className="relative flex items-center">
+                            <LuMail size={15} className="absolute left-3 text-(--text-muted) pointer-events-none" />
+                            <input
+                              type="text"
+                              value={resetIdentifier}
+                              onChange={(e) => setResetIdentifier(e.target.value)}
+                              placeholder="Enter username or email"
+                              required
+                              autoComplete="username email"
+                              autoFocus
+                              className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-3 text-xs outline-none transition-colors"
+                            />
+                          </div>
+                          <p className="text-[11px] text-(--text-muted) mt-0.5">
+                            We'll send a 6-digit password reset code to your registered email.
+                          </p>
+                        </div>
+
+                        <button
+                          type="submit"
+                          className="mt-1 w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-primary-theme hover:opacity-90 disabled:opacity-50 text-white rounded-xl text-xs font-semibold cursor-pointer transition-all shadow-sm"
+                          disabled={isSubmitting || !resetIdentifier.trim()}
+                        >
+                          {isSubmitting ? (
+                            <>
+                              <LuLoader size={15} className="icon-spin" /> Sending Code...
+                            </>
+                          ) : (
+                            <>
+                              <LuKeyRound size={15} /> Send Reset Code
+                            </>
+                          )}
+                        </button>
+                      </form>
+                    ) : (
+                      /* RESET STEP 2: VERIFY CODE & SET NEW PASSWORD */
+                      <form onSubmit={handleResetPasswordSubmit} className="flex flex-col gap-3">
+                        <div className="bg-(--border-subtle)/60 border border-(--border-subtle) rounded-xl p-3 flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <div className="w-8 h-8 rounded-lg bg-primary-theme/15 text-primary-theme flex items-center justify-center shrink-0">
+                              <LuMailCheck size={16} />
+                            </div>
+                            <div className="min-w-0">
+                              <div className="text-[11px] text-(--text-muted)">Reset code sent to</div>
+                              <div className="text-xs font-semibold text-(--text-main) truncate">{resetMaskedEmail}</div>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setResetStep('request');
+                              setErrorMessage(null);
+                            }}
+                            className="text-[11px] font-medium text-primary-theme hover:underline shrink-0 cursor-pointer flex items-center gap-1"
+                          >
+                            <LuArrowLeft size={12} /> Change
+                          </button>
+                        </div>
+
+                        <div className="flex flex-col gap-1">
+                          <label className="text-xs text-(--text-main) font-medium text-center">
+                            Enter 6-Digit Reset Code *
+                          </label>
+                          <input
+                            ref={resetOtpInputRef}
+                            type="text"
+                            inputMode="numeric"
+                            pattern="[0-9]*"
+                            maxLength={6}
+                            value={resetOtp}
+                            onChange={(e) => {
+                              const val = e.target.value.replace(/\D/g, '').slice(0, 6);
+                              setResetOtp(val);
+                            }}
+                            placeholder="000000"
+                            required
+                            autoComplete="one-time-code"
+                            autoFocus
+                            className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 px-4 text-center font-mono text-lg tracking-[0.4em] outline-none font-bold text-(--text-main) transition-all"
+                          />
+                        </div>
+
+                        <div className="flex flex-col gap-1">
+                          <label className="text-xs text-(--text-main) font-medium">New Password * (min 6 characters)</label>
+                          <div className="relative flex items-center">
+                            <LuLock size={15} className="absolute left-3 text-(--text-muted) pointer-events-none" />
+                            <input
+                              type={showResetNewPassword ? 'text' : 'password'}
+                              value={resetNewPassword}
+                              onChange={(e) => setResetNewPassword(e.target.value)}
+                              placeholder="Enter new password"
+                              required
+                              minLength={6}
+                              autoComplete="new-password"
+                              className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-9 text-xs outline-none transition-colors"
+                            />
+                            <button
+                              type="button"
+                              className="absolute right-3 text-(--text-muted) hover:text-(--text-main) cursor-pointer"
+                              onClick={() => setShowResetNewPassword((prev) => !prev)}
+                              title={showResetNewPassword ? 'Hide password' : 'Show password'}
+                            >
+                              {showResetNewPassword ? <LuEyeOff size={14} /> : <LuEye size={14} />}
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-col gap-1">
+                          <label className="text-xs text-(--text-main) font-medium">Confirm New Password *</label>
+                          <div className="relative flex items-center">
+                            <LuLock size={15} className="absolute left-3 text-(--text-muted) pointer-events-none" />
+                            <input
+                              type={showResetConfirmPassword ? 'text' : 'password'}
+                              value={resetConfirmPassword}
+                              onChange={(e) => setResetConfirmPassword(e.target.value)}
+                              placeholder="Confirm new password"
+                              required
+                              minLength={6}
+                              autoComplete="new-password"
+                              className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-9 text-xs outline-none transition-colors"
+                            />
+                            <button
+                              type="button"
+                              className="absolute right-3 text-(--text-muted) hover:text-(--text-main) cursor-pointer"
+                              onClick={() => setShowResetConfirmPassword((prev) => !prev)}
+                              title={showResetConfirmPassword ? 'Hide password' : 'Show password'}
+                            >
+                              {showResetConfirmPassword ? <LuEyeOff size={14} /> : <LuEye size={14} />}
+                            </button>
+                          </div>
+                        </div>
+
+                        <button
+                          type="submit"
+                          className="mt-1 w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-primary-theme hover:opacity-90 disabled:opacity-50 text-white rounded-xl text-xs font-semibold cursor-pointer transition-all shadow-sm"
+                          disabled={isSubmitting || resetOtp.length !== 6 || resetNewPassword.length < 6}
+                        >
+                          {isSubmitting ? (
+                            <>
+                              <LuLoader size={15} className="icon-spin" /> Resetting Password...
+                            </>
+                          ) : (
+                            <>
+                              <LuKeyRound size={15} /> Reset Password
+                            </>
+                          )}
+                        </button>
+
+                        <div className="flex items-center justify-between text-[11px] text-(--text-muted) pt-1 border-t border-(--border-subtle)/50">
+                          {resendCountdown > 0 ? (
+                            <span>Resend in {resendCountdown}s</span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => handleSendResetOtpSubmit()}
+                              disabled={isSubmitting}
+                              className="text-primary-theme hover:underline flex items-center gap-1 cursor-pointer font-medium"
+                            >
+                              <LuRefreshCw size={11} /> Resend code
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            className="text-(--text-muted) hover:text-(--text-main) underline cursor-pointer"
+                            onClick={() => {
+                              setLoginMethod('password');
+                              setErrorMessage(null);
+                            }}
+                          >
+                            Cancel
                           </button>
                         </div>
                       </form>
