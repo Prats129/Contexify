@@ -9,7 +9,8 @@ from app.schemas.user import (
     SendOtpRequest,
     SendOtpResponse,
     VerifyOtpLoginRequest,
-    ResetPasswordWithOtpRequest
+    ResetPasswordWithOtpRequest,
+    GoogleAuthRequest
 )
 from app.services.user_service import user_service
 
@@ -28,6 +29,13 @@ async def login(req: UserLoginRequest):
     Authenticate an existing user using username/email and password.
     """
     return user_service.authenticate_user(req)
+
+@router.post("/auth/google", response_model=UserResponse, status_code=status.HTTP_200_OK)
+async def auth_google(req: GoogleAuthRequest):
+    """
+    Authenticate or register a user with Google OAuth credentials.
+    """
+    return await user_service.authenticate_with_google(req)
 
 @router.post("/otp/send", response_model=SendOtpResponse, status_code=status.HTTP_200_OK)
 async def send_otp(req: SendOtpRequest):

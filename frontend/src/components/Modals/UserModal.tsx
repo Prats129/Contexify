@@ -27,7 +27,28 @@ import {
   LuKeyRound,
 } from 'react-icons/lu';
 import { useTheme, ACCENT_PALETTES, type AccentColor } from '../../context/ThemeContext';
-import type { User, SendOtpResponse } from '../../types';
+import type { User, SendOtpResponse, GoogleAuthRequest } from '../../types';
+
+const GoogleIcon: React.FC = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" className="shrink-0">
+    <path
+      fill="#4285F4"
+      d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"
+    />
+    <path
+      fill="#34A853"
+      d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.34 24 12 24z"
+    />
+    <path
+      fill="#FBBC05"
+      d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.18 0 9.99 0 12s.45 3.82 1.25 5.42l4.03-3.15z"
+    />
+    <path
+      fill="#EA4335"
+      d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.34 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z"
+    />
+  </svg>
+);
 
 interface UserModalProps {
   isOpen: boolean;
@@ -36,6 +57,7 @@ interface UserModalProps {
   initialTab?: 'login' | 'register';
   onLogin?: (usernameOrEmail: string, password: string) => Promise<void>;
   onLoginWithOtp: (usernameOrEmail: string, otp: string) => Promise<void>;
+  onGoogleAuth?: (data: GoogleAuthRequest) => Promise<void>;
   onSendOtp: (usernameOrEmail: string) => Promise<SendOtpResponse>;
   onSendPasswordResetOtp?: (usernameOrEmail: string) => Promise<SendOtpResponse>;
   onResetPasswordWithOtp?: (
@@ -64,6 +86,7 @@ export const UserModal: React.FC<UserModalProps> = ({
   initialTab = 'login',
   onLogin,
   onLoginWithOtp,
+  onGoogleAuth,
   onSendOtp,
   onSendPasswordResetOtp,
   onResetPasswordWithOtp,
@@ -440,6 +463,82 @@ export const UserModal: React.FC<UserModalProps> = ({
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  const handleGoogleSignInClick = async () => {
+    setErrorMessage(null);
+    setAuthSuccessMsg(null);
+
+    if (!onGoogleAuth) {
+      setErrorMessage('Google Sign-In is not configured.');
+      return;
+    }
+
+    const clientId =
+      (import.meta as unknown as { env?: { VITE_GOOGLE_CLIENT_ID?: string } }).env?.VITE_GOOGLE_CLIENT_ID || '';
+
+    // Direct Centered Popup Window with explicit width & height
+    if (clientId) {
+      try {
+        setIsSubmitting(true);
+        const redirectUri = window.location.origin;
+        const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=token&scope=${encodeURIComponent('openid email profile')}&prompt=select_account`;
+        const width = 460;
+        const height = 520;
+        const left = Math.max(0, Math.round(window.screenX + (window.outerWidth - width) / 2));
+        const top = Math.max(0, Math.round(window.screenY + (window.outerHeight - height) / 2));
+        const popup = window.open(
+          authUrl,
+          'google_oauth_popup',
+          `popup=1,width=${width},height=${height},left=${left},top=${top},toolbar=0,menubar=0,location=0,status=0,scrollbars=1,resizable=1`
+        );
+
+        if (popup) {
+          const interval = setInterval(async () => {
+            try {
+              if (!popup || popup.closed) {
+                clearInterval(interval);
+                setIsSubmitting(false);
+                return;
+              }
+              if (popup.location.href.includes(window.location.origin)) {
+                const hash = popup.location.hash;
+                if (hash.includes('access_token=')) {
+                  clearInterval(interval);
+                  popup.close();
+                  const params = new URLSearchParams(hash.replace('#', ''));
+                  const accessToken = params.get('access_token');
+                  if (accessToken) {
+                    const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+                      headers: { Authorization: `Bearer ${accessToken}` },
+                    });
+                    if (res.ok) {
+                      const info = await res.json();
+                      await onGoogleAuth({
+                        email: info.email,
+                        name: info.name,
+                        picture: info.picture,
+                        google_id: info.sub,
+                      });
+                      onClose();
+                    }
+                  }
+                }
+              }
+            } catch {
+              // Cross-origin wait until redirected back to localhost
+            }
+          }, 400);
+          return;
+        }
+      } catch (err) {
+        console.warn('Popup window error:', err);
+      } finally {
+        setIsSubmitting(false);
+      }
+    }
+
+    setIsSubmitting(false);
   };
 
   const handleLoginSubmit = async (e: React.FormEvent) => {
@@ -920,97 +1019,116 @@ export const UserModal: React.FC<UserModalProps> = ({
                 <>
                   {loginMethod === 'password' ? (
                     /* PRIMARY METHOD: PASSWORD LOGIN */
-                    <form onSubmit={handleLoginSubmit} className="flex flex-col gap-3">
-                      <div className="flex flex-col gap-1">
-                        <label className="text-xs text-(--text-main) font-medium">Username or Email *</label>
-                        <div className="relative flex items-center">
-                          <LuUser size={15} className="absolute left-3 text-(--text-muted) pointer-events-none" />
-                          <input
-                            type="text"
-                            value={loginIdentifier}
-                            onChange={(e) => setLoginIdentifier(e.target.value)}
-                            placeholder="Enter username or email"
-                            required
-                            autoComplete="username"
-                            className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-3 text-xs outline-none transition-colors"
-                          />
-                        </div>
-                      </div>
-
-                      <div className="flex flex-col gap-1">
-                        <div className="flex items-center justify-between">
-                          <label className="text-xs text-(--text-main) font-medium">Password *</label>
-                          <button
-                            type="button"
-                            className="text-[11px] text-primary-theme hover:underline cursor-pointer"
-                            onClick={() => {
-                              setLoginMethod('forgot_password');
-                              setResetStep('request');
-                              setResetIdentifier(loginIdentifier);
-                              setErrorMessage(null);
-                              setAuthSuccessMsg(null);
-                            }}
-                          >
-                            Forgot Password?
-                          </button>
-                        </div>
-                        <div className="relative flex items-center">
-                          <LuLock size={15} className="absolute left-3 text-(--text-muted) pointer-events-none" />
-                          <input
-                            type={showLoginPassword ? 'text' : 'password'}
-                            value={loginPassword}
-                            onChange={(e) => setLoginPassword(e.target.value)}
-                            placeholder="Enter password"
-                            required
-                            autoComplete="current-password"
-                            className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-9 text-xs outline-none transition-colors"
-                          />
-                          <button
-                            type="button"
-                            className="absolute right-3 text-(--text-muted) hover:text-(--text-main) cursor-pointer"
-                            onClick={() => setShowLoginPassword((prev) => !prev)}
-                            title={showLoginPassword ? 'Hide password' : 'Show password'}
-                          >
-                            {showLoginPassword ? <LuEyeOff size={14} /> : <LuEye size={14} />}
-                          </button>
-                        </div>
-                      </div>
-
+                    <div className="flex flex-col gap-3">
+                      {/* Google One-Click Sign In */}
                       <button
-                        type="submit"
-                        className="mt-1 w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-primary-theme hover:opacity-90 disabled:opacity-50 text-white rounded-xl text-xs font-semibold cursor-pointer transition-all shadow-sm"
+                        type="button"
+                        onClick={handleGoogleSignInClick}
                         disabled={isSubmitting}
+                        className="w-full flex items-center justify-center gap-2.5 py-2.5 px-4 bg-(--border-subtle) hover:bg-(--border-hover) border border-(--border-subtle) text-(--text-main) rounded-xl text-xs font-semibold cursor-pointer transition-all shadow-sm"
                       >
-                        {isSubmitting ? (
-                          <>
-                            <LuLoader size={15} className="icon-spin" /> Signing In...
-                          </>
-                        ) : (
-                          <>
-                            <LuLogIn size={15} /> Sign In to Account
-                          </>
-                        )}
+                        <GoogleIcon />
+                        <span>Continue with Google</span>
                       </button>
 
                       <div className="flex items-center gap-2 my-0.5">
                         <div className="h-px bg-(--border-subtle) flex-1" />
-                        <span className="text-[10px] uppercase font-semibold text-(--text-muted) tracking-wider">or</span>
+                        <span className="text-[10px] uppercase font-semibold text-(--text-muted) tracking-wider">or with credentials</span>
                         <div className="h-px bg-(--border-subtle) flex-1" />
                       </div>
 
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setLoginMethod('otp');
-                          setOtpStep('request');
-                          setErrorMessage(null);
-                          setAuthSuccessMsg(null);
-                        }}
-                        className="w-full flex items-center justify-center gap-2 py-2 px-3 bg-(--border-subtle)/70 hover:bg-(--border-subtle) border border-(--border-subtle) text-(--text-main) rounded-xl text-xs font-medium cursor-pointer transition-all"
-                      >
-                        <LuMail size={14} className="text-primary-theme" /> Sign In with Email OTP
-                      </button>
-                    </form>
+                      <form onSubmit={handleLoginSubmit} className="flex flex-col gap-3">
+                        <div className="flex flex-col gap-1">
+                          <label className="text-xs text-(--text-main) font-medium">Username or Email *</label>
+                          <div className="relative flex items-center">
+                            <LuUser size={15} className="absolute left-3 text-(--text-muted) pointer-events-none" />
+                            <input
+                              type="text"
+                              value={loginIdentifier}
+                              onChange={(e) => setLoginIdentifier(e.target.value)}
+                              placeholder="Enter username or email"
+                              required
+                              autoComplete="username"
+                              className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-3 text-xs outline-none transition-colors"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="flex flex-col gap-1">
+                          <div className="flex items-center justify-between">
+                            <label className="text-xs text-(--text-main) font-medium">Password *</label>
+                            <button
+                              type="button"
+                              className="text-[11px] text-primary-theme hover:underline cursor-pointer"
+                              onClick={() => {
+                                setLoginMethod('forgot_password');
+                                setResetStep('request');
+                                setResetIdentifier(loginIdentifier);
+                                setErrorMessage(null);
+                                setAuthSuccessMsg(null);
+                              }}
+                            >
+                              Forgot Password?
+                            </button>
+                          </div>
+                          <div className="relative flex items-center">
+                            <LuLock size={15} className="absolute left-3 text-(--text-muted) pointer-events-none" />
+                            <input
+                              type={showLoginPassword ? 'text' : 'password'}
+                              value={loginPassword}
+                              onChange={(e) => setLoginPassword(e.target.value)}
+                              placeholder="Enter password"
+                              required
+                              autoComplete="current-password"
+                              className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-9 text-xs outline-none transition-colors"
+                            />
+                            <button
+                              type="button"
+                              className="absolute right-3 text-(--text-muted) hover:text-(--text-main) cursor-pointer"
+                              onClick={() => setShowLoginPassword((prev) => !prev)}
+                              title={showLoginPassword ? 'Hide password' : 'Show password'}
+                            >
+                              {showLoginPassword ? <LuEyeOff size={14} /> : <LuEye size={14} />}
+                            </button>
+                          </div>
+                        </div>
+
+                        <button
+                          type="submit"
+                          className="mt-1 w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-primary-theme hover:opacity-90 disabled:opacity-50 text-white rounded-xl text-xs font-semibold cursor-pointer transition-all shadow-sm"
+                          disabled={isSubmitting}
+                        >
+                          {isSubmitting ? (
+                            <>
+                              <LuLoader size={15} className="icon-spin" /> Signing In...
+                            </>
+                          ) : (
+                            <>
+                              <LuLogIn size={15} /> Sign In to Account
+                            </>
+                          )}
+                        </button>
+
+                        <div className="flex items-center gap-2 my-0.5">
+                          <div className="h-px bg-(--border-subtle) flex-1" />
+                          <span className="text-[10px] uppercase font-semibold text-(--text-muted) tracking-wider">or</span>
+                          <div className="h-px bg-(--border-subtle) flex-1" />
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setLoginMethod('otp');
+                            setOtpStep('request');
+                            setErrorMessage(null);
+                            setAuthSuccessMsg(null);
+                          }}
+                          className="w-full flex items-center justify-center gap-2 py-2 px-3 bg-(--border-subtle)/70 hover:bg-(--border-subtle) border border-(--border-subtle) text-(--text-main) rounded-xl text-xs font-medium cursor-pointer transition-all"
+                        >
+                          <LuMail size={14} className="text-primary-theme" /> Sign In with Email OTP
+                        </button>
+                      </form>
+                    </div>
                   ) : loginMethod === 'otp' ? (
                     /* SECONDARY METHOD: EMAIL OTP */
                     otpStep === 'request' ? (
@@ -1367,96 +1485,115 @@ export const UserModal: React.FC<UserModalProps> = ({
 
               {/* TAB 2: REGISTER */}
               {activeTab === 'register' && (
-                <form onSubmit={handleRegisterSubmit} className="flex flex-col gap-2.5">
-                  <div className="flex flex-col gap-1">
-                    <label className="text-xs text-(--text-main) font-medium">Full Name *</label>
-                    <div className="relative flex items-center">
-                      <LuIdCard size={15} className="absolute left-3 text-(--text-muted) pointer-events-none" />
-                      <input
-                        type="text"
-                        value={regDisplayName}
-                        onChange={(e) => setRegDisplayName(e.target.value)}
-                        placeholder="Enter full name"
-                        required
-                        autoComplete="name"
-                        className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-3 text-xs outline-none"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="flex flex-col gap-1">
-                    <label className="text-xs text-(--text-main) font-medium">Username *</label>
-                    <div className="relative flex items-center">
-                      <LuAtSign size={15} className="absolute left-3 text-(--text-muted) pointer-events-none" />
-                      <input
-                        type="text"
-                        value={regUsername}
-                        onChange={(e) => setRegUsername(e.target.value)}
-                        placeholder="Choose unique username (e.g. alex_smith)"
-                        required
-                        autoComplete="username"
-                        className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-3 text-xs outline-none"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="flex flex-col gap-1">
-                    <label className="text-xs text-(--text-main) font-medium">Email Address *</label>
-                    <div className="relative flex items-center">
-                      <LuMail size={15} className="absolute left-3 text-(--text-muted) pointer-events-none" />
-                      <input
-                        type="email"
-                        value={regEmail}
-                        onChange={(e) => setRegEmail(e.target.value)}
-                        placeholder="Enter email"
-                        required
-                        autoComplete="email"
-                        className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-3 text-xs outline-none"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="flex flex-col gap-1">
-                    <label className="text-xs text-(--text-main) font-medium">Password * (min 6 chars)</label>
-                    <div className="relative flex items-center">
-                      <LuLock size={15} className="absolute left-3 text-(--text-muted) pointer-events-none" />
-                      <input
-                        type={showRegPassword ? 'text' : 'password'}
-                        value={regPassword}
-                        onChange={(e) => setRegPassword(e.target.value)}
-                        placeholder="Create secure password"
-                        required
-                        minLength={6}
-                        autoComplete="new-password"
-                        className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-9 text-xs outline-none"
-                      />
-                      <button
-                        type="button"
-                        className="absolute right-3 text-(--text-muted) hover:text-(--text-main) cursor-pointer"
-                        onClick={() => setShowRegPassword((prev) => !prev)}
-                        title={showRegPassword ? 'Hide password' : 'Show password'}
-                      >
-                        {showRegPassword ? <LuEyeOff size={14} /> : <LuEye size={14} />}
-                      </button>
-                    </div>
-                  </div>
-
+                <div className="flex flex-col gap-3">
+                  {/* Google One-Click Sign Up */}
                   <button
-                    type="submit"
-                    className="mt-1 w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-primary-theme hover:opacity-90 disabled:opacity-50 text-white rounded-xl text-xs font-semibold cursor-pointer"
+                    type="button"
+                    onClick={handleGoogleSignInClick}
                     disabled={isSubmitting}
+                    className="w-full flex items-center justify-center gap-2.5 py-2.5 px-4 bg-(--border-subtle) hover:bg-(--border-hover) border border-(--border-subtle) text-(--text-main) rounded-xl text-xs font-semibold cursor-pointer transition-all shadow-sm"
                   >
-                    {isSubmitting ? (
-                      <>
-                        <LuLoader size={15} className="icon-spin" /> Creating Account...
-                      </>
-                    ) : (
-                      <>
-                        <LuUserPlus size={15} /> Create Account & Save History
-                      </>
-                    )}
+                    <GoogleIcon />
+                    <span>Sign up with Google</span>
                   </button>
-                </form>
+
+                  <div className="flex items-center gap-2 my-0.5">
+                    <div className="h-px bg-(--border-subtle) flex-1" />
+                    <span className="text-[10px] uppercase font-semibold text-(--text-muted) tracking-wider">or register with email</span>
+                    <div className="h-px bg-(--border-subtle) flex-1" />
+                  </div>
+
+                  <form onSubmit={handleRegisterSubmit} className="flex flex-col gap-2.5">
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs text-(--text-main) font-medium">Full Name *</label>
+                      <div className="relative flex items-center">
+                        <LuIdCard size={15} className="absolute left-3 text-(--text-muted) pointer-events-none" />
+                        <input
+                          type="text"
+                          value={regDisplayName}
+                          onChange={(e) => setRegDisplayName(e.target.value)}
+                          placeholder="Enter full name"
+                          required
+                          autoComplete="name"
+                          className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-3 text-xs outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs text-(--text-main) font-medium">Username *</label>
+                      <div className="relative flex items-center">
+                        <LuAtSign size={15} className="absolute left-3 text-(--text-muted) pointer-events-none" />
+                        <input
+                          type="text"
+                          value={regUsername}
+                          onChange={(e) => setRegUsername(e.target.value)}
+                          placeholder="Choose unique username (e.g. alex_smith)"
+                          required
+                          autoComplete="username"
+                          className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-3 text-xs outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs text-(--text-main) font-medium">Email Address *</label>
+                      <div className="relative flex items-center">
+                        <LuMail size={15} className="absolute left-3 text-(--text-muted) pointer-events-none" />
+                        <input
+                          type="email"
+                          value={regEmail}
+                          onChange={(e) => setRegEmail(e.target.value)}
+                          placeholder="Enter email"
+                          required
+                          autoComplete="email"
+                          className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-3 text-xs outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs text-(--text-main) font-medium">Password * (min 6 chars)</label>
+                      <div className="relative flex items-center">
+                        <LuLock size={15} className="absolute left-3 text-(--text-muted) pointer-events-none" />
+                        <input
+                          type={showRegPassword ? 'text' : 'password'}
+                          value={regPassword}
+                          onChange={(e) => setRegPassword(e.target.value)}
+                          placeholder="Create secure password"
+                          required
+                          minLength={6}
+                          autoComplete="new-password"
+                          className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-9 text-xs outline-none"
+                        />
+                        <button
+                          type="button"
+                          className="absolute right-3 text-(--text-muted) hover:text-(--text-main) cursor-pointer"
+                          onClick={() => setShowRegPassword((prev) => !prev)}
+                          title={showRegPassword ? 'Hide password' : 'Show password'}
+                        >
+                          {showRegPassword ? <LuEyeOff size={14} /> : <LuEye size={14} />}
+                        </button>
+                      </div>
+                    </div>
+
+                    <button
+                      type="submit"
+                      className="mt-1 w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-primary-theme hover:opacity-90 disabled:opacity-50 text-white rounded-xl text-xs font-semibold cursor-pointer"
+                      disabled={isSubmitting}
+                    >
+                      {isSubmitting ? (
+                        <>
+                          <LuLoader size={15} className="icon-spin" /> Creating Account...
+                        </>
+                      ) : (
+                        <>
+                          <LuUserPlus size={15} /> Create Account & Save History
+                        </>
+                      )}
+                    </button>
+                  </form>
+                </div>
               )}
 
               {/* Guest Mode Action */}

@@ -7,6 +7,7 @@ import type {
   DocumentListResponse,
   StreamHandlers,
   SendOtpResponse,
+  GoogleAuthRequest,
 } from '../types';
 
 const API_BASE_URL = '/api/v1';
@@ -51,6 +52,19 @@ export const apiService = {
     if (!response.ok) {
       const err = await response.json().catch(() => ({ detail: 'Authentication failed' }));
       throw new Error(err.detail || 'Invalid username/email or password');
+    }
+    return await response.json();
+  },
+
+  async loginWithGoogle(data: GoogleAuthRequest): Promise<User> {
+    const response = await fetch(`${API_BASE_URL}/user/auth/google`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ detail: 'Google authentication failed' }));
+      throw new Error(err.detail || 'Google authentication failed');
     }
     return await response.json();
   },

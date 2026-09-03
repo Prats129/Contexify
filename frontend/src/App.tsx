@@ -11,6 +11,7 @@ import type {
   Message,
   StreamingMessageState,
   Citation,
+  GoogleAuthRequest,
 } from './types';
 import './styles/main.css';
 
@@ -528,6 +529,15 @@ export const App: React.FC = () => {
     await loadSessions(user.id);
   };
 
+  const handleGoogleAuth = async (data: GoogleAuthRequest) => {
+    const user = await apiService.loginWithGoogle(data);
+    setCurrentUser(user);
+    localStorage.setItem('contexify_user', JSON.stringify(user));
+    setIsUserModalOpen(false);
+    setActiveSessionId(null);
+    await loadSessions(user.id);
+  };
+
   const handleSendOtp = async (usernameOrEmail: string) => {
     return await apiService.sendLoginOtp(usernameOrEmail);
   };
@@ -652,6 +662,7 @@ export const App: React.FC = () => {
         currentUser={currentUser}
         onLogin={handleLogin}
         onLoginWithOtp={handleLoginWithOtp}
+        onGoogleAuth={handleGoogleAuth}
         onSendOtp={handleSendOtp}
         onSendPasswordResetOtp={handleSendPasswordResetOtp}
         onResetPasswordWithOtp={handleResetPasswordWithOtp}

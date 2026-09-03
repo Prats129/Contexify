@@ -1,4 +1,7 @@
 import os
+import re
+import json
+import base64
 import uuid
 import random
 import hashlib
@@ -18,7 +21,8 @@ from app.schemas.user import (
     SendOtpRequest,
     SendOtpResponse,
     VerifyOtpLoginRequest,
-    ResetPasswordWithOtpRequest
+    ResetPasswordWithOtpRequest,
+    GoogleAuthRequest
 )
 from app.services.email_service import email_service
 from app.core.logging import logger
@@ -29,6 +33,23 @@ AVATAR_COLORS = [
 
 MAX_AVATAR_SIZE_BYTES = 2 * 1024 * 1024  # 2MB maximum file size
 ALLOWED_AVATAR_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+
+def parse_google_id_token(token: str) -> dict:
+    """Parse Google ID token JWT payload."""
+    try:
+        parts = token.split(".")
+        if len(parts) != 3:
+            return {}
+        payload_b64 = parts[1]
+        padding = len(payload_b64) % 4
+        if padding != 0:
+            payload_b64 += "=" * (4 - padding)
+        payload_json = base64.urlsafe_b64decode(payload_b64.encode("utf-8")).decode("utf-8")
+        return json.loads(payload_json)
+    except Exception as e:
+        logger.warning(f"Failed to parse Google ID token: {e}")
+        return {}
+
 
 def mask_email(email: str) -> str:
     """Mask email for privacy display (e.g., a***x@domain.com)."""
@@ -714,6 +735,105 @@ class UserService:
 
             logger.info(f"Password reset successfully via OTP for user '{user['username']}' ({user_id})")
             return {"message": "Password reset successfully. You can now sign in with your new password."}
+
+    async def authenticate_with_google(self, req: GoogleAuthRequest) -> UserResponse:
+        """
+        Authenticate or automatically register a user via Google Sign-In.
+        """
+        google_email = None
+        google_name = None
+        google_picture = None
+
+        if req.credential:
+            payload = parse_google_id_token(req.credential)
+            google_email = payload.get("email")
+            google_name = payload.get("name") or payload.get("given_name")
+            google_picture = payload.get("picture")
+
+        if not google_email and req.email:
+            google_email = req.email
+            google_name = req.name or google_name
+            google_picture = req.picture or google_picture
+
+        if not google_email:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Google authentication failed: Email address could not be verified from Google credential."
+            )
+
+        clean_email = google_email.strip().lower()
+        display_name = (google_name or clean_email.split("@")[0]).strip()
+        picture_url = (google_picture or "").strip()
+
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id, username, email, display_name, avatar_color, avatar_url, created_at
+                FROM users
+                WHERE email = ?
+                """,
+                (clean_email,)
+            )
+            user = cursor.fetchone()
+
+            if user:
+                # Existing user -> Update avatar if not set
+                user_id = user["id"]
+                current_avatar = user["avatar_url"] or ""
+                if picture_url and not current_avatar:
+                    cursor.execute("UPDATE users SET avatar_url = ? WHERE id = ?", (picture_url, user_id))
+                    current_avatar = picture_url
+
+                logger.info(f"User authenticated via Google: '{user['username']}' ({user_id})")
+                return UserResponse(
+                    id=user_id,
+                    username=user["username"],
+                    email=user["email"],
+                    display_name=user["display_name"],
+                    avatar_color=user["avatar_color"],
+                    avatar_url=current_avatar or None,
+                    created_at=user["created_at"]
+                )
+
+            # New user -> Auto-register with Google profile details
+            user_id = str(uuid.uuid4())
+            created_at = datetime.utcnow().isoformat()
+            avatar_color = random.choice(AVATAR_COLORS)
+
+            # Generate clean, unique username
+            base_username = re.sub(r"[^a-zA-Z0-9_]", "", clean_email.split("@")[0])[:15].lower()
+            if len(base_username) < 3:
+                base_username = f"user_{base_username}"
+
+            final_username = base_username
+            cursor.execute("SELECT id FROM users WHERE username = ?", (final_username,))
+            if cursor.fetchone():
+                final_username = f"{base_username}_{uuid.uuid4().hex[:4]}"
+
+            # Generate random secure password hash & salt
+            random_pwd = secrets.token_urlsafe(32)
+            pwd_salt = secrets.token_hex(16)
+            pwd_hash = hash_password(random_pwd, pwd_salt)
+
+            cursor.execute(
+                """
+                INSERT INTO users (id, username, email, display_name, password_hash, password_salt, avatar_color, avatar_url, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (user_id, final_username, clean_email, display_name, pwd_hash, pwd_salt, avatar_color, picture_url, created_at)
+            )
+
+            logger.info(f"Successfully auto-registered new user via Google: '{final_username}' ({clean_email})")
+            return UserResponse(
+                id=user_id,
+                username=final_username,
+                email=clean_email,
+                display_name=display_name,
+                avatar_color=avatar_color,
+                avatar_url=picture_url or None,
+                created_at=created_at
+            )
 
 user_service = UserService()
 

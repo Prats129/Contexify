@@ -129,3 +129,10 @@ class ResetPasswordWithOtpRequest(BaseModel):
             raise ValueError("OTP must be a 6-digit numeric code.")
         return clean
 
+class GoogleAuthRequest(BaseModel):
+    credential: Optional[str] = Field(default=None, description="Google ID Token JWT")
+    email: Optional[str] = Field(default=None, description="Google account email")
+    name: Optional[str] = Field(default=None, description="Google account display name")
+    picture: Optional[str] = Field(default=None, description="Google avatar image URL")
+    google_id: Optional[str] = Field(default=None, description="Google user unique subject ID")
+

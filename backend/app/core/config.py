@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = Field(default="", env="GEMINI_API_KEY")
     DEFAULT_EMBEDDING_MODEL: str = "models/text-embedding-004"
     DEFAULT_LLM_MODEL: str = "gemini-2.5-flash"
+    GOOGLE_CLIENT_ID: str = Field(default="", env="GOOGLE_CLIENT_ID")
 
     # SMTP Email Configuration
     SMTP_HOST: str = Field(default="", env="SMTP_HOST")

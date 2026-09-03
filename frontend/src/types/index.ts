@@ -62,6 +62,14 @@ export interface ResetPasswordWithOtpRequest {
   new_password: string;
 }
 
+export interface GoogleAuthRequest {
+  credential?: string;
+  email?: string;
+  name?: string;
+  picture?: string;
+  google_id?: string;
+}
+
 
 export interface Citation {
   document_id: string;
