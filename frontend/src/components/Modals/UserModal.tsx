@@ -1016,159 +1016,155 @@ export const UserModal: React.FC<UserModalProps> = ({
 
               {/* TAB 1: LOGIN */}
               {activeTab === 'login' && (
-                <>
-                  {loginMethod === 'password' ? (
-                    /* PRIMARY METHOD: PASSWORD LOGIN */
-                    <div className="flex flex-col gap-3">
-                      {/* Google One-Click Sign In */}
+                <div className="flex flex-col gap-3">
+                  {/* Google One-Click Sign In (Top Primary Action) */}
+                  <button
+                    type="button"
+                    onClick={handleGoogleSignInClick}
+                    disabled={isSubmitting}
+                    className="w-full flex items-center justify-center gap-2.5 py-2.5 px-4 bg-(--border-subtle) hover:bg-(--border-hover) border border-(--border-subtle) text-(--text-main) rounded-xl text-xs font-semibold cursor-pointer transition-all shadow-sm"
+                  >
+                    <GoogleIcon />
+                    <span>Continue with Google</span>
+                  </button>
+
+                  <div className="flex items-center gap-2 my-0.5">
+                    <div className="h-px bg-(--border-subtle) flex-1" />
+                    <span className="text-[10px] uppercase font-semibold text-(--text-muted) tracking-wider">or continue with</span>
+                    <div className="h-px bg-(--border-subtle) flex-1" />
+                  </div>
+
+                  {loginMethod !== 'forgot_password' && (
+                    /* Method Switcher Pills */
+                    <div className="grid grid-cols-2 p-1 bg-(--border-subtle) rounded-xl gap-1">
                       <button
                         type="button"
-                        onClick={handleGoogleSignInClick}
-                        disabled={isSubmitting}
-                        className="w-full flex items-center justify-center gap-2.5 py-2.5 px-4 bg-(--border-subtle) hover:bg-(--border-hover) border border-(--border-subtle) text-(--text-main) rounded-xl text-xs font-semibold cursor-pointer transition-all shadow-sm"
+                        className={`flex items-center justify-center gap-1.5 py-1.5 text-xs font-semibold rounded-lg cursor-pointer transition-all ${
+                          loginMethod === 'password'
+                            ? 'bg-(--bg-card) text-(--text-main) shadow-xs'
+                            : 'text-(--text-muted) hover:text-(--text-main)'
+                        }`}
+                        onClick={() => {
+                          setLoginMethod('password');
+                          setErrorMessage(null);
+                        }}
                       >
-                        <GoogleIcon />
-                        <span>Continue with Google</span>
+                        <LuLock size={13} className={loginMethod === 'password' ? 'text-primary-theme' : ''} />
+                        <span>Password</span>
                       </button>
+                      <button
+                        type="button"
+                        className={`flex items-center justify-center gap-1.5 py-1.5 text-xs font-semibold rounded-lg cursor-pointer transition-all ${
+                          loginMethod === 'otp'
+                            ? 'bg-(--bg-card) text-(--text-main) shadow-xs'
+                            : 'text-(--text-muted) hover:text-(--text-main)'
+                        }`}
+                        onClick={() => {
+                          setLoginMethod('otp');
+                          setOtpStep('request');
+                          setErrorMessage(null);
+                        }}
+                      >
+                        <LuMail size={13} className={loginMethod === 'otp' ? 'text-primary-theme' : ''} />
+                        <span>Email OTP</span>
+                      </button>
+                    </div>
+                  )}
 
-                      <div className="flex items-center gap-2 my-0.5">
-                        <div className="h-px bg-(--border-subtle) flex-1" />
-                        <span className="text-[10px] uppercase font-semibold text-(--text-muted) tracking-wider">or with credentials</span>
-                        <div className="h-px bg-(--border-subtle) flex-1" />
+                  {loginMethod === 'password' ? (
+                    /* METHOD A: PASSWORD LOGIN */
+                    <form onSubmit={handleLoginSubmit} className="flex flex-col gap-3">
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs text-(--text-main) font-medium">Username or Email *</label>
+                        <div className="relative flex items-center">
+                          <LuUser size={15} className="absolute left-3 text-(--text-muted) pointer-events-none" />
+                          <input
+                            type="text"
+                            value={loginIdentifier}
+                            onChange={(e) => setLoginIdentifier(e.target.value)}
+                            placeholder="Enter username or email"
+                            required
+                            autoComplete="username"
+                            className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-3 text-xs outline-none transition-colors"
+                          />
+                        </div>
                       </div>
 
-                      <form onSubmit={handleLoginSubmit} className="flex flex-col gap-3">
-                        <div className="flex flex-col gap-1">
-                          <label className="text-xs text-(--text-main) font-medium">Username or Email *</label>
-                          <div className="relative flex items-center">
-                            <LuUser size={15} className="absolute left-3 text-(--text-muted) pointer-events-none" />
-                            <input
-                              type="text"
-                              value={loginIdentifier}
-                              onChange={(e) => setLoginIdentifier(e.target.value)}
-                              placeholder="Enter username or email"
-                              required
-                              autoComplete="username"
-                              className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-3 text-xs outline-none transition-colors"
-                            />
-                          </div>
-                        </div>
-
-                        <div className="flex flex-col gap-1">
-                          <div className="flex items-center justify-between">
-                            <label className="text-xs text-(--text-main) font-medium">Password *</label>
-                            <button
-                              type="button"
-                              className="text-[11px] text-primary-theme hover:underline cursor-pointer"
-                              onClick={() => {
-                                setLoginMethod('forgot_password');
-                                setResetStep('request');
-                                setResetIdentifier(loginIdentifier);
-                                setErrorMessage(null);
-                                setAuthSuccessMsg(null);
-                              }}
-                            >
-                              Forgot Password?
-                            </button>
-                          </div>
-                          <div className="relative flex items-center">
-                            <LuLock size={15} className="absolute left-3 text-(--text-muted) pointer-events-none" />
-                            <input
-                              type={showLoginPassword ? 'text' : 'password'}
-                              value={loginPassword}
-                              onChange={(e) => setLoginPassword(e.target.value)}
-                              placeholder="Enter password"
-                              required
-                              autoComplete="current-password"
-                              className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-9 text-xs outline-none transition-colors"
-                            />
-                            <button
-                              type="button"
-                              className="absolute right-3 text-(--text-muted) hover:text-(--text-main) cursor-pointer"
-                              onClick={() => setShowLoginPassword((prev) => !prev)}
-                              title={showLoginPassword ? 'Hide password' : 'Show password'}
-                            >
-                              {showLoginPassword ? <LuEyeOff size={14} /> : <LuEye size={14} />}
-                            </button>
-                          </div>
-                        </div>
-
-                        <button
-                          type="submit"
-                          className="mt-1 w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-primary-theme hover:opacity-90 disabled:opacity-50 text-white rounded-xl text-xs font-semibold cursor-pointer transition-all shadow-sm"
-                          disabled={isSubmitting}
-                        >
-                          {isSubmitting ? (
-                            <>
-                              <LuLoader size={15} className="icon-spin" /> Signing In...
-                            </>
-                          ) : (
-                            <>
-                              <LuLogIn size={15} /> Sign In to Account
-                            </>
-                          )}
-                        </button>
-
-                        <div className="flex items-center gap-2 my-0.5">
-                          <div className="h-px bg-(--border-subtle) flex-1" />
-                          <span className="text-[10px] uppercase font-semibold text-(--text-muted) tracking-wider">or</span>
-                          <div className="h-px bg-(--border-subtle) flex-1" />
-                        </div>
-
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setLoginMethod('otp');
-                            setOtpStep('request');
-                            setErrorMessage(null);
-                            setAuthSuccessMsg(null);
-                          }}
-                          className="w-full flex items-center justify-center gap-2 py-2 px-3 bg-(--border-subtle)/70 hover:bg-(--border-subtle) border border-(--border-subtle) text-(--text-main) rounded-xl text-xs font-medium cursor-pointer transition-all"
-                        >
-                          <LuMail size={14} className="text-primary-theme" /> Sign In with Email OTP
-                        </button>
-                      </form>
-                    </div>
-                  ) : loginMethod === 'otp' ? (
-                    /* SECONDARY METHOD: EMAIL OTP */
-                    otpStep === 'request' ? (
-                      /* STEP 1: REQUEST OTP */
-                      <form onSubmit={handleSendOtpSubmit} className="flex flex-col gap-3">
+                      <div className="flex flex-col gap-1">
                         <div className="flex items-center justify-between">
-                          <span className="text-xs font-semibold text-(--text-main) flex items-center gap-1.5">
-                            <LuMail size={14} className="text-primary-theme" /> Email OTP Sign In
-                          </span>
+                          <label className="text-xs text-(--text-main) font-medium">Password *</label>
                           <button
                             type="button"
-                            className="text-[11px] text-primary-theme hover:underline cursor-pointer flex items-center gap-1"
+                            className="text-[11px] text-primary-theme hover:underline cursor-pointer"
                             onClick={() => {
-                              setLoginMethod('password');
+                              setLoginMethod('forgot_password');
+                              setResetStep('request');
+                              setResetIdentifier(loginIdentifier);
                               setErrorMessage(null);
                               setAuthSuccessMsg(null);
                             }}
                           >
-                            <LuLock size={12} /> Use Password
+                            Forgot Password?
                           </button>
                         </div>
+                        <div className="relative flex items-center">
+                          <LuLock size={15} className="absolute left-3 text-(--text-muted) pointer-events-none" />
+                          <input
+                            type={showLoginPassword ? 'text' : 'password'}
+                            value={loginPassword}
+                            onChange={(e) => setLoginPassword(e.target.value)}
+                            placeholder="Enter password"
+                            required
+                            autoComplete="current-password"
+                            className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-9 text-xs outline-none transition-colors"
+                          />
+                          <button
+                            type="button"
+                            className="absolute right-3 text-(--text-muted) hover:text-(--text-main) cursor-pointer"
+                            onClick={() => setShowLoginPassword((prev) => !prev)}
+                            title={showLoginPassword ? 'Hide password' : 'Show password'}
+                          >
+                            {showLoginPassword ? <LuEyeOff size={14} /> : <LuEye size={14} />}
+                          </button>
+                        </div>
+                      </div>
 
+                      <button
+                        type="submit"
+                        className="mt-1 w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-primary-theme hover:opacity-90 disabled:opacity-50 text-white rounded-xl text-xs font-semibold cursor-pointer transition-all shadow-sm"
+                        disabled={isSubmitting}
+                      >
+                        {isSubmitting ? (
+                          <>
+                            <LuLoader size={15} className="icon-spin" /> Signing In...
+                          </>
+                        ) : (
+                          <>
+                            <LuLogIn size={15} /> Sign In
+                          </>
+                        )}
+                      </button>
+                    </form>
+                  ) : loginMethod === 'otp' ? (
+                    /* METHOD B: EMAIL OTP */
+                    otpStep === 'request' ? (
+                      /* STEP 1: REQUEST OTP */
+                      <form onSubmit={handleSendOtpSubmit} className="flex flex-col gap-3">
                         <div className="flex flex-col gap-1">
-                          <label className="text-xs text-(--text-main) font-medium">Username or Email *</label>
+                          <label className="text-xs text-(--text-main) font-medium">Registered Username or Email *</label>
                           <div className="relative flex items-center">
                             <LuMail size={15} className="absolute left-3 text-(--text-muted) pointer-events-none" />
                             <input
                               type="text"
                               value={loginIdentifier}
                               onChange={(e) => setLoginIdentifier(e.target.value)}
-                              placeholder="Enter registered email or username"
+                              placeholder="Enter your email or username"
                               required
                               autoComplete="username email"
                               autoFocus
                               className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-3 text-xs outline-none transition-colors"
                             />
                           </div>
-                          <p className="text-[11px] text-(--text-muted) mt-0.5">
-                            A 6-digit verification code will be sent to your registered email.
-                          </p>
                         </div>
 
                         <button
@@ -1480,7 +1476,7 @@ export const UserModal: React.FC<UserModalProps> = ({
                       </form>
                     )
                   )}
-                </>
+                </div>
               )}
 
               {/* TAB 2: REGISTER */}
