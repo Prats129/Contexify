@@ -18,16 +18,17 @@
 
 ### 🌐 3. Real-Time Live Web Search (`WEB_SEARCH`)
 - **Web Grounding Engine**: Real-time search query formulation and synthesis (default search mode).
-- **Crisp & Concise Output**: Synthesized answers calibrated for fast readability, offering in-depth explanations on demand.
 - **Multi-Turn Conversation Memory**: Context-aware chat history retention across message turns within each session.
 
-### 👥 4. Authentication & Profile Management
-- **User Accounts & Guest Mode**:
-  - **Authenticated Users**: Persistent relational chat sessions, profile customization, and session history management.
-  - **Guest Access**: Ephemeral, memory-only session mode with zero database footprint.
-- **Profile Photo & Avatar Studio**: Upload custom profile photos (PNG, JPG, WEBP, GIF up to 2MB) with live circular preview, photo removal, and fallback initials.
-- **Account Security**: Password updates with old password verification and bcrypt encryption.
-- **Chat Management**: "Clear Chat" feature to reset message history while preserving active uploaded documents.
+### 👥 4. Advanced Authentication & User Management
+- **One-Click Google OAuth 2.0**: Direct Sign In and Sign Up with Google, automatic account provisioning, and Google avatar profile synchronization.
+- **Email OTP Passwordless Login**: Secure 6-digit one-time passcode login dispatched directly to the user's registered email with resend cooldown and attempt rate limiting.
+- **Self-Service Password Reset via OTP**: Logged-out password recovery via verified email OTP with validation disallowing reuse of existing passwords.
+- **High-Performance Async Email Dispatch**: Non-blocking asynchronous SMTP delivery (`asyncio.create_task`) yielding near-instant `<15ms` UI transitions.
+- **Enterprise-Grade Password Security**: Cryptographic PBKDF2-HMAC-SHA256 password hashing with 100,000 iterations, 16-byte unique cryptographic salts, and timing-attack-safe comparison (`secrets.compare_digest`).
+- **Streamlined Authentication Modal**: Clean sub-method switcher pills (`[ 🔒 Password ] [ ✉️ Email OTP ]`), official Google integration, and ephemeral Guest mode.
+- **Profile Photo & Avatar Studio**: Custom profile picture uploads (PNG, JPG, WEBP, GIF up to 2MB) with live preview, removal, and fallback initials.
+- **Relational Session Scoping**: Isolated chat sessions, message history, and custom themes tied securely to user accounts.
 
 ### 🎨 5. Theme & Appearance Customization
 - **Theme Modes**: One-click switching between Dark Mode and Light Mode.
@@ -35,8 +36,8 @@
 - **Access Control**: Appearance preferences are securely tied to authenticated user accounts.
 
 ### 💻 6. Modern Tech Stack
-- **Frontend**: React 18, TypeScript 5, Vite, Tailwind CSS, `react-icons`, and Server-Sent Events (SSE) streaming.
-- **Backend**: Python 3.11+, FastAPI, ChromaDB, Google Gemini API, SQLite / SQLAlchemy, and Pydantic v2.
+- **Frontend**: React 18, TypeScript 5, Vite, Tailwind CSS, `react-icons`, Google Identity Services, and Server-Sent Events (SSE) streaming.
+- **Backend**: Python 3.11+, FastAPI, ChromaDB, Google Gemini API, SQLite / aiosqlite, and Pydantic v2.
 
 ---
 
@@ -47,24 +48,25 @@ Contexify/
 ├── backend/
 │   ├── app/
 │   │   ├── api/v1/          # Endpoints (auth, users, sessions, chat, documents, health)
-│   │   ├── core/            # Config, security (JWT, hashing), database session
-│   │   ├── models/          # SQLAlchemy relational models (User, Session, Message, Doc)
-│   │   ├── schemas/         # Pydantic data contracts
-│   │   └── services/        # LLM (Gemini), RAG, ChromaDB embeddings, Web search
+│   │   ├── core/            # Config, security (PBKDF2 hashing, salts), database connection
+│   │   ├── db/              # SQLite database schema, initialization, and migrations
+│   │   ├── schemas/         # Pydantic data contracts (Users, Auth, Chat, Documents)
+│   │   └── services/        # LLM (Gemini), RAG, ChromaDB embeddings, Email (SMTP), User service
 │   ├── data/
 │   │   ├── chroma_db/       # Persistent Chroma vector store (git-ignored)
 │   │   ├── uploads/         # Uploaded documents and avatars (git-ignored)
-│   │   └── contexify.db     # SQLite relational database
+│   │   └── app.db           # SQLite relational database
 │   ├── requirements.txt     # Python backend dependencies
-│   ├── reset_db.py          # Database & vector store reset utility
-│   ├── verify_rag.py        # Automated RAG & LLM verification script
-│   └── verify_persistence.py# Database & auth persistence test script
+│   ├── verify_otp_auth.py   # Automated Email OTP test suite
+│   ├── verify_password_reset.py # Automated Password Reset test suite
+│   ├── verify_google_auth.py# Automated Google OAuth test suite
+│   └── verify_rag.py        # Automated RAG & LLM verification script
 ├── frontend/
 │   ├── src/
 │   │   ├── components/
 │   │   │   ├── Chat/        # ChatWorkspace, MessageList, MessageItem, SourcesPopover, ChatInput, ChatHeader
 │   │   │   ├── Sidebar/     # Sidebar, SessionHistory, DocumentList, UserProfileCard
-│   │   │   └── Modals/      # UserModal (Login, Register, Profile, Security, Themes)
+│   │   │   └── Modals/      # UserModal (Google Auth, Password Login, Email OTP, Password Reset, Profile)
 │   │   ├── context/         # ThemeContext (Mode & Accent palette management)
 │   │   ├── services/        # API client & SSE streaming services
 │   │   └── types/           # TypeScript interface definitions
@@ -97,11 +99,29 @@ npm run setup
 ---
 
 ### 2. Configure Environment Variables
-Create a `.env` file in `backend/.env` (or copy from `backend/.env.example`):
 
-```env
-GEMINI_API_KEY=your_google_gemini_api_key_here
-```
+1. In `backend/.env` (or copy from `backend/.env.example`):
+   ```env
+   # Gemini API Key (Required for LLM & embeddings)
+   GEMINI_API_KEY=your_google_gemini_api_key_here
+
+   # Google OAuth 2.0 (Optional - for Google Sign-In)
+   GOOGLE_CLIENT_ID=your_client_id.apps.googleusercontent.com
+
+   # SMTP Email Settings (Optional - for Email OTP & Password Reset)
+   SMTP_HOST=sandbox.smtp.mailtrap.io
+   SMTP_PORT=2525
+   SMTP_USER=your_smtp_user
+   SMTP_PASSWORD=your_smtp_password
+   SMTP_FROM_EMAIL=noreply@contexify.ai
+   SMTP_FROM_NAME=Contexify
+   SMTP_USE_TLS=True
+   ```
+
+2. In `frontend/.env`:
+   ```env
+   VITE_GOOGLE_CLIENT_ID=your_client_id.apps.googleusercontent.com
+   ```
 
 ---
 
