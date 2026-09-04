@@ -176,9 +176,9 @@ export const ChatPromptTimeline: React.FC<ChatPromptTimelineProps> = ({
               aria-label={`Jump to prompt ${prompt.index + 1}`}
             >
               <div
-                className={`transition-all duration-200 rounded-full ${isActive
-                  ? 'w-5 h-[2.5px] bg-white dark:bg-white shadow-[0_0_6px_rgba(255,255,255,0.6)] dark:shadow-[0_0_6px_rgba(255,255,255,0.6)]'
-                  : 'w-3.5 h-0.5 dark:bg-neutral-500/40 bg-neutral-600/40 group-hover/tick:w-4.5 group-hover/tick:bg-neutral-200 dark:group-hover/tick:bg-neutral-200 group-hover/tick:bg-neutral-800'
+                className={`transition-all duration-200 rounded-full w-5 ${isActive
+                  ? 'h-[2.5px] bg-white dark:bg-white shadow-[0_0_6px_rgba(255,255,255,0.6)] dark:shadow-[0_0_6px_rgba(255,255,255,0.6)]'
+                  : 'h-0.5 dark:bg-neutral-500/40 bg-neutral-600/40 group-hover/tick:w-4.5 group-hover/tick:bg-neutral-200 dark:group-hover/tick:bg-neutral-200 group-hover/tick:bg-neutral-800'
                   }`}
               />
             </button>
