@@ -6,21 +6,28 @@
 
 ## 🌟 Key Features & Enhancements
 
-### 🔍 1. Interactive Perplexity-Style Citation Engine
+### ⏱️ 1. ChatGPT-Style Prompt Timeline & Chat Pagination
+- **Vertical Tick Rail**: Minimalist vertical indicator rail pinned along the right edge of the viewport with real-time active prompt tracking.
+- **Interactive Hover Flyout Menu**: Hovering over the rail smoothly expands a floating dark-mode card listing all user prompts with intelligent truncation.
+- **Direct Jump & Focus Glow**: Clicking any prompt line or tick triggers a smooth scroll directly to that question, accompanied by a momentary focus pulse animation.
+- **Stepwise Turn Navigation**: Quick previous/next prompt pagination chevrons (`▲` / `▼`) for rapid scanning across long conversations.
+- **Side-by-Side Drawer Coexistence**: Adaptive layout spacing ensuring seamless simultaneous usage of both the Prompt Timeline and the Sources drawer.
+
+### 🔍 2. Interactive Perplexity-Style Citation Engine
 - **Collapsible Sources Card**: Real-time right-hand sources card with dual controls (collapse into a compact pill bar or hide completely).
 - **Rich Source Attribution**: Verifiable citations with auto-detected domain favicons, source URLs with external link navigation, and matching text previews.
 - **Optimized Chat Layout**: Fluid conversation column with docked input container strictly below messages, preserving a clean workspace.
 
-### 📄 2. Document-Grounded RAG (`DOCUMENT_RAG`)
+### 📄 3. Document-Grounded RAG (`DOCUMENT_RAG`)
 - **Multi-Format Ingestion**: Upload PDF, TXT, MD, CSV, JSON, and DOCX files with native drag-and-drop workspace overlay.
 - **Vector Search with ChromaDB**: Semantic chunking, persistent vector embeddings, and similarity-scored context injection.
 - **Document Management**: Multi-document attachments, per-document deletion, and isolated user workspace scoping.
 
-### 🌐 3. Real-Time Live Web Search (`WEB_SEARCH`)
+### 🌐 4. Real-Time Live Web Search (`WEB_SEARCH`)
 - **Web Grounding Engine**: Real-time search query formulation and synthesis (default search mode).
 - **Multi-Turn Conversation Memory**: Context-aware chat history retention across message turns within each session.
 
-### 👥 4. Advanced Authentication & User Management
+### 👥 5. Advanced Authentication & User Management
 - **One-Click Google OAuth 2.0**: Direct Sign In and Sign Up with Google, automatic account provisioning, and Google avatar profile synchronization.
 - **Email OTP Passwordless Login**: Secure 6-digit one-time passcode login dispatched directly to the user's registered email with resend cooldown and attempt rate limiting.
 - **Self-Service Password Reset via OTP**: Logged-out password recovery via verified email OTP with validation disallowing reuse of existing passwords.
@@ -30,12 +37,12 @@
 - **Profile Photo & Avatar Studio**: Custom profile picture uploads (PNG, JPG, WEBP, GIF up to 2MB) with live preview, removal, and fallback initials.
 - **Relational Session Scoping**: Isolated chat sessions, message history, and custom themes tied securely to user accounts.
 
-### 🎨 5. Theme & Appearance Customization
+### 🎨 6. Theme & Appearance Customization
 - **Theme Modes**: One-click switching between Dark Mode and Light Mode.
 - **Accent Color Palettes**: 7 vibrant accent color themes (*Ocean Blue, Royal Purple, Emerald Forest, Sunset Rose, Amber Gold, Cyan Wave, Indigo Night*).
 - **Access Control**: Appearance preferences are securely tied to authenticated user accounts.
 
-### 💻 6. Modern Tech Stack
+### 💻 7. Modern Tech Stack
 - **Frontend**: React 18, TypeScript 5, Vite, Tailwind CSS, `react-icons`, Google Identity Services, and Server-Sent Events (SSE) streaming.
 - **Backend**: Python 3.11+, FastAPI, ChromaDB, Google Gemini API, SQLite / aiosqlite, and Pydantic v2.
 
@@ -64,7 +71,7 @@ Contexify/
 ├── frontend/
 │   ├── src/
 │   │   ├── components/
-│   │   │   ├── Chat/        # ChatWorkspace, MessageList, MessageItem, SourcesPopover, ChatInput, ChatHeader
+│   │   │   ├── Chat/        # ChatWorkspace, MessageList, MessageItem, ChatPromptTimeline, SourcesPopover, ChatInput, ChatHeader
 │   │   │   ├── Sidebar/     # Sidebar, SessionHistory, DocumentList, UserProfileCard
 │   │   │   └── Modals/      # UserModal (Google Auth, Password Login, Email OTP, Password Reset, Profile)
 │   │   ├── context/         # ThemeContext (Mode & Accent palette management)
