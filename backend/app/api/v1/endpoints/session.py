@@ -30,7 +30,7 @@ async def create_session(req: ChatSessionCreate):
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User account not found. Please log in first."
+            detail="User account not found. Please sign in first."
         )
 
     session = chat_history_service.create_session(

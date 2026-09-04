@@ -69,7 +69,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
           </button>
         )}
 
-        {/* If user is a Guest, show Log In and Sign Up buttons */}
+        {/* If user is a Guest, show Sign In and Sign Up buttons */}
         {!currentUser && (
           <div className="flex items-center gap-2">
             <button
@@ -77,7 +77,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-(--text-main) bg-(--border-subtle) hover:bg-(--border-hover) border border-(--border-subtle) rounded-lg cursor-pointer"
               onClick={() => onOpenUserModal('login')}
             >
-              <LuLogIn size={14} /> Log in
+              <LuLogIn size={14} /> Sign in
             </button>
             <button
               type="button"

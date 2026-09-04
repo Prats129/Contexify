@@ -1039,11 +1039,10 @@ export const UserModal: React.FC<UserModalProps> = ({
                     <div className="grid grid-cols-2 p-1 bg-(--border-subtle) rounded-xl gap-1">
                       <button
                         type="button"
-                        className={`flex items-center justify-center gap-1.5 py-1.5 text-xs font-semibold rounded-lg cursor-pointer transition-all ${
-                          loginMethod === 'password'
-                            ? 'bg-(--bg-card) text-(--text-main) shadow-xs'
-                            : 'text-(--text-muted) hover:text-(--text-main)'
-                        }`}
+                        className={`flex items-center justify-center gap-1.5 py-1.5 text-xs font-semibold rounded-lg cursor-pointer transition-all ${loginMethod === 'password'
+                          ? 'bg-(--bg-card) text-(--text-main) shadow-xs'
+                          : 'text-(--text-muted) hover:text-(--text-main)'
+                          }`}
                         onClick={() => {
                           setLoginMethod('password');
                           setErrorMessage(null);
@@ -1054,11 +1053,10 @@ export const UserModal: React.FC<UserModalProps> = ({
                       </button>
                       <button
                         type="button"
-                        className={`flex items-center justify-center gap-1.5 py-1.5 text-xs font-semibold rounded-lg cursor-pointer transition-all ${
-                          loginMethod === 'otp'
-                            ? 'bg-(--bg-card) text-(--text-main) shadow-xs'
-                            : 'text-(--text-muted) hover:text-(--text-main)'
-                        }`}
+                        className={`flex items-center justify-center gap-1.5 py-1.5 text-xs font-semibold rounded-lg cursor-pointer transition-all ${loginMethod === 'otp'
+                          ? 'bg-(--bg-card) text-(--text-main) shadow-xs'
+                          : 'text-(--text-muted) hover:text-(--text-main)'
+                          }`}
                         onClick={() => {
                           setLoginMethod('otp');
                           setOtpStep('request');
@@ -1584,7 +1582,7 @@ export const UserModal: React.FC<UserModalProps> = ({
                         </>
                       ) : (
                         <>
-                          <LuUserPlus size={15} /> Create Account & Save History
+                          <LuUserPlus size={15} /> Create Account
                         </>
                       )}
                     </button>

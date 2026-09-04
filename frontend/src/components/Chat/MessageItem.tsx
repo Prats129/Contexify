@@ -3,6 +3,7 @@ import { LuBrain, LuTriangleAlert, LuCopy, LuCheck, LuExternalLink } from 'react
 import type { Citation } from '../../types';
 
 interface MessageItemProps {
+  id?: string;
   role: 'user' | 'assistant';
   content: string;
   citations?: Citation[] | null;
@@ -13,10 +14,12 @@ interface MessageItemProps {
   userDisplayName?: string;
   queryTitle?: string;
   isSourcesActive?: boolean;
+  isHighlighted?: boolean;
   onToggleSources?: (citations: Citation[]) => void;
 }
 
 export const MessageItem: React.FC<MessageItemProps> = React.memo(({
+  id,
   role,
   content,
   citations,
@@ -26,6 +29,7 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(({
   userAvatarColor,
   userDisplayName,
   isSourcesActive,
+  isHighlighted,
   onToggleSources,
 }) => {
   const isUser = role === 'user';
@@ -193,8 +197,14 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(({
 
   return (
     <div
-      className={`group flex items-start gap-2 w-full ${isUser ? 'justify-end' : 'justify-start'
-        }`}
+      id={id}
+      className={`group flex items-start gap-2 w-full transition-all duration-300 scroll-mt-6 ${
+        isUser ? 'justify-end' : 'justify-start'
+      } ${
+        isHighlighted
+          ? 'scale-[1.01] -translate-y-0.5'
+          : ''
+      }`}
     >
       {!isUser && (
         <div className="w-8 h-8 rounded-full bg-primary-theme flex items-center justify-center text-white text-sm shrink-0 mt-1">
@@ -203,14 +213,20 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(({
       )}
 
       <div
-        className={`flex flex-col gap-1 max-w-[85%] md:max-w-[75%] ${isUser ? 'items-end' : 'items-start mt-1'
-          }`}
+        className={`flex flex-col gap-1 max-w-[85%] md:max-w-[75%] ${
+          isUser ? 'items-end' : 'items-start mt-1'
+        }`}
       >
         <div
-          className={`px-4 py-2 rounded-2xl text-sm leading-relaxed ${isUser
-            ? 'bg-primary-theme text-white rounded-br-none'
-            : 'bg-(--bg-card) border border-(--border-subtle) text-(--text-main) rounded-tl-none shadow-sm'
-            }`}
+          className={`px-4 py-2 rounded-2xl text-sm leading-relaxed transition-all duration-300 ${
+            isUser
+              ? `bg-primary-theme text-white rounded-br-none ${
+                  isHighlighted ? 'ring-3 ring-primary-theme/50 shadow-lg' : ''
+                }`
+              : `bg-(--bg-card) border border-(--border-subtle) text-(--text-main) rounded-tl-none shadow-sm ${
+                  isHighlighted ? 'ring-2 ring-primary-theme shadow-md' : ''
+                }`
+          }`}
         >
           {isError ? (
             <span className="text-red-500 flex items-center gap-1.5">
