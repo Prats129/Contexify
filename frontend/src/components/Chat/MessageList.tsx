@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from "react";
+import React, { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import {
   LuSparkles,
   LuListTodo,
@@ -7,6 +7,7 @@ import {
   LuArrowDown,
 } from "react-icons/lu";
 import { MessageItem } from "./MessageItem";
+import { ChatPromptTimeline } from "./ChatPromptTimeline";
 import type { Message, StreamingMessageState, User, Citation } from "../../types";
 
 interface MessageListProps {
@@ -31,8 +32,47 @@ export const MessageList: React.FC<MessageListProps> = ({
   const isAtBottomRef = useRef(true);
   const prevMsgCountRef = useRef(messages.length);
   const [showScrollButton, setShowScrollButton] = useState(false);
+  const [activePromptId, setActivePromptId] = useState<string | null>(null);
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
+  const highlightTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Check scroll position
+  // Extract all user prompt items for the timeline navigation
+  const userPrompts = useMemo(() => {
+    return messages
+      .filter((m) => m.role === "user")
+      .map((m, idx) => ({
+        id: m.id,
+        content: m.content,
+        index: idx,
+      }));
+  }, [messages]);
+
+  // Determine active prompt based on scroll position
+  const updateActivePrompt = useCallback(() => {
+    const container = containerRef.current;
+    if (!container || userPrompts.length === 0) return;
+
+    const containerRect = container.getBoundingClientRect();
+    const triggerPoint = containerRect.top + 160;
+
+    let currentActiveId = userPrompts[0]?.id || null;
+
+    for (const prompt of userPrompts) {
+      const el = document.getElementById(`msg-${prompt.id}`);
+      if (el) {
+        const rect = el.getBoundingClientRect();
+        if (rect.top <= triggerPoint) {
+          currentActiveId = prompt.id;
+        } else {
+          break;
+        }
+      }
+    }
+
+    setActivePromptId(currentActiveId);
+  }, [userPrompts]);
+
+  // Check scroll position & update active prompt
   const handleScroll = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -44,7 +84,9 @@ export const MessageList: React.FC<MessageListProps> = ({
     // Show button if user has scrolled up and content is tall enough
     const canScroll = el.scrollHeight > el.clientHeight + 100;
     setShowScrollButton(!atBottom && canScroll);
-  }, []);
+
+    updateActivePrompt();
+  }, [updateActivePrompt]);
 
   const scrollToBottom = useCallback((smooth = true) => {
     scrollEndRef.current?.scrollIntoView({
@@ -52,6 +94,55 @@ export const MessageList: React.FC<MessageListProps> = ({
     });
     isAtBottomRef.current = true;
     setShowScrollButton(false);
+  }, []);
+
+  // Jump to specific user prompt with smooth scroll and momentary highlight glow
+  const scrollToPrompt = useCallback((promptId: string) => {
+    const el = document.getElementById(`msg-${promptId}`);
+    if (el) {
+      el.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+      setActivePromptId(promptId);
+
+      if (highlightTimerRef.current) {
+        clearTimeout(highlightTimerRef.current);
+      }
+      setHighlightedMessageId(promptId);
+      highlightTimerRef.current = setTimeout(() => {
+        setHighlightedMessageId(null);
+      }, 1600);
+    }
+  }, []);
+
+  const activeIndex = useMemo(() => {
+    return userPrompts.findIndex((p) => p.id === activePromptId);
+  }, [userPrompts, activePromptId]);
+
+  const handleNavigatePrev = useCallback(() => {
+    if (activeIndex > 0) {
+      scrollToPrompt(userPrompts[activeIndex - 1].id);
+    } else if (activeIndex === -1 && userPrompts.length > 0) {
+      scrollToPrompt(userPrompts[0].id);
+    }
+  }, [activeIndex, userPrompts, scrollToPrompt]);
+
+  const handleNavigateNext = useCallback(() => {
+    if (activeIndex < userPrompts.length - 1 && activeIndex >= 0) {
+      scrollToPrompt(userPrompts[activeIndex + 1].id);
+    } else if (activeIndex === -1 && userPrompts.length > 1) {
+      scrollToPrompt(userPrompts[1].id);
+    }
+  }, [activeIndex, userPrompts, scrollToPrompt]);
+
+  // Clean up highlight timer on unmount
+  useEffect(() => {
+    return () => {
+      if (highlightTimerRef.current) {
+        clearTimeout(highlightTimerRef.current);
+      }
+    };
   }, []);
 
   // Handle auto-scrolling on messages or stream update
@@ -68,7 +159,8 @@ export const MessageList: React.FC<MessageListProps> = ({
         scrollToBottom(false);
       }
     }
-  }, [messages, streamingMessage, scrollToBottom]);
+    updateActivePrompt();
+  }, [messages, streamingMessage, scrollToBottom, updateActivePrompt]);
 
   const showWelcome = messages.length === 0 && !streamingMessage;
 
@@ -146,9 +238,11 @@ export const MessageList: React.FC<MessageListProps> = ({
           return (
             <MessageItem
               key={msg.id}
+              id={`msg-${msg.id}`}
               role={msg.role}
               content={msg.content}
               citations={msg.citations}
+              isHighlighted={highlightedMessageId === msg.id}
               userAvatarUrl={currentUser?.avatar_url}
               userAvatarColor={currentUser?.avatar_color}
               userDisplayName={currentUser?.display_name || currentUser?.username}
@@ -190,6 +284,17 @@ export const MessageList: React.FC<MessageListProps> = ({
 
         <div ref={scrollEndRef} />
       </div>
+
+      {/* ChatGPT-Style User Prompt Timeline Navigator */}
+      <ChatPromptTimeline
+        prompts={userPrompts}
+        activePromptId={activePromptId}
+        onNavigateToPrompt={scrollToPrompt}
+        onNavigatePrev={handleNavigatePrev}
+        onNavigateNext={handleNavigateNext}
+        hasPrev={activeIndex > 0 || (activeIndex === -1 && userPrompts.length > 0)}
+        hasNext={activeIndex < userPrompts.length - 1}
+      />
 
       {/* Scroll to Latest Button */}
       {showScrollButton && (

@@ -174,17 +174,15 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
 
       {/* Main Workspace: Chat Column + Sources Card anchored to right */}
       <div
-        className={`flex-1 flex overflow-hidden w-full px-2 sm:px-6 transition-all duration-150 ${
-          activeSources ? 'justify-between' : 'justify-center'
-        }`}
+        className={`flex-1 flex overflow-hidden w-full px-2 sm:px-6 transition-all duration-150 ${activeSources ? 'justify-between' : 'justify-center'
+          }`}
       >
         {/* Main Conversation Column: MessageList + ChatInput */}
         <div
-          className={`flex-1 flex flex-col h-full min-w-0 ${
-            activeSources
-              ? 'max-w-4xl mx-auto lg:mr-auto lg:ml-4'
-              : 'max-w-3xl mx-auto'
-          }`}
+          className={`flex-1 flex flex-col h-full min-w-0 ${activeSources
+            ? 'max-w-4xl mx-auto lg:mr-auto lg:ml-4'
+            : 'max-w-3xl mx-auto'
+            }`}
         >
           <MessageList
             messages={messages}
@@ -212,7 +210,7 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
 
         {/* Right side floating Perplexity Sources Card */}
         {activeSources && (
-          <div className="hidden lg:block shrink-0 sticky top-2 h-fit pt-4 pl-4 mr-2 animate-[fadeIn_0.15s_ease-out]">
+          <div className={`hidden lg:block shrink-0 sticky top-2 h-fit pt-4 pl-4 ${isSourcesCollapsed ? 'mr-2' : 'mr-8'} animate-[fadeIn_0.15s_ease-out]`}>
             <SourcesPopover
               isOpen={!!activeSources}
               onHide={handleHideSources}
