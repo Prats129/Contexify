@@ -60,6 +60,48 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     }
   }, [inputQuery]);
 
+  // Global '/' keyboard shortcut to focus chat input like ChatGPT
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if (e.key === '/' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const activeElement = document.activeElement;
+        const isEditable =
+          activeElement instanceof HTMLInputElement ||
+          activeElement instanceof HTMLTextAreaElement ||
+          (activeElement as HTMLElement)?.isContentEditable;
+
+        // If user is already typing in an input/textarea or editable field, allow default '/' behavior
+        if (isEditable) {
+          return;
+        }
+
+        // If a modal dialog is open, do not intercept
+        const isModalOpen = !!document.querySelector('[role="dialog"], .fixed.inset-0.z-50');
+        if (isModalOpen) {
+          return;
+        }
+
+        // If disabled / actively sending, ignore
+        if (isSending) {
+          return;
+        }
+
+        // Prevent typing '/' into the input so the user can immediately type their actual message
+        e.preventDefault();
+        if (textareaRef.current) {
+          textareaRef.current.focus();
+          const length = textareaRef.current.value.length;
+          textareaRef.current.setSelectionRange(length, length);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleGlobalKeyDown);
+    };
+  }, [isSending]);
+
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (
@@ -91,6 +133,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       onSubmit(e);
+    } else if (e.key === 'Escape') {
+      textareaRef.current?.blur();
     }
   };
 
@@ -138,12 +182,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
   const currentModeDetails = getModeDetails(currentMode);
 
-  const placeholderText =
-    currentMode === 'DOCUMENT_RAG'
-      ? 'Ask any question based on your uploaded document content...'
-      : currentMode === 'WEB_SEARCH'
-        ? 'Ask a question to search the internet in real-time...'
-        : 'Ask a question with multimodal vision & audio...';
 
   const getFileIcon = (fileType: string) => {
     if (fileType === '.pdf') return <LuFileText size={13} className="text-red-500" />;
@@ -304,7 +342,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             value={inputQuery}
             onChange={(e) => setInputQuery(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={placeholderText}
+            placeholder={'Ask anything'}
             rows={1}
             required
             disabled={isSending}
