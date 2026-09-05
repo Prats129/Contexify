@@ -1,5 +1,5 @@
 import React from 'react';
-import { LuBrain, LuPlus } from 'react-icons/lu';
+import { LuPlus } from 'react-icons/lu';
 import { FiSidebar } from 'react-icons/fi';
 import { UserProfileCard } from './UserProfileCard';
 import { SessionHistory } from './SessionHistory';
@@ -37,24 +37,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   return (
     <aside
-      className={`h-screen bg-(--bg-sidebar) border-r border-(--border-subtle) flex flex-col gap-3 shrink-0 overflow-y-auto overflow-x-hidden ${
-        isOpen ? 'w-72 p-3.5' : 'w-16 p-2.5 items-center'
-      }`}
+      className={`h-screen bg-(--bg-sidebar) border-r border-(--border-subtle) flex flex-col gap-3 shrink-0 overflow-y-auto overflow-x-hidden ${isOpen ? 'w-72 p-3.5' : 'w-16 p-2.5 items-center'
+        }`}
     >
       {/* Brand & Toggle Sidebar Button */}
       <div
-        className={`flex items-center pb-2.5 border-b border-(--border-subtle) w-full ${
-          isOpen ? 'justify-between gap-2' : 'justify-center'
-        }`}
+        className={`flex items-center pb-2.5 border-b border-(--border-subtle) w-full ${isOpen ? 'justify-between gap-2' : 'justify-center'
+          }`}
       >
         {isOpen ? (
           <>
-            <div className="flex items-center gap-3 overflow-hidden">
-              <div className="w-9 h-9 rounded-lg bg-primary-theme flex items-center justify-center text-white shrink-0">
-                <LuBrain size={20} />
+            <div className="flex items-center gap-2.5 overflow-hidden">
+              <div className="w-16 h-9 flex items-center justify-center shrink-0">
+                <img src="/logo.png" alt="Contexify Logo" className="w-full h-full object-contain" />
               </div>
               <div className="flex flex-col min-w-0">
-                <h1 className="text-sm font-bold text-(--text-main) truncate">Contexify AI</h1>
+                <h1 className="text-sm font-bold text-(--text-main) truncate leading-tight">Contexify AI</h1>
                 <span className="text-[11px] text-(--text-muted) truncate">Enterprise RAG & Search</span>
               </div>
             </div>
@@ -72,14 +70,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
           /* Collapsed State: Shows Brand Icon normally, reveals Expand icon on hover */
           <button
             type="button"
-            className="group relative w-10 h-10 rounded-lg flex items-center justify-center cursor-pointer"
+            className="group relative w-10 h-10 rounded-lg flex items-center justify-center cursor-pointer hover:bg-(--border-subtle) transition-colors"
             onClick={onToggleSidebar}
             title="Expand sidebar"
           >
-            <div className="w-9 h-9 rounded-lg bg-primary-theme flex items-center justify-center text-white group-hover:hidden">
-              <LuBrain size={20} />
+            <div className="w-10 h-10 flex items-center justify-center shrink-0 group-hover:hidden">
+              <img src="/logo.png" alt="Contexify Logo" className="w-full h-full object-contain" />
             </div>
-            <div className="hidden group-hover:flex w-9 h-9 rounded-lg items-center justify-center text-(--text-main) border border-(--border-subtle) bg-(--border-hover)">
+            <div className="hidden group-hover:flex w-8 h-8 rounded-lg items-center justify-center text-(--text-main) border border-(--border-subtle) bg-(--border-hover)">
               <FiSidebar size={18} />
             </div>
           </button>
@@ -91,9 +89,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div className={`${isOpen ? 'w-full' : 'w-10'} flex justify-center`}>
           <button
             type="button"
-            className={`w-full flex items-center justify-center gap-2 bg-primary-theme hover:opacity-90 text-white font-semibold rounded-lg cursor-pointer ${
-              isOpen ? 'py-2.5 px-3 text-xs' : 'h-10 w-10 p-0 text-sm'
-            }`}
+            className={`w-full flex items-center justify-center gap-2 bg-primary-theme hover:opacity-90 text-white font-semibold rounded-lg cursor-pointer ${isOpen ? 'py-2.5 px-3 text-xs' : 'h-10 w-10 p-0 text-sm'
+              }`}
             onClick={onNewSession}
             title="New Conversation"
           >

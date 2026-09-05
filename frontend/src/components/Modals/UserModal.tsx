@@ -627,8 +627,8 @@ export const UserModal: React.FC<UserModalProps> = ({
       >
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-(--border-subtle) sticky top-0 bg-(--bg-card)/90 backdrop-blur-md z-10">
-          <div className="flex items-center gap-2 text-primary-theme font-bold text-base">
-            <LuShieldCheck size={20} />
+          <div className="flex items-center gap-2.5 font-bold text-base">
+            <img src="/logo.png" alt="Contexify" className="w-14 h-10 object-contain shrink-0" />
             <h3 className="text-(--text-main) text-sm font-semibold">
               {currentUser ? 'Account & Preferences' : 'Contexify AI Authentication'}
             </h3>
