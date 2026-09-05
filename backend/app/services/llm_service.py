@@ -7,7 +7,7 @@ from app.core.logging import logger
 class LLMService:
     """
     LLM Service offering streaming completions.
-    Integrates Google GenAI Gemini models (`gemini-2.5-flash`) with fallback streaming.
+    Integrates Google GenAI Gemini models (`gemini-3.6-flash`) with fallback streaming.
     """
     def __init__(self):
         self.api_key = settings.GEMINI_API_KEY or os.environ.get("GEMINI_API_KEY", "")
@@ -20,6 +20,13 @@ class LLMService:
                 logger.info(f"Initialized Google GenAI LLM Client with model {settings.DEFAULT_LLM_MODEL}")
             except Exception as e:
                 logger.warning(f"Could not initialize GenAI Client for LLM: {e}")
+
+    def _get_models_to_try(self) -> List[str]:
+        models = [settings.DEFAULT_LLM_MODEL]
+        for m in getattr(settings, "FALLBACK_LLM_MODELS", []):
+            if m not in models:
+                models.append(m)
+        return models
 
     def _format_chat_history(self, chat_history: Optional[List[Dict[str, str]]], max_turns: int = 10) -> str:
         """Format recent conversation turns into clear contextual block."""
@@ -73,20 +80,25 @@ class LLMService:
 
         api_error = None
         if self.client:
-            try:
-                response = self.client.models.generate_content_stream(
-                    model=settings.DEFAULT_LLM_MODEL,
-                    contents=user_prompt,
-                    config={"system_instruction": system_instruction}
-                )
-                for chunk in response:
-                    if chunk.text:
-                        yield chunk.text
-                        await asyncio.sleep(0.01) # Yield control
-                return
-            except Exception as e:
-                api_error = str(e)
-                logger.error(f"GenAI Streaming Error: {e}. Falling back to context synthesis.")
+            for model_name in self._get_models_to_try():
+                try:
+                    response = self.client.models.generate_content_stream(
+                        model=model_name,
+                        contents=user_prompt,
+                        config={"system_instruction": system_instruction}
+                    )
+                    streamed_any = False
+                    for chunk in response:
+                        if chunk.text:
+                            streamed_any = True
+                            yield chunk.text
+                            await asyncio.sleep(0.01) # Yield control
+                    if streamed_any:
+                        return
+                except Exception as e:
+                    api_error = str(e)
+                    logger.warning(f"GenAI Streaming Error on model {model_name}: {e}. Retrying with fallback model if available.")
+                    continue
 
         # Local Fallback Streamer if API key is missing or call fails
         top_snippet = context_chunks[0]['text'][:300] if context_chunks else ""
@@ -98,7 +110,9 @@ class LLMService:
             await asyncio.sleep(0.005)
 
         if api_error:
-            if "429" in api_error or "RESOURCE_EXHAUSTED" in api_error:
+            if "503" in api_error or "UNAVAILABLE" in api_error:
+                note = "\n\n⚠️ *(Gemini service is experiencing temporary high demand — please retry shortly)*"
+            elif "429" in api_error or "RESOURCE_EXHAUSTED" in api_error:
                 note = "\n\n⚠️ *(Gemini API rate limit reached — please try again in a moment)*"
             else:
                 note = f"\n\n⚠️ *(Gemini API call notice: {api_error[:120]})*"
@@ -131,20 +145,25 @@ class LLMService:
 
         api_error = None
         if self.client:
-            try:
-                response = self.client.models.generate_content_stream(
-                    model=settings.DEFAULT_LLM_MODEL,
-                    contents=user_prompt,
-                    config={"system_instruction": system_instruction}
-                )
-                for chunk in response:
-                    if chunk.text:
-                        yield chunk.text
-                        await asyncio.sleep(0.01)
-                return
-            except Exception as e:
-                api_error = str(e)
-                logger.error(f"GenAI Conversational Streaming Error: {e}")
+            for model_name in self._get_models_to_try():
+                try:
+                    response = self.client.models.generate_content_stream(
+                        model=model_name,
+                        contents=user_prompt,
+                        config={"system_instruction": system_instruction}
+                    )
+                    streamed_any = False
+                    for chunk in response:
+                        if chunk.text:
+                            streamed_any = True
+                            yield chunk.text
+                            await asyncio.sleep(0.01)
+                    if streamed_any:
+                        return
+                except Exception as e:
+                    api_error = str(e)
+                    logger.warning(f"GenAI Conversational Streaming Error on model {model_name}: {e}. Retrying with fallback model if available.")
+                    continue
 
         # Local intelligent conversational fallback
         q_lower = query.strip().lower()
@@ -208,20 +227,25 @@ class LLMService:
 
         api_error = None
         if self.client:
-            try:
-                response = self.client.models.generate_content_stream(
-                    model=settings.DEFAULT_LLM_MODEL,
-                    contents=user_prompt,
-                    config={"system_instruction": system_instruction}
-                )
-                for chunk in response:
-                    if chunk.text:
-                        yield chunk.text
-                        await asyncio.sleep(0.01)
-                return
-            except Exception as e:
-                api_error = str(e)
-                logger.error(f"GenAI Web Search Streaming Error: {e}. Falling back to concise synthesis.")
+            for model_name in self._get_models_to_try():
+                try:
+                    response = self.client.models.generate_content_stream(
+                        model=model_name,
+                        contents=user_prompt,
+                        config={"system_instruction": system_instruction}
+                    )
+                    streamed_any = False
+                    for chunk in response:
+                        if chunk.text:
+                            streamed_any = True
+                            yield chunk.text
+                            await asyncio.sleep(0.01)
+                    if streamed_any:
+                        return
+                except Exception as e:
+                    api_error = str(e)
+                    logger.warning(f"GenAI Web Search Streaming Error on model {model_name}: {e}. Retrying with fallback model if available.")
+                    continue
 
         # Local Structured Fallback if LLM API is unavailable
         first_snippet = search_results[0].get("snippet", "") if search_results else ""
@@ -233,7 +257,9 @@ class LLMService:
             await asyncio.sleep(0.005)
 
         if api_error:
-            if "429" in api_error or "RESOURCE_EXHAUSTED" in api_error:
+            if "503" in api_error or "UNAVAILABLE" in api_error:
+                note = "\n\n⚠️ *(Gemini service is experiencing temporary high demand — please retry shortly)*"
+            elif "429" in api_error or "RESOURCE_EXHAUSTED" in api_error:
                 note = "\n\n⚠️ *(Gemini API rate limit reached — showing direct search excerpt)*"
             else:
                 note = f"\n\n*(Note: Gemini API notice: {api_error[:100]})*"
