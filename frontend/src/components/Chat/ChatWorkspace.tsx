@@ -22,6 +22,7 @@ interface ChatWorkspaceProps {
   inputQuery: string;
   setInputQuery: (query: string) => void;
   onSendMessage: (e?: React.FormEvent) => void;
+  onStopGeneration?: () => void;
   isSending: boolean;
   onFileUpload: (file: File) => void;
   isUploading: boolean;
@@ -42,6 +43,7 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
   inputQuery,
   setInputQuery,
   onSendMessage,
+  onStopGeneration,
   isSending,
   onFileUpload,
   isUploading,
@@ -197,6 +199,7 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
             inputQuery={inputQuery}
             setInputQuery={setInputQuery}
             onSubmit={onSendMessage}
+            onStopGeneration={onStopGeneration}
             isSending={isSending}
             currentMode={currentMode}
             onModeChange={onModeChange}

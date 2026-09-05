@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { apiService } from './services/api';
 import { Sidebar } from './components/Sidebar/Sidebar';
 import { ChatWorkspace } from './components/Chat/ChatWorkspace';
@@ -77,6 +77,7 @@ export const App: React.FC = () => {
   const [isSending, setIsSending] = useState(false);
   const [streamingMessage, setStreamingMessage] =
     useState<StreamingMessageState | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadStatusText, setUploadStatusText] = useState('');
   const [isUserModalOpen, setIsUserModalOpen] = useState(false);
@@ -383,11 +384,52 @@ export const App: React.FC = () => {
   };
 
 
+  // Stop generating response (like ChatGPT)
+  const handleStopGeneration = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+
+    // Save whatever partial response was generated to message history
+    setStreamingMessage((prev) => {
+      if (prev && prev.content && prev.content.trim()) {
+        const stoppedMsg: Message = {
+          id: `asst-${Date.now()}`,
+          session_id: activeSessionId || 'default',
+          role: 'assistant',
+          content: prev.content,
+          citations: prev.citations,
+          created_at: new Date().toISOString(),
+        };
+        setMessages((prevMsgs) => [...prevMsgs, stoppedMsg]);
+      }
+      return null;
+    });
+
+    setIsSending(false);
+  }, [activeSessionId]);
+
+  // Clean up stream on unmount
+  useEffect(() => {
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
+  }, []);
+
   // --- 8. Send Chat Message & SSE Stream ---
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     const query = inputQuery.trim();
     if (!query || isSending) return;
+
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
 
     let targetSessionId = activeSessionId;
     if (!targetSessionId) {
@@ -440,69 +482,81 @@ export const App: React.FC = () => {
       isError: false,
     });
 
-    await apiService.streamChat(targetSessionId, query, currentMode, {
-      onCitations: (citations) => {
-        receivedCitations = citations;
-        setStreamingMessage((prev) =>
-          prev
-            ? {
-              ...prev,
-              citations,
-            }
-            : null
-        );
-      },
-      onToken: (token) => {
-        accumulatedText += token;
-        setStreamingMessage((prev) =>
-          prev
-            ? {
-              ...prev,
-              content: accumulatedText,
-              citations: receivedCitations,
-              isStreaming: true,
-            }
-            : null
-        );
-      },
-      onError: (errMsg) => {
-        setStreamingMessage({
-          role: 'assistant',
-          content: `Error: ${errMsg}`,
-          citations: null,
-          isStreaming: false,
-          isError: true,
-        });
-        setIsSending(false);
-      },
-      onDone: async () => {
-        setIsSending(false);
-        const finishedAssistantMsg: Message = {
-          id: `asst-${Date.now()}`,
-          session_id: targetSessionId,
-          role: 'assistant',
-          content: accumulatedText,
-          citations: receivedCitations,
-          created_at: new Date().toISOString(),
-        };
+    await apiService.streamChat(
+      targetSessionId,
+      query,
+      currentMode,
+      {
+        onCitations: (citations) => {
+          if (abortController.signal.aborted) return;
+          receivedCitations = citations;
+          setStreamingMessage((prev) =>
+            prev
+              ? {
+                ...prev,
+                citations,
+              }
+              : null
+          );
+        },
+        onToken: (token) => {
+          if (abortController.signal.aborted) return;
+          accumulatedText += token;
+          setStreamingMessage((prev) =>
+            prev
+              ? {
+                ...prev,
+                content: accumulatedText,
+                citations: receivedCitations,
+                isStreaming: true,
+              }
+              : null
+          );
+        },
+        onError: (errMsg) => {
+          if (abortController.signal.aborted) return;
+          abortControllerRef.current = null;
+          setStreamingMessage({
+            role: 'assistant',
+            content: `Error: ${errMsg}`,
+            citations: null,
+            isStreaming: false,
+            isError: true,
+          });
+          setIsSending(false);
+        },
+        onDone: async () => {
+          if (abortController.signal.aborted) return;
+          abortControllerRef.current = null;
+          setIsSending(false);
+          const finishedAssistantMsg: Message = {
+            id: `asst-${Date.now()}`,
+            session_id: targetSessionId,
+            role: 'assistant',
+            content: accumulatedText,
+            citations: receivedCitations,
+            created_at: new Date().toISOString(),
+          };
 
-        // Append to state
-        setMessages((prev) => [...prev, finishedAssistantMsg]);
-        setStreamingMessage(null);
+          // Append to state
+          setMessages((prev) => [...prev, finishedAssistantMsg]);
+          setStreamingMessage(null);
 
-        // If logged-in user, refresh sessions list for auto-generated title
-        if (currentUser?.id) {
-          try {
-            const freshSessions = await apiService.listSessions(
-              currentUser.id
-            );
-            setSessions(freshSessions || []);
-          } catch (err) {
-            console.error('Failed to sync sessions list:', err);
+          // If logged-in user, refresh sessions list for auto-generated title
+          if (currentUser?.id) {
+            try {
+              const freshSessions = await apiService.listSessions(
+                currentUser.id
+              );
+              setSessions(freshSessions || []);
+            } catch (err) {
+              console.error('Failed to sync sessions list:', err);
+            }
           }
-        }
+        },
       },
-    });
+      abortController.signal
+    );
   };
 
   // Quick Prompt click
@@ -646,6 +700,7 @@ export const App: React.FC = () => {
         inputQuery={inputQuery}
         setInputQuery={setInputQuery}
         onSendMessage={handleSendMessage}
+        onStopGeneration={handleStopGeneration}
         isSending={isSending}
         onFileUpload={handleFileUpload}
         isUploading={isUploading}
