@@ -10,7 +10,18 @@ import type {
   GoogleAuthRequest,
 } from '../types';
 
-const API_BASE_URL = '/api/v1';
+const BACKEND_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
+const API_BASE_URL = `${BACKEND_BASE}/api/v1`;
+
+const formatUser = (user: User): User => {
+  if (user && user.avatar_url && user.avatar_url.startsWith('/')) {
+    return {
+      ...user,
+      avatar_url: `${BACKEND_BASE}${user.avatar_url}`,
+    };
+  }
+  return user;
+};
 
 export const apiService = {
   // --- User Authentication Endpoints ---
@@ -34,7 +45,7 @@ export const apiService = {
       const err = await response.json().catch(() => ({ detail: 'Registration failed' }));
       throw new Error(err.detail || 'Registration failed');
     }
-    return await response.json();
+    return formatUser(await response.json());
   },
 
   async login(
@@ -53,7 +64,7 @@ export const apiService = {
       const err = await response.json().catch(() => ({ detail: 'Authentication failed' }));
       throw new Error(err.detail || 'Invalid username/email or password');
     }
-    return await response.json();
+    return formatUser(await response.json());
   },
 
   async loginWithGoogle(data: GoogleAuthRequest): Promise<User> {
@@ -66,7 +77,7 @@ export const apiService = {
       const err = await response.json().catch(() => ({ detail: 'Google authentication failed' }));
       throw new Error(err.detail || 'Google authentication failed');
     }
-    return await response.json();
+    return formatUser(await response.json());
   },
 
   async sendLoginOtp(emailOrUsername: string): Promise<SendOtpResponse> {
@@ -100,7 +111,7 @@ export const apiService = {
       const err = await response.json().catch(() => ({ detail: 'Invalid verification code' }));
       throw new Error(err.detail || 'Invalid verification code');
     }
-    return await response.json();
+    return formatUser(await response.json());
   },
 
   async sendPasswordResetOtp(emailOrUsername: string): Promise<SendOtpResponse> {
@@ -144,7 +155,7 @@ export const apiService = {
     if (!response.ok) {
       throw new Error('User not found');
     }
-    return await response.json();
+    return formatUser(await response.json());
   },
 
   async updateUserProfile(
@@ -165,7 +176,7 @@ export const apiService = {
       const err = await response.json().catch(() => ({ detail: 'Profile update failed' }));
       throw new Error(err.detail || 'Profile update failed');
     }
-    return await response.json();
+    return formatUser(await response.json());
   },
 
   async changePassword(
@@ -214,7 +225,7 @@ export const apiService = {
       throw new Error(err.detail || 'Avatar upload failed');
     }
 
-    return await response.json();
+    return formatUser(await response.json());
   },
 
   async deleteAvatar(userId: string): Promise<User> {
@@ -227,7 +238,7 @@ export const apiService = {
       throw new Error(err.detail || 'Avatar deletion failed');
     }
 
-    return await response.json();
+    return formatUser(await response.json());
   },
 
   // --- Session Endpoints ---
