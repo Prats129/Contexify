@@ -39,6 +39,14 @@ class Settings(BaseSettings):
     FALLBACK_LLM_MODELS: list[str] = ["gemini-3.6-flash", "gemini-3.5-flash-lite"]
     GOOGLE_CLIENT_ID: str = Field(default="", env="GOOGLE_CLIENT_ID")
 
+    # Turso Cloud Database Configuration
+    TURSO_DATABASE_URL: str = Field(default="", env="TURSO_DATABASE_URL")
+    TURSO_AUTH_TOKEN: str = Field(default="", env="TURSO_AUTH_TOKEN")
+
+    # Pinecone Vector Database Configuration
+    PINECONE_API_KEY: str = Field(default="", env="PINECONE_API_KEY")
+    PINECONE_INDEX_NAME: str = Field(default="contexify", env="PINECONE_INDEX_NAME")
+
     # SMTP Email Configuration
     SMTP_HOST: str = Field(default="", env="SMTP_HOST")
     SMTP_PORT: int = Field(default=587, env="SMTP_PORT")
