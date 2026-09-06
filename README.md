@@ -1,3 +1,12 @@
+---
+title: Contexify
+emoji: 🧠
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+app_port: 7860
+---
+
 # Contexify 🧠⚡
 
 **Contexify** is an enterprise-grade AI knowledge engine combining Document Retrieval-Augmented Generation (RAG) and real-time Web Search. Powered by a high-performance **FastAPI** backend with **ChromaDB** vector storage and a sleek, modern **React + TypeScript (Vite) + Tailwind CSS** frontend.

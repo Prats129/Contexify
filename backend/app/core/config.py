@@ -22,9 +22,15 @@ class Settings(BaseSettings):
     SIMILARITY_THRESHOLD: float = 0.2
     
     # Vector DB Storage
-    DATA_DIR: Path = BASE_DIR / "data"
-    CHROMA_PERSIST_DIR: Path = BASE_DIR / "data" / "chroma_db"
-    UPLOAD_DIR: Path = BASE_DIR / "data" / "uploads"
+    DATA_DIR: Path = Field(default_factory=lambda: Path(os.environ.get("DATA_DIR", str(BASE_DIR / "data"))))
+    
+    @property
+    def CHROMA_PERSIST_DIR(self) -> Path:
+        return self.DATA_DIR / "chroma_db"
+
+    @property
+    def UPLOAD_DIR(self) -> Path:
+        return self.DATA_DIR / "uploads"
     
     # API Keys & Models
     GEMINI_API_KEY: str = Field(default="", env="GEMINI_API_KEY")
