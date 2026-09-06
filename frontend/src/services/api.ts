@@ -369,7 +369,8 @@ export const apiService = {
     sessionId: string,
     message: string,
     mode: ChatMode,
-    handlers: StreamHandlers
+    handlers: StreamHandlers,
+    signal?: AbortSignal
   ): Promise<void> {
     const { onCitations, onToken, onError, onDone } = handlers;
 
@@ -382,6 +383,7 @@ export const apiService = {
           message,
           mode,
         }),
+        signal,
       });
 
       if (!response.ok) {
@@ -405,6 +407,15 @@ export const apiService = {
       };
 
       while (true) {
+        if (signal?.aborted) {
+          try {
+            await reader.cancel();
+          } catch {
+            // ignore
+          }
+          break;
+        }
+
         const { value, done } = await reader.read();
         if (done) break;
 
@@ -413,6 +424,7 @@ export const apiService = {
         buffer = lines.pop() || '';
 
         for (const line of lines) {
+          if (signal?.aborted) break;
           if (line.startsWith('data: ')) {
             const jsonStr = line.replace('data: ', '').trim();
             if (!jsonStr) continue;
@@ -436,8 +448,18 @@ export const apiService = {
         }
       }
 
-      triggerDone();
+      if (!signal?.aborted) {
+        triggerDone();
+      }
     } catch (err: unknown) {
+      if (
+        (err instanceof DOMException && err.name === 'AbortError') ||
+        (err instanceof Error && err.name === 'AbortError') ||
+        signal?.aborted
+      ) {
+        // Stream was stopped by the user - do not treat as an error
+        return;
+      }
       const errorMessage = err instanceof Error ? err.message : String(err);
       if (onError) onError(errorMessage);
     }

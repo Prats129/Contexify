@@ -22,6 +22,7 @@ interface ChatInputProps {
   inputQuery: string;
   setInputQuery: (query: string) => void;
   onSubmit: (e?: React.FormEvent) => void;
+  onStopGeneration?: () => void;
   isSending: boolean;
   currentMode: ChatMode;
   onModeChange: (mode: ChatMode) => void;
@@ -36,6 +37,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   inputQuery,
   setInputQuery,
   onSubmit,
+  onStopGeneration,
   isSending,
   currentMode,
   onModeChange,
@@ -59,6 +61,43 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       )}px`;
     }
   }, [inputQuery]);
+
+  // Global '/' keyboard shortcut to focus chat input like ChatGPT
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if (e.key === '/' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const activeElement = document.activeElement;
+        const isEditable =
+          activeElement instanceof HTMLInputElement ||
+          activeElement instanceof HTMLTextAreaElement ||
+          (activeElement as HTMLElement)?.isContentEditable;
+
+        // If user is already typing in an input/textarea or editable field, allow default '/' behavior
+        if (isEditable) {
+          return;
+        }
+
+        // If a modal dialog is open, do not intercept
+        const isModalOpen = !!document.querySelector('[role="dialog"], .fixed.inset-0.z-50');
+        if (isModalOpen) {
+          return;
+        }
+
+        // Prevent typing '/' into the input so the user can immediately type their actual message
+        e.preventDefault();
+        if (textareaRef.current) {
+          textareaRef.current.focus();
+          const length = textareaRef.current.value.length;
+          textareaRef.current.setSelectionRange(length, length);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleGlobalKeyDown);
+    };
+  }, []);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -90,7 +129,17 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
+      if (isSending) {
+        // While response is streaming, do not submit another prompt concurrently
+        return;
+      }
       onSubmit(e);
+    } else if (e.key === 'Escape') {
+      if (isSending && onStopGeneration) {
+        onStopGeneration();
+      } else {
+        textareaRef.current?.blur();
+      }
     }
   };
 
@@ -138,12 +187,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
   const currentModeDetails = getModeDetails(currentMode);
 
-  const placeholderText =
-    currentMode === 'DOCUMENT_RAG'
-      ? 'Ask any question based on your uploaded document content...'
-      : currentMode === 'WEB_SEARCH'
-        ? 'Ask a question to search the internet in real-time...'
-        : 'Ask a question with multimodal vision & audio...';
 
   const getFileIcon = (fileType: string) => {
     if (fileType === '.pdf') return <LuFileText size={13} className="text-red-500" />;
@@ -298,28 +341,38 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             </div>
           </div>
 
-          {/* Textarea */}
+          {/* Textarea: user can write at any time even while response is generating */}
           <textarea
             ref={textareaRef}
             value={inputQuery}
             onChange={(e) => setInputQuery(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={placeholderText}
+            placeholder={'Ask anything'}
             rows={1}
             required
-            disabled={isSending}
             className="flex-1 bg-transparent border-0 outline-none resize-none text-sm px-2 py-1 max-h-36 overflow-y-auto"
           />
 
-          {/* Send Button */}
-          <button
-            type="submit"
-            className="w-8 h-8 rounded-full bg-primary-theme hover:opacity-90 disabled:opacity-30 text-white flex items-center justify-center disabled:cursor-not-allowed shrink-0 disabled:shadow-none"
-            disabled={isSending || !inputQuery.trim()}
-            title="Send Question"
-          >
-            {isSending ? <LuLoader size={16} className="icon-spin" /> : <LuSend size={15} />}
-          </button>
+          {/* Action Button: Stop/Pause square while generating, Send button when idle */}
+          {isSending ? (
+            <button
+              type="button"
+              onClick={onStopGeneration}
+              className="w-8 h-8 rounded-full bg-primary-theme hover:opacity-90 text-white flex items-center justify-center cursor-pointer shrink-0 transition-transform active:scale-95 shadow-md"
+              title="Stop generating"
+            >
+              <div className="w-2.5 h-2.5 bg-white rounded-[2px]" />
+            </button>
+          ) : (
+            <button
+              type="submit"
+              className="w-8 h-8 rounded-full bg-primary-theme hover:opacity-90 disabled:opacity-30 text-white flex items-center justify-center disabled:cursor-not-allowed shrink-0 disabled:shadow-none transition-all"
+              disabled={!inputQuery.trim()}
+              title="Send Question"
+            >
+              <LuSend size={15} />
+            </button>
+          )}
         </div>
       </form>
 
