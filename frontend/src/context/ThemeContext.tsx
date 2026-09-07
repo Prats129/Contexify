@@ -119,9 +119,14 @@ const ACCENT_STORAGE_KEY = 'contexify_accent_color';
 
 export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [mode, setModeState] = useState<ThemeMode>(() => {
+    const savedUser = localStorage.getItem('contexify_user');
+    // If not logged in, always show light mode by default
+    if (!savedUser) {
+      return 'light';
+    }
     const saved = localStorage.getItem(THEME_STORAGE_KEY);
     if (saved === 'light' || saved === 'dark') return saved;
-    return 'dark'; // Dark mode default
+    return 'light'; // Light mode default
   });
 
   const [accent, setAccentState] = useState<AccentColor>(() => {

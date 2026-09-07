@@ -13,6 +13,7 @@ import type {
   Citation,
   GoogleAuthRequest,
 } from './types';
+import { useTheme } from './context/ThemeContext';
 import './styles/main.css';
 
 function generateGuestSessionId(): string {
@@ -64,6 +65,8 @@ function updateUrlForSession(sessionId: string | null, isUnauthenticated: boolea
 }
 
 export const App: React.FC = () => {
+  const { setMode } = useTheme();
+
   // --- Global State ---
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
@@ -157,6 +160,7 @@ export const App: React.FC = () => {
         setSessions([]);
         setMessages([]);
         setDocuments([]);
+        setMode('light');
         
         const { sessionId: urlSessionId, isUnauthenticated } = getUrlRouteInfo();
         if (urlSessionId) {
@@ -666,6 +670,7 @@ export const App: React.FC = () => {
     setDocuments([]);
     setActiveSessionId(generateGuestSessionId());
     setIsUserModalOpen(false);
+    setMode('light');
   };
 
   const handleContinueAsGuest = () => {
@@ -673,7 +678,7 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-gray-950 text-gray-100 font-sans">
+    <div className="flex h-screen w-screen overflow-hidden bg-(--bg-app) text-(--text-main) font-sans">
       <Sidebar
         isOpen={isSidebarOpen}
         onToggleSidebar={handleToggleSidebar}
