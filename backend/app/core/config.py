@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     FALLBACK_LLM_MODELS: list[str] = ["gemini-3.6-flash", "gemini-3.5-flash-lite"]
     GOOGLE_CLIENT_ID: str = Field(default="", env="GOOGLE_CLIENT_ID")
 
+    # Database & Vector Store Execution Mode: "local" (SQLite + ChromaDB) or "cloud" (Turso + Pinecone)
+    DB_MODE: str = Field(default="local", env="DB_MODE")
+    VECTOR_STORE_TYPE: str = Field(default="", env="VECTOR_STORE_TYPE")  # Optional override: "chromadb" | "pinecone"
+    DATABASE_TYPE: str = Field(default="", env="DATABASE_TYPE")          # Optional override: "sqlite" | "turso"
+
     # Turso Cloud Database Configuration
     TURSO_DATABASE_URL: str = Field(default="", env="TURSO_DATABASE_URL")
     TURSO_AUTH_TOKEN: str = Field(default="", env="TURSO_AUTH_TOKEN")

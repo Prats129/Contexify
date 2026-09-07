@@ -58,7 +58,12 @@ Create a `backend/.env` file:
 # Google Gemini API (Required for LLM & embeddings)
 GEMINI_API_KEY=your_gemini_api_key_here
 
-# Turso Cloud Database (Required for users & sessions)
+# Database & Vector Store Execution Mode
+# "local" (default: uses local SQLite + local ChromaDB)
+# "cloud" (uses Turso Cloud DB + Pinecone Serverless)
+DB_MODE=local
+
+# Turso Cloud Database (Required when DB_MODE=cloud)
 TURSO_DATABASE_URL=libsql://your-db.aws-region.turso.io
 TURSO_AUTH_TOKEN=your_turso_jwt_token_here
 
