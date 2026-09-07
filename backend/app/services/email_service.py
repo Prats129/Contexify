@@ -91,9 +91,15 @@ class EmailService:
             )
             return True
 
+        smtp_host = (settings.SMTP_HOST or "").strip()
+        smtp_user = (settings.SMTP_USER or "").strip().strip('"').strip("'")
+        smtp_password = (settings.SMTP_PASSWORD or "").strip().strip('"').strip("'")
+        smtp_from_email = (settings.SMTP_FROM_EMAIL or smtp_user or "noreply@contexify.ai").strip().strip('"').strip("'")
+        smtp_from_name = (settings.SMTP_FROM_NAME or "Contexify").strip().strip('"').strip("'")
+
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
-        msg["From"] = f"{settings.SMTP_FROM_NAME} <{settings.SMTP_FROM_EMAIL}>"
+        msg["From"] = f"{smtp_from_name} <{smtp_from_email}>"
         msg["To"] = to_email
 
         part1 = MIMEText(text_content, "plain")
@@ -101,26 +107,40 @@ class EmailService:
         msg.attach(part1)
         msg.attach(part2)
 
-        try:
-            if settings.SMTP_USE_SSL:
-                with smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT, timeout=15) as server:
-                    if settings.SMTP_USER and settings.SMTP_PASSWORD:
-                        server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
-                    server.sendmail(settings.SMTP_FROM_EMAIL, [to_email], msg.as_string())
+        use_ssl = settings.SMTP_USE_SSL or (settings.SMTP_PORT == 465)
+        primary_port = 465 if use_ssl else (settings.SMTP_PORT or 587)
+
+        def _try_send(host: str, port: int, ssl_mode: bool) -> None:
+            if ssl_mode:
+                with smtplib.SMTP_SSL(host, port, timeout=12) as server:
+                    if smtp_user and smtp_password:
+                        server.login(smtp_user, smtp_password)
+                    server.sendmail(smtp_from_email, [to_email], msg.as_string())
             else:
-                with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=15) as server:
+                with smtplib.SMTP(host, port, timeout=12) as server:
                     if settings.SMTP_USE_TLS:
                         server.starttls()
-                    if settings.SMTP_USER and settings.SMTP_PASSWORD:
-                        server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
-                    server.sendmail(settings.SMTP_FROM_EMAIL, [to_email], msg.as_string())
+                    if smtp_user and smtp_password:
+                        server.login(smtp_user, smtp_password)
+                    server.sendmail(smtp_from_email, [to_email], msg.as_string())
 
-            logger.info(f"Successfully sent email to '{to_email}' via SMTP {settings.SMTP_HOST}:{settings.SMTP_PORT}")
+        try:
+            _try_send(smtp_host, primary_port, use_ssl)
+            logger.info(f"Successfully sent email to '{to_email}' via SMTP {smtp_host}:{primary_port}")
             return True
-        except Exception as e:
-            logger.error(f"Failed to send email to '{to_email}' via SMTP: {e}", exc_info=True)
-            # In development or if SMTP fails, do not crash the auth flow
-            return False
+        except Exception as primary_err:
+            logger.warning(f"Primary SMTP attempt to {smtp_host}:{primary_port} (SSL={use_ssl}) failed: {primary_err}")
+            # Cloud hosts frequently block port 587; retry via alternative port/mode (465 SSL vs 587 TLS)
+            fallback_port = 465 if not use_ssl else 587
+            fallback_ssl = not use_ssl
+            try:
+                logger.info(f"Retrying via fallback SMTP connection to {smtp_host}:{fallback_port} (SSL={fallback_ssl})...")
+                _try_send(smtp_host, fallback_port, fallback_ssl)
+                logger.info(f"Fallback SMTP dispatch to '{to_email}' succeeded via {smtp_host}:{fallback_port}")
+                return True
+            except Exception as fallback_err:
+                logger.error(f"Both primary and fallback SMTP failed for '{to_email}'. Error: {fallback_err}", exc_info=True)
+                return False
 
     def _generate_password_reset_html(self, display_name: str, otp_code: str, expiry_minutes: int) -> str:
         name_str = f" {display_name}" if display_name else ""
