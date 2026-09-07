@@ -14,6 +14,7 @@ import type {
   GoogleAuthRequest,
 } from './types';
 import { useTheme } from './context/ThemeContext';
+import { useConfirm } from './context/ConfirmContext';
 import './styles/main.css';
 
 function generateGuestSessionId(): string {
@@ -47,6 +48,10 @@ function getUrlRouteInfo(): UrlRouteInfo {
   if (cParam) {
     return { sessionId: cParam, isUnauthenticated: false };
   }
+  const sid = params.get('session') || params.get('id');
+  if (sid) {
+    return { sessionId: sid, isUnauthenticated: false };
+  }
   return { sessionId: null, isUnauthenticated: false };
 }
 
@@ -66,6 +71,7 @@ function updateUrlForSession(sessionId: string | null, isUnauthenticated: boolea
 
 export const App: React.FC = () => {
   const { setMode } = useTheme();
+  const { confirm, showAlert } = useConfirm();
 
   // --- Global State ---
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -265,11 +271,18 @@ export const App: React.FC = () => {
   // --- 5. Delete Session ---
   const handleDeleteSession = async (sessionId: string) => {
     if (!currentUser?.id) return;
-    if (
-      !window.confirm('Are you sure you want to delete this conversation thread?')
-    ) {
-      return;
-    }
+    const targetSession = sessions.find((s) => s.id === sessionId);
+    const sessionTitle = targetSession?.title || 'this chat';
+
+    const confirmed = await confirm({
+      type: 'delete-chat',
+      title: 'Delete chat?',
+      chatTitle: sessionTitle,
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+    });
+    if (!confirmed) return;
+
     try {
       await apiService.deleteSession(sessionId);
       const updated = sessions.filter((s) => s.id !== sessionId);
@@ -285,7 +298,7 @@ export const App: React.FC = () => {
       }
     } catch (e: unknown) {
       const err = e instanceof Error ? e.message : String(e);
-      alert(`Failed to delete session: ${err}`);
+      await showAlert({ title: 'Delete Failed', message: `Failed to delete session: ${err}` });
     }
   };
 
@@ -345,7 +358,7 @@ export const App: React.FC = () => {
       });
     } catch (e: unknown) {
       const err = e instanceof Error ? e.message : String(e);
-      alert(`Upload failed: ${err}`);
+      await showAlert({ title: 'Upload Failed', message: err });
     } finally {
       setIsUploading(false);
       setUploadStatusText('');
@@ -355,35 +368,48 @@ export const App: React.FC = () => {
 
   const handleDeleteDocument = async (documentId: string) => {
     if (!activeSessionId) return;
-    if (
-      !window.confirm(
-        'Are you sure you want to remove this document and purge its vectors?'
-      )
-    ) {
-      return;
-    }
+    const doc = documents.find((d) => d.document_id === documentId);
+    const docName = doc?.filename || 'this document';
+
+    const confirmed = await confirm({
+      type: 'default',
+      title: 'Remove document?',
+      message: `Are you sure you want to remove "${docName}" and purge its vectors? Grounded answers will no longer cite this document.`,
+      confirmText: 'Remove',
+      cancelText: 'Cancel',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
+
     try {
       await apiService.deleteDocument(documentId, activeSessionId);
       setDocuments((prev) => prev.filter((d) => d.document_id !== documentId));
     } catch (e: unknown) {
       const err = e instanceof Error ? e.message : String(e);
-      alert(`Deletion failed: ${err}`);
+      await showAlert({ title: 'Deletion Failed', message: err });
     }
   };
 
   // --- Clear Messages in Active Conversation (Authenticated Users Only) ---
   const handleClearMessages = async () => {
     if (!currentUser || !activeSessionId || (messages.length === 0 && !streamingMessage)) return;
-    if (!window.confirm('Clear all messages in this conversation? Attached documents and vectors will remain intact.')) {
-      return;
-    }
+    const confirmed = await confirm({
+      type: 'default',
+      title: 'Clear conversation?',
+      message: 'Clear all messages in this conversation? Attached documents and vector knowledge will remain intact.',
+      confirmText: 'Clear',
+      cancelText: 'Cancel',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
+
     try {
       await apiService.clearSessionMessages(activeSessionId);
       setMessages([]);
       setStreamingMessage(null);
     } catch (e: unknown) {
       const err = e instanceof Error ? e.message : String(e);
-      alert(`Failed to clear messages: ${err}`);
+      await showAlert({ title: 'Clear Failed', message: `Failed to clear messages: ${err}` });
     }
   };
 
