@@ -9,6 +9,24 @@ from app.core.logging import logger
 DB_FILE = settings.DATA_DIR / "app.db"
 
 def is_turso_configured() -> bool:
+    # 1. Check explicit DATABASE_TYPE override
+    db_type = (settings.DATABASE_TYPE or "").strip().lower()
+    if db_type in ["sqlite", "local"]:
+        return False
+    if db_type == "turso":
+        url = (settings.TURSO_DATABASE_URL or "").strip()
+        token = (settings.TURSO_AUTH_TOKEN or "").strip()
+        return bool(url and token and not url.startswith("paste_"))
+
+    # 2. Check general DB_MODE (default: "local" uses SQLite)
+    db_mode = (settings.DB_MODE or "local").strip().lower()
+    if db_mode in ["local", "sqlite", "chroma", "chromadb"]:
+        return False
+    if db_mode in ["cloud", "turso-pinecone", "turso", "production"]:
+        url = (settings.TURSO_DATABASE_URL or "").strip()
+        token = (settings.TURSO_AUTH_TOKEN or "").strip()
+        return bool(url and token and not url.startswith("paste_"))
+
     url = (settings.TURSO_DATABASE_URL or "").strip()
     token = (settings.TURSO_AUTH_TOKEN or "").strip()
     return bool(url and token and not url.startswith("paste_"))

@@ -4,6 +4,22 @@ from app.core.config import settings
 from app.core.logging import logger
 
 def is_pinecone_configured() -> bool:
+    # 1. Check explicit VECTOR_STORE_TYPE override
+    vs_type = (settings.VECTOR_STORE_TYPE or "").strip().lower()
+    if vs_type in ["chroma", "chromadb", "local"]:
+        return False
+    if vs_type == "pinecone":
+        key = (settings.PINECONE_API_KEY or "").strip()
+        return bool(key and not key.startswith("paste_"))
+
+    # 2. Check general DB_MODE (default: "local" uses ChromaDB)
+    db_mode = (settings.DB_MODE or "local").strip().lower()
+    if db_mode in ["local", "sqlite", "chroma", "chromadb"]:
+        return False
+    if db_mode in ["cloud", "turso-pinecone", "pinecone", "production"]:
+        key = (settings.PINECONE_API_KEY or "").strip()
+        return bool(key and not key.startswith("paste_"))
+
     key = (settings.PINECONE_API_KEY or "").strip()
     return bool(key and not key.startswith("paste_"))
 
