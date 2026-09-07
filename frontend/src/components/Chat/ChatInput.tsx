@@ -10,7 +10,7 @@ import {
   LuChevronDown,
   LuChevronUp,
   LuCheck,
-  LuSend,
+  LuArrowUp,
   LuLoader,
   LuX,
   LuDatabase,
@@ -51,16 +51,52 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [isMultiline, setIsMultiline] = useState(false);
 
   useEffect(() => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-      textareaRef.current.style.height = `${Math.min(
-        textareaRef.current.scrollHeight,
-        150
-      )}px`;
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+
+    // When empty, instantly retract to sleek single-line pill
+    if (!inputQuery.trim()) {
+      setIsMultiline(false);
+      textarea.style.height = '26px';
+      return;
     }
-  }, [inputQuery]);
+
+    // If explicit newline exists, always multiline
+    if (inputQuery.includes('\n')) {
+      setIsMultiline(true);
+      textarea.style.height = 'auto';
+      textarea.style.height = `${Math.min(textarea.scrollHeight, 220)}px`;
+      return;
+    }
+
+    if (isMultiline) {
+      textarea.style.height = 'auto';
+      const sh = textarea.scrollHeight;
+      if (sh > 34) {
+        textarea.style.height = `${Math.min(sh, 220)}px`;
+      } else {
+        // Fits on one line, retract back to single-line pill if text fits
+        if (inputQuery.length < 50) {
+          setIsMultiline(false);
+          textarea.style.height = '26px';
+        } else {
+          textarea.style.height = `${sh}px`;
+        }
+      }
+    } else {
+      textarea.style.height = 'auto';
+      const sh = textarea.scrollHeight;
+      if (sh > 34) {
+        setIsMultiline(true);
+        textarea.style.height = `${Math.min(sh, 220)}px`;
+      } else {
+        textarea.style.height = '26px';
+      }
+    }
+  }, [inputQuery, isMultiline]);
 
   // Global '/' keyboard shortcut to focus chat input like ChatGPT
   useEffect(() => {
@@ -201,45 +237,54 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     return <LuFile size={13} className="text-(--text-muted)" />;
   };
 
+  const isExpanded = isMultiline || documents.length > 0 || isUploading;
+
   return (
     <div className="p-4 max-w-4xl w-full mx-auto shrink-0 flex flex-col gap-2">
-      {/* Uploading progress indicator or attached documents banner */}
-      {(isUploading || documents.length > 0) && (
-        <div className="flex flex-wrap items-center gap-1.5 px-2">
-          {isUploading && (
-            <div className="flex items-center gap-1.5 px-2.5 py-1 bg-primary-light-theme border border-primary-theme text-primary-theme rounded-full text-xs animate-pulse">
-              <LuLoader size={13} className="icon-spin" />
-              <span>{uploadStatusText || 'Vectorizing document...'}</span>
+      <form onSubmit={onSubmit} className="w-full">
+        <div
+          className={`bg-(--bg-input) border border-(--border-subtle) hover:border-(--border-hover) shadow-lg transition-[border-radius] duration-150 ease-out grid ${isExpanded
+            ? 'rounded-3xl p-3 pt-0 gap-y-2 grid-cols-[auto_1fr_auto]'
+            : 'rounded-full px-3.5 py-1.5 gap-x-2 grid-cols-[auto_1fr_auto] items-center'
+            }`}
+        >
+          {/* Uploading progress indicator or attached documents banner */}
+          {(isUploading || documents.length > 0) && (
+            <div className="col-span-full row-start-1 flex flex-wrap items-center gap-1.5 pb-2 mb-1 border-b border-(--border-subtle)/50">
+              {isUploading && (
+                <div className="flex items-center gap-1.5 px-2.5 py-1 bg-primary-light-theme border border-primary-theme text-primary-theme rounded-full text-xs animate-pulse">
+                  <LuLoader size={13} className="icon-spin" />
+                  <span>{uploadStatusText || 'Vectorizing document...'}</span>
+                </div>
+              )}
+
+              {documents.map((doc) => (
+                <div
+                  key={doc.document_id}
+                  className="flex items-center gap-1.5 px-2.5 py-1 bg-(--border-subtle) border border-(--border-subtle) text-(--text-main) rounded-full text-xs max-w-50"
+                  title={`${doc.filename} (${(doc.file_size_bytes / 1024).toFixed(1)} KB)`}
+                >
+                  {getFileIcon(doc.file_type)}
+                  <span className="truncate">{doc.filename}</span>
+                  {onDeleteDocument && (
+                    <button
+                      type="button"
+                      className="hover:text-red-500 cursor-pointer ml-0.5"
+                      onClick={() => onDeleteDocument(doc.document_id)}
+                      title="Remove document"
+                    >
+                      <LuX size={12} />
+                    </button>
+                  )}
+                </div>
+              ))}
             </div>
           )}
 
-          {documents.map((doc) => (
-            <div
-              key={doc.document_id}
-              className="flex items-center gap-1.5 px-2.5 py-1 bg-(--border-subtle) border border-(--border-subtle) text-(--text-main) rounded-full text-xs max-w-50"
-              title={`${doc.filename} (${(doc.file_size_bytes / 1024).toFixed(1)} KB)`}
-            >
-              {getFileIcon(doc.file_type)}
-              <span className="truncate">{doc.filename}</span>
-              {onDeleteDocument && (
-                <button
-                  type="button"
-                  className="hover:text-red-500 cursor-pointer ml-0.5"
-                  onClick={() => onDeleteDocument(doc.document_id)}
-                  title="Remove document"
-                >
-                  <LuX size={12} />
-                </button>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-
-      <form onSubmit={onSubmit} className="w-full">
-        <div className="flex items-center gap-2 bg-(--bg-input) border border-(--border-subtle) focus-within:border-primary-theme rounded-2xl p-2 shadow-lg">
-          {/* Left Controls: Plus Attach Button & Mode Dropdown */}
-          <div className="relative flex items-center gap-1.5" ref={dropdownRef}>
+          {/* Left: Plus Attach Button */}
+          <div
+            className={`relative flex items-center shrink-0 ${isExpanded ? 'col-start-1 row-start-3' : 'col-start-1 row-start-1'}`}
+          >
             <input
               type="file"
               ref={fileInputRef}
@@ -250,19 +295,42 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             />
             <button
               type="button"
-              className="w-8 h-8 rounded-full bg-(--border-subtle) hover:bg-(--border-hover) text-(--text-muted) hover:text-(--text-main) flex items-center justify-center cursor-pointer shrink-0 disabled:opacity-50"
+              className="w-8 h-8 rounded-full bg-(--border-subtle) hover:bg-(--border-hover) text-(--text-muted) hover:text-(--text-main) flex items-center justify-center cursor-pointer shrink-0 disabled:opacity-50 transition-colors"
               onClick={() => fileInputRef.current?.click()}
               title="Add document or image"
               disabled={isUploading || isSending}
             >
               {isUploading ? <LuLoader size={16} className="icon-spin" /> : <LuPlus size={18} />}
             </button>
+          </div>
 
+          {/* Center/Top: Textarea (single-line pill initially, full-width at top when expanded) */}
+          <textarea
+            ref={textareaRef}
+            value={inputQuery}
+            onChange={(e) => setInputQuery(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="Ask anything"
+            rows={1}
+            required
+            className={`bg-transparent border-0 outline-none resize-none text-[15px] text-(--text-main) px-2 leading-normal ${isExpanded
+              ? 'col-span-full row-start-2 w-full max-h-52 overflow-y-auto py-1'
+              : 'col-start-2 row-start-1 w-full h-6.5 max-h-6.5 overflow-hidden py-0'
+              }`}
+          />
+
+          {/* Right Actions: Engine Mode Selector + Send/Stop Button */}
+          <div
+            className={`flex items-center gap-2 shrink-0 ${isExpanded
+              ? 'col-start-3 row-start-3 justify-self-end'
+              : 'col-start-3 row-start-1'
+              }`}
+          >
             {/* Mode Dropdown Selector */}
-            <div className="relative">
+            <div className="relative" ref={dropdownRef}>
               <button
                 type="button"
-                className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full border cursor-pointer ${isDropdownOpen
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-full border cursor-pointer transition-colors ${isDropdownOpen
                   ? 'bg-primary-light-theme text-primary-theme border-primary-theme'
                   : 'bg-(--border-subtle) text-(--text-muted) hover:text-(--text-main) border-(--border-subtle) hover:border-(--border-hover)'
                   }`}
@@ -277,7 +345,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
               {/* Dropdown Popup Menu */}
               {isDropdownOpen && (
-                <div className="absolute bottom-full left-0 mb-2 w-56 bg-(--bg-card) border border-(--border-hover) rounded-xl shadow-2xl z-50 p-1.5 flex flex-col gap-1 backdrop-blur-xl">
+                <div className="absolute bottom-full right-0 mb-2 w-56 bg-(--bg-card) border border-(--border-hover) rounded-xl shadow-2xl z-50 p-1.5 flex flex-col gap-1 backdrop-blur-xl">
                   <div className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-semibold text-(--text-muted) uppercase tracking-wider border-b border-(--border-subtle) mb-0.5">
                     <LuSlidersHorizontal size={12} /> Engine Mode
                   </div>
@@ -297,7 +365,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                         <span className="text-[10px] text-(--text-muted)">Live Internet Access</span>
                       </div>
                     </div>
-                    {currentMode === 'WEB_SEARCH' && <LuCheck size={14} className="text-emerald-500 dark:text-emerald-400" />}
+                    {currentMode === 'WEB_SEARCH' && (
+                      <LuCheck size={14} className="text-emerald-500 dark:text-emerald-400" />
+                    )}
                   </button>
 
                   <button
@@ -315,7 +385,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                         <span className="text-[10px] text-(--text-muted)">Grounded Context QA</span>
                       </div>
                     </div>
-                    {currentMode === 'DOCUMENT_RAG' && <LuCheck size={14} className="text-primary-theme" />}
+                    {currentMode === 'DOCUMENT_RAG' && (
+                      <LuCheck size={14} className="text-primary-theme" />
+                    )}
                   </button>
 
                   <button
@@ -329,7 +401,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                       <div className="flex flex-col">
                         <div className="flex items-center gap-1.5">
                           <span className="font-semibold">Multimodal</span>
-                          <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-(--border-subtle) text-(--text-muted) uppercase font-medium">Soon</span>
+                          <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-(--border-subtle) text-(--text-muted) uppercase font-medium">
+                            Soon
+                          </span>
                         </div>
                         <span className="text-[10px] text-(--text-muted)">Vision & Audio (Coming)</span>
                       </div>
@@ -337,42 +411,29 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                   </button>
                 </div>
               )}
-
             </div>
+
+            {/* Right Action: Stop or Send */}
+            {isSending ? (
+              <button
+                type="button"
+                onClick={onStopGeneration}
+                className="w-8 h-8 rounded-full bg-primary-theme hover:opacity-90 text-white flex items-center justify-center cursor-pointer shrink-0 transition-transform active:scale-95 shadow-md"
+                title="Stop generating"
+              >
+                <div className="w-2.5 h-2.5 bg-white rounded-xs" />
+              </button>
+            ) : (
+              <button
+                type="submit"
+                className="w-8 h-8 rounded-full bg-primary-theme hover:opacity-90 disabled:opacity-30 text-white flex items-center justify-center disabled:cursor-not-allowed shrink-0 disabled:shadow-none transition-all"
+                disabled={!inputQuery.trim()}
+                title="Send Question"
+              >
+                <LuArrowUp size={18} />
+              </button>
+            )}
           </div>
-
-          {/* Textarea: user can write at any time even while response is generating */}
-          <textarea
-            ref={textareaRef}
-            value={inputQuery}
-            onChange={(e) => setInputQuery(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={'Ask anything'}
-            rows={1}
-            required
-            className="flex-1 bg-transparent border-0 outline-none resize-none text-sm px-2 py-1 max-h-36 overflow-y-auto"
-          />
-
-          {/* Action Button: Stop/Pause square while generating, Send button when idle */}
-          {isSending ? (
-            <button
-              type="button"
-              onClick={onStopGeneration}
-              className="w-8 h-8 rounded-full bg-primary-theme hover:opacity-90 text-white flex items-center justify-center cursor-pointer shrink-0 transition-transform active:scale-95 shadow-md"
-              title="Stop generating"
-            >
-              <div className="w-2.5 h-2.5 bg-white rounded-[2px]" />
-            </button>
-          ) : (
-            <button
-              type="submit"
-              className="w-8 h-8 rounded-full bg-primary-theme hover:opacity-90 disabled:opacity-30 text-white flex items-center justify-center disabled:cursor-not-allowed shrink-0 disabled:shadow-none transition-all"
-              disabled={!inputQuery.trim()}
-              title="Send Question"
-            >
-              <LuSend size={15} />
-            </button>
-          )}
         </div>
       </form>
 
