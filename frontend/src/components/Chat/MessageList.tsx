@@ -267,6 +267,7 @@ export const MessageList: React.FC<MessageListProps> = ({
           {streamingMessage && (
             <MessageItem
               role="assistant"
+              isStreaming={true}
               content={streamingMessage.content}
               citations={streamingMessage.citations}
               isHighlighted={false}

@@ -120,7 +120,7 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(({
   };
 
   const formatContent = (text: string) => {
-    if (!text) return '';
+    if (!text || !text.trim()) return null;
     const lines = text.split('\n');
 
     return lines.map((line, lineIdx) => {
@@ -209,12 +209,12 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(({
         }`}
       >
         <div
-          className={`px-4 py-2 rounded-2xl text-sm leading-relaxed transition-all duration-300 ${
+          className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed transition-all duration-300 ${
             isUser
-              ? `bg-primary-theme text-white rounded-br-none ${
+              ? `bg-primary-theme text-white ${
                   isHighlighted ? 'ring-3 ring-primary-theme/50 shadow-lg' : ''
                 }`
-              : `bg-(--bg-card) border border-(--border-subtle) text-(--text-main) rounded-tl-none shadow-sm ${
+              : `bg-(--bg-card) border border-(--border-subtle) text-(--text-main) shadow-xs ${
                   isHighlighted ? 'ring-2 ring-primary-theme shadow-md' : ''
                 }`
           }`}
@@ -223,13 +223,22 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(({
             <span className="text-red-500 flex items-center gap-1.5">
               <LuTriangleAlert size={16} /> {content}
             </span>
-          ) : isStreaming && !content ? (
-            <span className="flex items-center gap-2 text-(--text-muted)">
-              <span className="w-2 h-2 rounded-full bg-primary-theme animate-ping"></span>
-              Generating answer...
+          ) : isStreaming && !content?.trim() ? (
+            <span className="flex items-center gap-2 text-(--text-muted) text-xs py-0.5">
+              <span className="flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-primary-theme animate-bounce [animation-delay:-0.32s]" />
+                <span className="w-1.5 h-1.5 rounded-full bg-primary-theme animate-bounce [animation-delay:-0.16s]" />
+                <span className="w-1.5 h-1.5 rounded-full bg-primary-theme animate-bounce" />
+              </span>
+              <span>Thinking...</span>
             </span>
           ) : (
-            formatContent(content)
+            <>
+              {formatContent(content)}
+              {isStreaming && (
+                <span className="inline-block w-1.5 h-4 ml-1 bg-primary-theme animate-pulse align-middle rounded-xs" />
+              )}
+            </>
           )}
         </div>
 
