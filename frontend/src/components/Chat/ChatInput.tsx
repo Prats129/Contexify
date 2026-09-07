@@ -250,7 +250,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         >
           {/* Uploading progress indicator or attached documents banner */}
           {(isUploading || documents.length > 0) && (
-            <div className="col-span-full row-start-1 flex flex-wrap items-center gap-1.5 pb-2 mb-1 border-b border-(--border-subtle)/50">
+            <div className="col-span-full row-start-1 flex flex-wrap items-center gap-1.5 pb-2 mb-1 mt-3 border-b border-(--border-subtle)/50">
               {isUploading && (
                 <div className="flex items-center gap-1.5 px-2.5 py-1 bg-primary-light-theme border border-primary-theme text-primary-theme rounded-full text-xs animate-pulse">
                   <LuLoader size={13} className="icon-spin" />
@@ -298,7 +298,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
               className="w-8 h-8 rounded-full bg-(--border-subtle) hover:bg-(--border-hover) text-(--text-muted) hover:text-(--text-main) flex items-center justify-center cursor-pointer shrink-0 disabled:opacity-50 transition-colors"
               onClick={() => fileInputRef.current?.click()}
               title="Add document or image"
-              disabled={isUploading || isSending}
+              disabled={isUploading}
             >
               {isUploading ? <LuLoader size={16} className="icon-spin" /> : <LuPlus size={18} />}
             </button>
@@ -336,7 +336,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                   }`}
                 onClick={() => setIsDropdownOpen((prev) => !prev)}
                 title="Select Engine Mode"
-                disabled={isSending}
               >
                 {currentModeDetails.icon}
                 <span className="hidden sm:inline-block">{currentModeDetails.title}</span>
