@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { LuBrain, LuTriangleAlert, LuCopy, LuCheck, LuExternalLink } from 'react-icons/lu';
+import { LuTriangleAlert, LuCopy, LuCheck, LuExternalLink } from 'react-icons/lu';
 import type { Citation } from '../../types';
 
 interface MessageItemProps {
@@ -25,9 +25,6 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(({
   citations,
   isStreaming,
   isError,
-  userAvatarUrl,
-  userAvatarColor,
-  userDisplayName,
   isSourcesActive,
   isHighlighted,
   onToggleSources,
@@ -206,15 +203,9 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(({
           : ''
       }`}
     >
-      {!isUser && (
-        <div className="w-8 h-8 rounded-full bg-primary-theme flex items-center justify-center text-white text-sm shrink-0 mt-1">
-          <LuBrain size={16} />
-        </div>
-      )}
-
       <div
-        className={`flex flex-col gap-1 max-w-[85%] md:max-w-[75%] ${
-          isUser ? 'items-end' : 'items-start mt-1'
+        className={`flex flex-col gap-1 max-w-[85%] md:max-w-[80%] ${
+          isUser ? 'items-end' : 'items-start'
         }`}
       >
         <div
@@ -319,23 +310,6 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(({
           </div>
         )}
       </div>
-
-      {isUser && (
-        userAvatarUrl ? (
-          <img
-            src={userAvatarUrl}
-            alt="User"
-            className="w-8 h-8 rounded-full object-cover shrink-0 mt-1 border border-(--border-subtle)"
-          />
-        ) : (
-          <div
-            className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-white text-xs shrink-0 mt-1"
-            style={{ backgroundColor: userAvatarColor || 'var(--color-primary)' }}
-          >
-            {userDisplayName ? userDisplayName.charAt(0).toUpperCase() : 'U'}
-          </div>
-        )
-      )}
     </div>
   );
 });

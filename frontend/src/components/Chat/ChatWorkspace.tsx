@@ -176,16 +176,11 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
 
       {/* Main Workspace: Chat Column + Sources Card anchored to right */}
       <div
-        className={`flex-1 flex overflow-hidden w-full px-2 sm:px-6 transition-all duration-150 ${activeSources ? 'justify-between' : 'justify-center'
+        className={`flex-1 flex overflow-hidden w-full transition-all duration-150 ${activeSources ? 'justify-between' : 'justify-center'
           }`}
       >
         {/* Main Conversation Column: MessageList + ChatInput */}
-        <div
-          className={`flex-1 flex flex-col h-full min-w-0 ${activeSources
-            ? 'max-w-4xl mx-auto lg:mr-auto lg:ml-4'
-            : 'max-w-3xl mx-auto'
-            }`}
-        >
+        <div className="flex-1 flex flex-col h-full min-w-0 w-full">
           <MessageList
             messages={messages}
             streamingMessage={streamingMessage}
@@ -193,22 +188,27 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
             currentUser={currentUser}
             activeSourcesMessageId={activeSources?.messageId}
             onToggleSources={handleToggleSources}
+            activeSources={!!activeSources}
           />
 
-          <ChatInput
-            inputQuery={inputQuery}
-            setInputQuery={setInputQuery}
-            onSubmit={onSendMessage}
-            onStopGeneration={onStopGeneration}
-            isSending={isSending}
-            currentMode={currentMode}
-            onModeChange={onModeChange}
-            onFileUpload={onFileUpload}
-            isUploading={isUploading}
-            uploadStatusText={uploadStatusText}
-            documents={documents}
-            onDeleteDocument={onDeleteDocument}
-          />
+          <div className="w-full shrink-0 px-2 sm:px-6 pb-2">
+            <div className={`mx-auto ${activeSources ? 'max-w-4xl lg:mr-auto lg:ml-4' : 'max-w-3xl'}`}>
+              <ChatInput
+                inputQuery={inputQuery}
+                setInputQuery={setInputQuery}
+                onSubmit={onSendMessage}
+                onStopGeneration={onStopGeneration}
+                isSending={isSending}
+                currentMode={currentMode}
+                onModeChange={onModeChange}
+                onFileUpload={onFileUpload}
+                isUploading={isUploading}
+                uploadStatusText={uploadStatusText}
+                documents={documents}
+                onDeleteDocument={onDeleteDocument}
+              />
+            </div>
+          </div>
         </div>
 
         {/* Right side floating Perplexity Sources Card */}
