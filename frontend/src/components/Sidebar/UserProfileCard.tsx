@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { LuSettings, LuLogOut } from 'react-icons/lu';
 import { useTheme } from '../../context/ThemeContext';
+import { useConfirm } from '../../context/ConfirmContext';
 import type { User } from '../../types';
 
 interface UserProfileCardProps {
@@ -16,6 +17,7 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
   onOpenModal,
   onLogout,
 }) => {
+  const { confirm } = useConfirm();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [menuPosition, setMenuPosition] = useState<{ left: number; bottom: number }>({
     left: 12,
@@ -80,9 +82,20 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
     onOpenModal();
   };
 
-  const handleLogoutConfirm = () => {
+  const handleLogoutConfirm = async () => {
     setIsMenuOpen(false);
-    if (window.confirm('Are you sure you want to log out of your account?')) {
+    const confirmed = await confirm({
+      type: 'logout',
+      confirmText: 'Log out',
+      cancelText: 'Cancel',
+      user: {
+        displayName: currentUser.display_name,
+        email: currentUser.email,
+        avatarColor: avatarBg,
+        initial,
+      },
+    });
+    if (confirmed) {
       onLogout();
     }
   };

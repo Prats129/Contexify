@@ -17,6 +17,7 @@ interface MessageListProps {
   currentUser?: User | null;
   activeSourcesMessageId?: string;
   onToggleSources?: (msgId: string, citations: Citation[], queryTitle?: string) => void;
+  activeSources?: boolean;
 }
 
 export const MessageList: React.FC<MessageListProps> = ({
@@ -26,6 +27,7 @@ export const MessageList: React.FC<MessageListProps> = ({
   currentUser,
   activeSourcesMessageId,
   onToggleSources,
+  activeSources,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollEndRef = useRef<HTMLDivElement>(null);
@@ -169,120 +171,125 @@ export const MessageList: React.FC<MessageListProps> = ({
       <div
         ref={containerRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto px-2 py-4 md:py-6 w-full flex flex-col gap-5"
+        className="flex-1 overflow-y-auto px-2 sm:px-6 py-4 md:py-6 w-full flex flex-col items-center"
       >
-        {showWelcome && (
-          <div className="my-auto flex flex-col items-center text-center p-8 border border-(--border-subtle) bg-(--bg-card) rounded-3xl max-w-2xl mx-auto shadow-xl">
-            <div className="w-12 h-12 rounded-2xl bg-primary-light-theme border border-primary-theme flex items-center justify-center text-primary-theme text-2xl mb-4">
-              <LuSparkles size={24} />
+        <div
+          className={`w-full flex flex-col gap-5 ${activeSources ? 'max-w-4xl lg:mr-auto lg:ml-4' : 'max-w-3xl'
+            }`}
+        >
+          {showWelcome && (
+            <div className="my-auto flex flex-col items-center text-center p-8 border border-(--border-subtle) bg-(--bg-card) rounded-3xl max-w-2xl mx-auto shadow-xl">
+              <div className="w-12 h-12 rounded-2xl bg-primary-light-theme border border-primary-theme flex items-center justify-center text-primary-theme text-2xl mb-4">
+                <LuSparkles size={24} />
+              </div>
+              <h2 className="text-xl md:text-2xl font-bold text-(--text-main) mb-2">
+                Welcome to Enterprise Knowledge AI
+              </h2>
+              <p className="text-xs md:text-sm text-(--text-muted) leading-relaxed mb-6 max-w-lg">
+                Upload documents to ask grounded questions with verifiable source
+                citations, or switch to Live Web Search mode.
+              </p>
+
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                <button
+                  type="button"
+                  className="flex items-center gap-2 px-3 py-2 bg-(--border-subtle) hover:bg-(--border-hover) border border-(--border-subtle) text-(--text-main) rounded-xl text-xs cursor-pointer"
+                  onClick={() =>
+                    onSelectPrompt(
+                      "Summarize the core topics covered in the uploaded document.",
+                    )
+                  }
+                >
+                  <LuListTodo size={14} className="text-primary-theme" />{" "}
+                  Summarize document
+                </button>
+                <button
+                  type="button"
+                  className="flex items-center gap-2 px-3 py-2 bg-(--border-subtle) hover:bg-(--border-hover) border border-(--border-subtle) text-(--text-main) rounded-xl text-xs cursor-pointer"
+                  onClick={() =>
+                    onSelectPrompt(
+                      "What are the key technical concepts mentioned here?",
+                    )
+                  }
+                >
+                  <LuCpu size={14} className="text-primary-theme" /> Key concepts
+                </button>
+                <button
+                  type="button"
+                  className="flex items-center gap-2 px-3 py-2 bg-(--border-subtle) hover:bg-(--border-hover) border border-(--border-subtle) text-(--text-main) rounded-xl text-xs cursor-pointer"
+                  onClick={() =>
+                    onSelectPrompt(
+                      "List any critical guidelines or rules stated in the text.",
+                    )
+                  }
+                >
+                  <LuTarget size={14} className="text-primary-theme" /> Rules &
+                  guidelines
+                </button>
+              </div>
             </div>
-            <h2 className="text-xl md:text-2xl font-bold text-(--text-main) mb-2">
-              Welcome to Enterprise Knowledge AI
-            </h2>
-            <p className="text-xs md:text-sm text-(--text-muted) leading-relaxed mb-6 max-w-lg">
-              Upload documents to ask grounded questions with verifiable source
-              citations, or switch to Live Web Search mode.
-            </p>
+          )}
 
-            <div className="flex flex-wrap items-center justify-center gap-2">
-              <button
-                type="button"
-                className="flex items-center gap-2 px-3 py-2 bg-(--border-subtle) hover:bg-(--border-hover) border border-(--border-subtle) text-(--text-main) rounded-xl text-xs cursor-pointer"
-                onClick={() =>
-                  onSelectPrompt(
-                    "Summarize the core topics covered in the uploaded document.",
-                  )
-                }
-              >
-                <LuListTodo size={14} className="text-primary-theme" />{" "}
-                Summarize document
-              </button>
-              <button
-                type="button"
-                className="flex items-center gap-2 px-3 py-2 bg-(--border-subtle) hover:bg-(--border-hover) border border-(--border-subtle) text-(--text-main) rounded-xl text-xs cursor-pointer"
-                onClick={() =>
-                  onSelectPrompt(
-                    "What are the key technical concepts mentioned here?",
-                  )
-                }
-              >
-                <LuCpu size={14} className="text-primary-theme" /> Key concepts
-              </button>
-              <button
-                type="button"
-                className="flex items-center gap-2 px-3 py-2 bg-(--border-subtle) hover:bg-(--border-hover) border border-(--border-subtle) text-(--text-main) rounded-xl text-xs cursor-pointer"
-                onClick={() =>
-                  onSelectPrompt(
-                    "List any critical guidelines or rules stated in the text.",
-                  )
-                }
-              >
-                <LuTarget size={14} className="text-primary-theme" /> Rules &
-                guidelines
-              </button>
-            </div>
-          </div>
-        )}
-
-        {messages.map((msg, idx) => {
-          let precedingUserQuery = "";
-          for (let i = idx - 1; i >= 0; i--) {
-            if (messages[i].role === "user") {
-              precedingUserQuery = messages[i].content;
-              break;
-            }
-          }
-
-          const isThisSourceActive = activeSourcesMessageId === msg.id;
-
-          return (
-            <MessageItem
-              key={msg.id}
-              id={`msg-${msg.id}`}
-              role={msg.role}
-              content={msg.content}
-              citations={msg.citations}
-              isHighlighted={highlightedMessageId === msg.id}
-              userAvatarUrl={currentUser?.avatar_url}
-              userAvatarColor={currentUser?.avatar_color}
-              userDisplayName={currentUser?.display_name || currentUser?.username}
-              queryTitle={precedingUserQuery}
-              isSourcesActive={isThisSourceActive}
-              onToggleSources={
-                onToggleSources
-                  ? (cits) => onToggleSources(msg.id, cits, precedingUserQuery)
-                  : undefined
+          {messages.map((msg, idx) => {
+            let precedingUserQuery = "";
+            for (let i = idx - 1; i >= 0; i--) {
+              if (messages[i].role === "user") {
+                precedingUserQuery = messages[i].content;
+                break;
               }
-            />
-          );
-        })}
+            }
 
-        {streamingMessage && (
-          <MessageItem
-            role={streamingMessage.role}
-            content={streamingMessage.content}
-            citations={streamingMessage.citations}
-            isStreaming={streamingMessage.isStreaming}
-            isError={streamingMessage.isError}
-            userAvatarUrl={currentUser?.avatar_url}
-            userAvatarColor={currentUser?.avatar_color}
-            userDisplayName={currentUser?.display_name || currentUser?.username}
-            queryTitle={messages[messages.length - 1]?.content || ""}
-            isSourcesActive={activeSourcesMessageId === "streaming"}
-            onToggleSources={
-              onToggleSources
-                ? (cits) =>
+            const isThisSourceActive = activeSourcesMessageId === msg.id;
+
+            return (
+              <MessageItem
+                key={msg.id}
+                id={`msg-${msg.id}`}
+                role={msg.role}
+                content={msg.content}
+                citations={msg.citations}
+                isHighlighted={highlightedMessageId === msg.id}
+                userAvatarUrl={currentUser?.avatar_url}
+                userAvatarColor={currentUser?.avatar_color}
+                userDisplayName={currentUser?.display_name || currentUser?.username}
+                queryTitle={precedingUserQuery}
+                isSourcesActive={isThisSourceActive}
+                onToggleSources={
+                  onToggleSources && msg.citations && msg.citations.length > 0
+                    ? () =>
+                      onToggleSources(msg.id, msg.citations!, precedingUserQuery)
+                    : undefined
+                }
+              />
+            );
+          })}
+
+          {streamingMessage && (
+            <MessageItem
+              role="assistant"
+              isStreaming={true}
+              content={streamingMessage.content}
+              citations={streamingMessage.citations}
+              isHighlighted={false}
+              queryTitle={messages[messages.length - 1]?.content || ""}
+              isSourcesActive={activeSourcesMessageId === "streaming"}
+              onToggleSources={
+                onToggleSources &&
+                  streamingMessage.citations &&
+                  streamingMessage.citations.length > 0
+                  ? (cits) =>
                     onToggleSources(
                       "streaming",
                       cits,
                       messages[messages.length - 1]?.content || "",
                     )
-                : undefined
-            }
-          />
-        )}
+                  : undefined
+              }
+            />
+          )}
 
-        <div ref={scrollEndRef} />
+          <div ref={scrollEndRef} />
+        </div>
       </div>
 
       {/* ChatGPT-Style User Prompt Timeline Navigator */}

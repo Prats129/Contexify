@@ -27,6 +27,7 @@ import {
   LuKeyRound,
 } from 'react-icons/lu';
 import { useTheme, ACCENT_PALETTES, type AccentColor } from '../../context/ThemeContext';
+import { useConfirm } from '../../context/ConfirmContext';
 import type { User, SendOtpResponse, GoogleAuthRequest } from '../../types';
 
 const GoogleIcon: React.FC = () => (
@@ -99,6 +100,7 @@ export const UserModal: React.FC<UserModalProps> = ({
   onDeleteAvatar,
 }) => {
   const { mode, setMode, accent, setAccent, currentAccent } = useTheme();
+  const { confirm } = useConfirm();
   const [activeTab, setActiveTab] = useState<'login' | 'register'>('login');
   const avatarFileInputRef = useRef<HTMLInputElement>(null);
   const otpInputRef = useRef<HTMLInputElement>(null);
@@ -948,8 +950,19 @@ export const UserModal: React.FC<UserModalProps> = ({
                 <button
                   type="button"
                   className="w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-red-500/15 hover:bg-red-500/25 border border-red-500/30 text-red-500 rounded-xl text-xs font-semibold cursor-pointer"
-                  onClick={() => {
-                    if (window.confirm('Are you sure you want to log out of your account?')) {
+                  onClick={async () => {
+                    const confirmed = await confirm({
+                      type: 'logout',
+                      confirmText: 'Log out',
+                      cancelText: 'Cancel',
+                      user: {
+                        displayName: currentUser.display_name,
+                        email: currentUser.email,
+                        avatarColor: currentUser.avatar_color || '#3B82F6',
+                        initial: (currentUser.display_name || currentUser.username || 'U').slice(0, 2).toUpperCase(),
+                      },
+                    });
+                    if (confirmed) {
                       onLogout();
                       onClose();
                     }

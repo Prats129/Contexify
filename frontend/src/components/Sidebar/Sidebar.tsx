@@ -47,15 +47,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
       >
         {isOpen ? (
           <>
-            <div className="flex items-center gap-2.5 overflow-hidden">
-              <div className="w-16 h-9 flex items-center justify-center shrink-0">
-                <img src="/logo.png" alt="Contexify Logo" className="w-full h-full object-contain" />
+            <button
+              type="button"
+              onClick={onNewSession}
+              className="flex items-center gap-2.5 overflow-hidden text-left p-1 -m-1 rounded-xl hover:bg-(--border-subtle) transition-all cursor-pointer group"
+            >
+              <div className="w-12 h-9 flex items-center justify-center shrink-0">
+                <img
+                  src="/logo.png"
+                  alt="Contexify Logo"
+                  className="w-full h-full object-contain group-hover:scale-105 transition-transform"
+                />
               </div>
               <div className="flex flex-col min-w-0">
-                <h1 className="text-sm font-bold text-(--text-main) truncate leading-tight">Contexify AI</h1>
+                <h1 className="text-sm font-bold text-(--text-main) truncate leading-tight group-hover:text-primary-theme transition-colors">
+                  Contexify AI
+                </h1>
                 <span className="text-[11px] text-(--text-muted) truncate">Enterprise RAG & Search</span>
               </div>
-            </div>
+            </button>
 
             <button
               type="button"

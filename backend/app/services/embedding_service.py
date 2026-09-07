@@ -33,20 +33,25 @@ class EmbeddingService:
 
         if self.client:
             try:
-                # Use Google GenAI SDK
+                # Use Google GenAI SDK with calibrated output dimensionality (768 for Pinecone)
+                config = {}
+                if settings.EMBEDDING_DIMENSION:
+                    config["output_dimensionality"] = settings.EMBEDDING_DIMENSION
+
                 response = self.client.models.embed_content(
                     model=settings.DEFAULT_EMBEDDING_MODEL,
                     contents=texts,
+                    config=config if config else None,
                 )
                 embeddings = [embedding.values for embedding in response.embeddings]
                 return embeddings
             except Exception as e:
                 logger.warning(f"GenAI API Embedding failed: {e}. Using deterministic local vector generator.")
 
-        # Local Fallback Vector Generator (384-dimensional normalized TF-IDF/hash vector)
-        return [self._local_deterministic_embedding(t) for t in texts]
+        # Local Fallback Vector Generator (normalized TF-IDF/hash vector matching index dimension)
+        return [self._local_deterministic_embedding(t, dim=settings.EMBEDDING_DIMENSION) for t in texts]
 
-    def _local_deterministic_embedding(self, text: str, dim: int = 384) -> List[float]:
+    def _local_deterministic_embedding(self, text: str, dim: int = 768) -> List[float]:
         """Generate a normalized pseudo-semantic vector for fallback/offline testing."""
         vec = [0.0] * dim
         words = text.lower().split()

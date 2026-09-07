@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { LuBrain, LuTriangleAlert, LuCopy, LuCheck, LuExternalLink } from 'react-icons/lu';
+import { LuTriangleAlert, LuCopy, LuCheck, LuExternalLink } from 'react-icons/lu';
 import type { Citation } from '../../types';
 
 interface MessageItemProps {
@@ -25,9 +25,6 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(({
   citations,
   isStreaming,
   isError,
-  userAvatarUrl,
-  userAvatarColor,
-  userDisplayName,
   isSourcesActive,
   isHighlighted,
   onToggleSources,
@@ -123,7 +120,7 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(({
   };
 
   const formatContent = (text: string) => {
-    if (!text) return '';
+    if (!text || !text.trim()) return null;
     const lines = text.split('\n');
 
     return lines.map((line, lineIdx) => {
@@ -206,24 +203,18 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(({
           : ''
       }`}
     >
-      {!isUser && (
-        <div className="w-8 h-8 rounded-full bg-primary-theme flex items-center justify-center text-white text-sm shrink-0 mt-1">
-          <LuBrain size={16} />
-        </div>
-      )}
-
       <div
-        className={`flex flex-col gap-1 max-w-[85%] md:max-w-[75%] ${
-          isUser ? 'items-end' : 'items-start mt-1'
+        className={`flex flex-col gap-1 max-w-[85%] md:max-w-[80%] ${
+          isUser ? 'items-end' : 'items-start'
         }`}
       >
         <div
-          className={`px-4 py-2 rounded-2xl text-sm leading-relaxed transition-all duration-300 ${
+          className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed transition-all duration-300 ${
             isUser
-              ? `bg-primary-theme text-white rounded-br-none ${
+              ? `bg-primary-theme text-white ${
                   isHighlighted ? 'ring-3 ring-primary-theme/50 shadow-lg' : ''
                 }`
-              : `bg-(--bg-card) border border-(--border-subtle) text-(--text-main) rounded-tl-none shadow-sm ${
+              : `bg-(--bg-card) border border-(--border-subtle) text-(--text-main) shadow-xs ${
                   isHighlighted ? 'ring-2 ring-primary-theme shadow-md' : ''
                 }`
           }`}
@@ -232,13 +223,22 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(({
             <span className="text-red-500 flex items-center gap-1.5">
               <LuTriangleAlert size={16} /> {content}
             </span>
-          ) : isStreaming && !content ? (
-            <span className="flex items-center gap-2 text-(--text-muted)">
-              <span className="w-2 h-2 rounded-full bg-primary-theme animate-ping"></span>
-              Generating answer...
+          ) : isStreaming && !content?.trim() ? (
+            <span className="flex items-center gap-2 text-(--text-muted) text-xs py-0.5">
+              <span className="flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-primary-theme animate-bounce [animation-delay:-0.32s]" />
+                <span className="w-1.5 h-1.5 rounded-full bg-primary-theme animate-bounce [animation-delay:-0.16s]" />
+                <span className="w-1.5 h-1.5 rounded-full bg-primary-theme animate-bounce" />
+              </span>
+              <span>Thinking...</span>
             </span>
           ) : (
-            formatContent(content)
+            <>
+              {formatContent(content)}
+              {isStreaming && (
+                <span className="inline-block w-1.5 h-4 ml-1 bg-primary-theme animate-pulse align-middle rounded-xs" />
+              )}
+            </>
           )}
         </div>
 
@@ -319,23 +319,6 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(({
           </div>
         )}
       </div>
-
-      {isUser && (
-        userAvatarUrl ? (
-          <img
-            src={userAvatarUrl}
-            alt="User"
-            className="w-8 h-8 rounded-full object-cover shrink-0 mt-1 border border-(--border-subtle)"
-          />
-        ) : (
-          <div
-            className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-white text-xs shrink-0 mt-1"
-            style={{ backgroundColor: userAvatarColor || 'var(--color-primary)' }}
-          >
-            {userDisplayName ? userDisplayName.charAt(0).toUpperCase() : 'U'}
-          </div>
-        )
-      )}
     </div>
   );
 });
