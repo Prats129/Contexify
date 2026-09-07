@@ -310,7 +310,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             value={inputQuery}
             onChange={(e) => setInputQuery(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Ask anything"
+            placeholder="Ask anything ..."
             rows={1}
             required
             className={`bg-transparent border-0 outline-none resize-none text-[15px] text-(--text-main) px-2 leading-normal ${isExpanded
