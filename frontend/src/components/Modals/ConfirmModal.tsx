@@ -96,7 +96,7 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
               ref={confirmBtnRef}
               type="button"
               onClick={onConfirm}
-              className="w-full py-2 px-5 rounded-full font-semibold text-sm bg-white border-2 border-slate-300 hover:border-red-500 border-dashed tetx-black hover:text-red-500 hover:bg-gray-200 transition-colors cursor-pointer shadow-sm active:scale-[0.99]"
+              className="w-full py-2 px-5 rounded-full font-semibold text-sm bg-white border-2 border-slate-300 hover:border-red-500 border-dashed text-black hover:text-red-500 hover:bg-gray-200 transition-colors cursor-pointer shadow-sm active:scale-[0.99]"
             >
               {confirmText || 'Log out'}
             </button>
