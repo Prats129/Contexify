@@ -53,6 +53,11 @@ class Settings(BaseSettings):
     PINECONE_API_KEY: str = Field(default="", env="PINECONE_API_KEY")
     PINECONE_INDEX_NAME: str = Field(default="contexify", env="PINECONE_INDEX_NAME")
 
+    # Brevo HTTP Email API (Port 443 - Bypasses Render & cloud host SMTP port blocking)
+    BREVO_API_KEY: str = Field(default="", env="BREVO_API_KEY")
+    BREVO_FROM_EMAIL: str = Field(default="contexifyindia@gmail.com", env="BREVO_FROM_EMAIL")
+    BREVO_FROM_NAME: str = Field(default="Contexify", env="BREVO_FROM_NAME")
+
     # SMTP Email Configuration
     SMTP_HOST: str = Field(default="", env="SMTP_HOST")
     SMTP_PORT: int = Field(default=587, env="SMTP_PORT")

@@ -29,7 +29,7 @@
 | **Backend** | Python 3.11+, FastAPI, Uvicorn, Pydantic v2 |
 | **Databases** | **Turso** (Cloud SQLite via `libsql`), **Pinecone** (Serverless Vector Index), **ChromaDB** (Fallback) |
 | **AI / LLM** | Google Gemini (`gemini-3.5-flash`, `gemini-embedding-001` with 768-dim calibration) |
-| **Auth & Email** | Google OAuth 2.0, Async SMTP (Mailtrap / Gmail) |
+| **Auth & Email** | Google OAuth 2.0, Brevo HTTPS REST API (Port 443 OTP Dispatch), Async SMTP |
 
 ---
 
@@ -74,14 +74,16 @@ PINECONE_INDEX_NAME=contexify
 # Google OAuth 2.0 (Optional)
 GOOGLE_CLIENT_ID=your_google_client_id.apps.googleusercontent.com
 
-# SMTP Email Relay (Optional - for Email OTP & Password Reset)
-SMTP_HOST=sandbox.smtp.mailtrap.io
-SMTP_PORT=2525
-SMTP_USER=your_smtp_user
-SMTP_PASSWORD=your_smtp_password
-SMTP_FROM_EMAIL=noreply@contexify.ai
-SMTP_FROM_NAME=Contexify
-SMTP_USE_TLS=True
+# Brevo HTTPS Email API (Recommended for Render & cloud hosts - bypasses SMTP port blocks)
+BREVO_API_KEY=xkeysib-your_brevo_api_key_here
+BREVO_FROM_EMAIL=your_verified_sender@gmail.com
+BREVO_FROM_NAME=Contexify
+
+# SMTP Email Relay (Optional fallback - for local Mailtrap testing)
+# SMTP_HOST=sandbox.smtp.mailtrap.io
+# SMTP_PORT=2525
+# SMTP_USER=your_smtp_user
+# SMTP_PASSWORD=your_smtp_password
 ```
 
 Create a `frontend/.env` file:

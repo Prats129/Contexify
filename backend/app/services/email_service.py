@@ -142,6 +142,72 @@ class EmailService:
                 logger.error(f"Both primary and fallback SMTP failed for '{to_email}'. Error: {fallback_err}", exc_info=True)
                 return False
 
+    def _send_brevo_http(self, to_email: str, subject: str, text_content: str, html_content: str) -> bool:
+        """Send email via Brevo HTTP REST API over standard HTTPS port 443 (bypasses cloud SMTP blocks, no custom domain required)."""
+        api_key = (settings.BREVO_API_KEY or "").strip().strip('"').strip("'")
+        if not api_key:
+            return False
+
+        from_email = (
+            settings.BREVO_FROM_EMAIL
+            or settings.SMTP_FROM_EMAIL
+            or settings.SMTP_USER
+            or "contexifyindia@gmail.com"
+        ).strip().strip('"').strip("'")
+        from_name = (
+            settings.BREVO_FROM_NAME
+            or settings.SMTP_FROM_NAME
+            or "Contexify"
+        ).strip().strip('"').strip("'")
+
+        payload = {
+            "sender": {"name": from_name, "email": from_email},
+            "to": [{"email": to_email}],
+            "subject": subject,
+            "htmlContent": html_content,
+            "textContent": text_content,
+        }
+
+        try:
+            import json
+            import urllib.request
+            import urllib.error
+
+            data = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(
+                "https://api.brevo.com/v3/smtp/email",
+                data=data,
+                headers={
+                    "api-key": api_key,
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 (Contexify-Backend)",
+                },
+                method="POST"
+            )
+
+            with urllib.request.urlopen(req, timeout=12) as response:
+                resp_data = json.loads(response.read().decode("utf-8"))
+                msg_id = resp_data.get("messageId", "ok")
+                logger.info(f"Successfully sent email to '{to_email}' via Brevo HTTPS API (id: {msg_id})")
+                return True
+        except urllib.error.HTTPError as he:
+            err_body = he.read().decode("utf-8", errors="ignore")
+            logger.error(f"Brevo HTTPS API error [{he.code}] sending to '{to_email}': {err_body}")
+            return False
+        except Exception as e:
+            logger.error(f"Failed to dispatch email via Brevo HTTPS API: {e}", exc_info=True)
+            return False
+
+    def _send_email_sync(self, to_email: str, subject: str, text_content: str, html_content: str) -> bool:
+        """Dispatcher: prefers Brevo HTTPS API (port 443, cloud-friendly), falls back to SMTP."""
+        brevo_key = (settings.BREVO_API_KEY or "").strip().strip('"').strip("'")
+        if brevo_key and not brevo_key.startswith("paste_"):
+            if self._send_brevo_http(to_email, subject, text_content, html_content):
+                return True
+
+        return self._send_smtp_sync(to_email, subject, text_content, html_content)
+
     def _generate_password_reset_html(self, display_name: str, otp_code: str, expiry_minutes: int) -> str:
         name_str = f" {display_name}" if display_name else ""
         return f"""<!DOCTYPE html>
@@ -222,7 +288,7 @@ class EmailService:
         html_content = self._generate_otp_html(display_name, otp_code, expiry_minutes)
 
         return await asyncio.to_thread(
-            self._send_smtp_sync,
+            self._send_email_sync,
             to_email,
             subject,
             text_content,
@@ -239,7 +305,7 @@ class EmailService:
         html_content = self._generate_password_reset_html(display_name, otp_code, expiry_minutes)
 
         return await asyncio.to_thread(
-            self._send_smtp_sync,
+            self._send_email_sync,
             to_email,
             subject,
             text_content,
