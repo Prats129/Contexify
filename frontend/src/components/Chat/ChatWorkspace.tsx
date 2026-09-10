@@ -32,6 +32,7 @@ interface ChatWorkspaceProps {
   currentUser: User | null;
   onOpenUserModal: (tab?: 'login' | 'register') => void;
   onClearChat?: () => void;
+  onToggleSidebar?: () => void;
 }
 
 export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
@@ -53,6 +54,7 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
   currentUser,
   onOpenUserModal,
   onClearChat,
+  onToggleSidebar,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [activeSources, setActiveSources] = useState<{
@@ -172,11 +174,12 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
         onOpenUserModal={onOpenUserModal}
         onClearChat={onClearChat}
         hasMessages={messages.length > 0 || !!streamingMessage}
+        onToggleSidebar={onToggleSidebar}
       />
 
       {/* Main Workspace: Chat Column + Sources Card anchored to right */}
       <div
-        className={`flex-1 flex overflow-hidden w-full transition-all duration-150 ${activeSources ? 'justify-between' : 'justify-center'
+        className={`flex-1 flex overflow-hidden w-full transition-all duration-150 ${activeSources ? 'lg:justify-between justify-center' : 'justify-center'
           }`}
       >
         {/* Main Conversation Column: MessageList + ChatInput */}
@@ -191,7 +194,7 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
             activeSources={!!activeSources}
           />
 
-          <div className="w-full shrink-0 px-2 sm:px-6 pb-2">
+          <div className="w-full shrink-0 px-2 sm:px-6 pb-2 pb-safe">
             <div className={`mx-auto ${activeSources ? 'max-w-4xl lg:mr-auto lg:ml-4' : 'max-w-3xl'}`}>
               <ChatInput
                 inputQuery={inputQuery}
@@ -211,9 +214,9 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
           </div>
         </div>
 
-        {/* Right side floating Perplexity Sources Card */}
+        {/* Perplexity Sources Panel (Desktop side panel + Mobile bottom sheet handled internally) */}
         {activeSources && (
-          <div className={`hidden lg:block shrink-0 sticky top-2 h-fit pt-4 pl-4 ${isSourcesCollapsed ? 'mr-2' : 'mr-8'} animate-[fadeIn_0.15s_ease-out]`}>
+          <div className={`shrink-0 lg:sticky lg:top-2 lg:h-fit lg:pt-4 lg:pl-4 ${isSourcesCollapsed ? 'lg:mr-2' : 'lg:mr-8'} animate-[fadeIn_0.15s_ease-out]`}>
             <SourcesPopover
               isOpen={!!activeSources}
               onHide={handleHideSources}

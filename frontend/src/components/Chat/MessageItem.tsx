@@ -195,29 +195,23 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(({
   return (
     <div
       id={id}
-      className={`group flex items-start gap-2 w-full transition-all duration-300 scroll-mt-6 ${
-        isUser ? 'justify-end' : 'justify-start'
-      } ${
-        isHighlighted
+      className={`group flex items-start gap-2 w-full transition-all duration-300 scroll-mt-6 ${isUser ? 'justify-end' : 'justify-start'
+        } ${isHighlighted
           ? 'scale-[1.01] -translate-y-0.5'
           : ''
-      }`}
+        }`}
     >
       <div
-        className={`flex flex-col gap-1 max-w-[85%] md:max-w-[80%] ${
-          isUser ? 'items-end' : 'items-start'
-        }`}
+        className={`flex flex-col gap-1 max-w-[92%] sm:max-w-[85%] md:max-w-[80%] ${isUser ? 'items-end' : 'items-start'
+          }`}
       >
         <div
-          className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed transition-all duration-300 ${
-            isUser
-              ? `bg-primary-theme text-white ${
-                  isHighlighted ? 'ring-3 ring-primary-theme/50 shadow-lg' : ''
-                }`
-              : `bg-(--bg-card) border border-(--border-subtle) text-(--text-main) shadow-xs ${
-                  isHighlighted ? 'ring-2 ring-primary-theme shadow-md' : ''
-                }`
-          }`}
+          className={`px-3.5 sm:px-4 py-2.5 rounded-2xl text-sm leading-relaxed transition-all duration-300 wrap-break-word ${isUser
+            ? `bg-primary-theme text-white ${isHighlighted ? 'ring-3 ring-primary-theme/50 shadow-lg' : ''
+            }`
+            : `bg-(--bg-card) border border-(--border-subtle) text-(--text-main) shadow-xs ${isHighlighted ? 'ring-2 ring-primary-theme shadow-md' : ''
+            }`
+            }`}
         >
           {isError ? (
             <span className="text-red-500 flex items-center gap-1.5">
@@ -247,7 +241,7 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(({
           <div className="flex items-center justify-between w-full mt-1 px-1">
             {/* Left side actions: Copy button */}
             <div
-              className={`flex items-center gap-1 transition-opacity duration-150 ${copied ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+              className={`flex items-center gap-1 transition-opacity duration-150 ${copied ? 'opacity-100' : 'opacity-80 sm:opacity-0 sm:group-hover:opacity-100'
                 }`}
             >
               <button
