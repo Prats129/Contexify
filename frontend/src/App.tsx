@@ -92,11 +92,17 @@ export const App: React.FC = () => {
   const [isUserModalOpen, setIsUserModalOpen] = useState(false);
   const [userModalTab, setUserModalTab] = useState<'login' | 'register'>('login');
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(() => {
+    if (typeof window !== 'undefined' && window.innerWidth < 768) {
+      return false;
+    }
     const saved = localStorage.getItem('contexify_sidebar_open');
     return saved !== null ? JSON.parse(saved) : true;
   });
 
   const handleOpenUserModal = (tab: 'login' | 'register' = 'login') => {
+    if (typeof window !== 'undefined' && window.innerWidth < 768) {
+      setIsSidebarOpen(false);
+    }
     setUserModalTab(tab);
     setIsUserModalOpen(true);
   };
@@ -113,6 +119,9 @@ export const App: React.FC = () => {
   const selectSession = useCallback(
     async (sessionId: string, pushUrl: boolean = true, isUnauthenticated: boolean = false) => {
       if (!sessionId) return;
+      if (typeof window !== 'undefined' && window.innerWidth < 768) {
+        setIsSidebarOpen(false);
+      }
       setActiveSessionId(sessionId);
       setStreamingMessage(null);
 
@@ -259,6 +268,9 @@ export const App: React.FC = () => {
 
   // --- 5. Start New Chat / Conversation ---
   const handleNewSession = () => {
+    if (typeof window !== 'undefined' && window.innerWidth < 768) {
+      setIsSidebarOpen(false);
+    }
     setActiveSessionId(null);
     setMessages([]);
     setDocuments([]);
@@ -704,10 +716,20 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-(--bg-app) text-(--text-main) font-sans">
+    <div className="flex h-screen w-screen overflow-hidden bg-(--bg-app) text-(--text-main) font-sans relative">
+      {/* Mobile Drawer Backdrop Overlay */}
+      {isSidebarOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/60 backdrop-blur-xs md:hidden animate-[fadeIn_0.15s_ease-out]"
+          onClick={() => setIsSidebarOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
       <Sidebar
         isOpen={isSidebarOpen}
         onToggleSidebar={handleToggleSidebar}
+        onCloseMobile={() => setIsSidebarOpen(false)}
         currentUser={currentUser}
         onOpenUserModal={() => handleOpenUserModal('login')}
         onLogout={handleLogout}
@@ -739,6 +761,7 @@ export const App: React.FC = () => {
         documents={documents}
         onDeleteDocument={handleDeleteDocument}
         onClearChat={handleClearMessages}
+        onToggleSidebar={handleToggleSidebar}
       />
 
       <UserModal

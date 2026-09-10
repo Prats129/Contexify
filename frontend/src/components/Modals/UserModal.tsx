@@ -620,24 +620,24 @@ export const UserModal: React.FC<UserModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-2000 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-[fadeIn_0.15s_ease-out]"
+      className="fixed inset-0 z-2000 bg-black/80 backdrop-blur-sm flex items-center justify-center p-2.5 sm:p-4 animate-[fadeIn_0.15s_ease-out] overflow-y-auto"
       onClick={onClose}
     >
       <div
-        className="bg-(--bg-card) border border-(--border-hover) rounded-2xl w-full max-w-lg shadow-2xl flex flex-col overflow-hidden animate-[popoverIn_0.2s_cubic-bezier(0.16,1,0.3,1)] max-h-[90vh] overflow-y-auto"
+        className="bg-(--bg-card) border border-(--border-hover) rounded-2xl w-full max-w-lg shadow-2xl flex flex-col overflow-hidden animate-[popoverIn_0.2s_cubic-bezier(0.16,1,0.3,1)] max-h-[92vh] overflow-y-auto my-auto"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-(--border-subtle) sticky top-0 bg-(--bg-card)/90 backdrop-blur-md z-10">
-          <div className="flex items-center gap-2.5 font-bold text-base">
-            <img src="/logo.png" alt="Contexify" className="w-14 h-10 object-contain shrink-0" />
-            <h3 className="text-(--text-main) text-sm font-semibold">
+        <div className="flex items-center justify-between p-3.5 sm:p-4 border-b border-(--border-subtle) sticky top-0 bg-(--bg-card)/90 backdrop-blur-md z-10">
+          <div className="flex items-center gap-2.5 font-bold text-base min-w-0">
+            <img src="/logo.png" alt="Contexify" className="w-12 sm:w-14 h-9 sm:h-10 object-contain shrink-0" />
+            <h3 className="text-(--text-main) text-xs sm:text-sm font-semibold truncate">
               {currentUser ? 'Account & Preferences' : 'Contexify AI Authentication'}
             </h3>
           </div>
           <button
             type="button"
-            className="w-7 h-7 rounded-lg bg-(--border-subtle) hover:bg-(--border-hover) text-(--text-muted) hover:text-(--text-main) flex items-center justify-center cursor-pointer"
+            className="w-7 h-7 rounded-lg bg-(--border-subtle) hover:bg-(--border-hover) text-(--text-muted) hover:text-(--text-main) flex items-center justify-center cursor-pointer shrink-0 ml-2"
             onClick={onClose}
             title="Close"
           >
@@ -646,7 +646,7 @@ export const UserModal: React.FC<UserModalProps> = ({
         </div>
 
         {/* Body */}
-        <div className="p-5 flex flex-col gap-5">
+        <div className="p-3.5 sm:p-5 flex flex-col gap-4 sm:gap-5">
           {/* CASE A: USER IS CURRENTLY LOGGED IN */}
           {currentUser ? (
             <div className="flex flex-col gap-4">

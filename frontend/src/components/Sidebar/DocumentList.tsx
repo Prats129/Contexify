@@ -68,11 +68,11 @@ export const DocumentList: React.FC<DocumentListProps> = ({
               {isOpen && (
                 <button
                   type="button"
-                  className="opacity-0 group-hover:opacity-100 p-1 text-(--text-muted) hover:text-red-500 hover:bg-red-500/15 rounded cursor-pointer"
+                  className="opacity-70 sm:opacity-0 sm:group-hover:opacity-100 p-1.5 text-(--text-muted) hover:text-red-500 hover:bg-red-500/15 rounded cursor-pointer transition-opacity shrink-0"
                   onClick={() => onDeleteDocument(doc.document_id)}
                   title="Delete Document"
                 >
-                  <LuTrash2 size={13} />
+                  <LuTrash2 size={14} />
                 </button>
               )}
             </div>

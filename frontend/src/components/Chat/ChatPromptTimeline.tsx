@@ -28,8 +28,25 @@ export const ChatPromptTimeline: React.FC<ChatPromptTimelineProps> = ({
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const hideTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const timelineRef = useRef<HTMLDivElement>(null);
   const popoverListRef = useRef<HTMLDivElement>(null);
   const activeItemRef = useRef<HTMLButtonElement>(null);
+
+  // Dismiss on click outside
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleOutsideClick = (e: MouseEvent | TouchEvent) => {
+      if (timelineRef.current && !timelineRef.current.contains(e.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    document.addEventListener('touchstart', handleOutsideClick);
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideClick);
+      document.removeEventListener('touchstart', handleOutsideClick);
+    };
+  }, [isOpen]);
 
   // Clear hover timer
   const cancelHide = useCallback(() => {
@@ -68,6 +85,7 @@ export const ChatPromptTimeline: React.FC<ChatPromptTimelineProps> = ({
 
   return (
     <div
+      ref={timelineRef}
       className="fixed right-2 md:right-3.5 top-1/2 -translate-y-1/2 z-30 select-none flex items-center transition-all duration-200"
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
@@ -132,6 +150,7 @@ export const ChatPromptTimeline: React.FC<ChatPromptTimelineProps> = ({
                   type="button"
                   onClick={() => {
                     onNavigateToPrompt(prompt.id);
+                    setIsOpen(false);
                   }}
                   className={`w-full text-left px-3 py-2 rounded-xl text-xs sm:text-[13px] leading-snug transition-all flex items-center gap-2 group cursor-pointer ${isActive
                     ? 'dark:bg-white/20 bg-black/10 dark:text-white text-neutral-900 font-medium shadow-xs'
@@ -157,6 +176,7 @@ export const ChatPromptTimeline: React.FC<ChatPromptTimelineProps> = ({
 
       {/* Vertical Tick Lines Rail (ChatGPT Look & Feel) */}
       <div
+        onClick={() => setIsOpen((prev) => !prev)}
         className="flex flex-col items-end gap-1.5 py-3 px-1.5 rounded-full cursor-pointer bg-neutral-900/20 dark:bg-neutral-900/30 hover:bg-neutral-900/60 dark:hover:bg-neutral-900/70 hover:bg-neutral-300/70 backdrop-blur-xs border dark:border-white/5 border-black/5 transition-all duration-200 shadow-sm group"
         role="navigation"
         aria-label="Chat prompt timeline"

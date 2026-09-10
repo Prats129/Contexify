@@ -7,6 +7,7 @@ import {
   LuSun,
   LuMoon,
   LuEraser,
+  LuMenu,
 } from 'react-icons/lu';
 import { useTheme } from '../../context/ThemeContext';
 import type { ChatMode, User } from '../../types';
@@ -17,6 +18,7 @@ interface ChatHeaderProps {
   onOpenUserModal: (tab?: 'login' | 'register') => void;
   onClearChat?: () => void;
   hasMessages?: boolean;
+  onToggleSidebar?: () => void;
 }
 
 export const ChatHeader: React.FC<ChatHeaderProps> = ({
@@ -25,21 +27,36 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   onOpenUserModal,
   onClearChat,
   hasMessages = false,
+  onToggleSidebar,
 }) => {
   const isWeb = currentMode === 'WEB_SEARCH';
   const { mode, toggleMode } = useTheme();
 
   return (
-    <header className="h-14 border-b border-(--border-subtle) flex items-center justify-between px-5 bg-(--bg-app)/80 backdrop-blur-md shrink-0">
-      <div className="flex items-center gap-3">
+    <header className="h-14 border-b border-(--border-subtle) flex items-center justify-between px-3 sm:px-5 bg-(--bg-app)/80 backdrop-blur-md shrink-0 gap-2">
+      <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+        {onToggleSidebar && (
+          <button
+            type="button"
+            className="md:hidden w-8 h-8 rounded-lg flex items-center justify-center text-(--text-muted) hover:text-(--text-main) bg-(--border-subtle) hover:bg-(--border-hover) border border-(--border-subtle) cursor-pointer shrink-0 transition-colors"
+            onClick={onToggleSidebar}
+            title="Open sidebar"
+            aria-label="Open sidebar"
+          >
+            <LuMenu size={18} />
+          </button>
+        )}
+
         <span
-          className={`px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5 border ${isWeb
-            ? 'bg-emerald-500/15 text-emerald-500 dark:text-emerald-400 border-emerald-500/30'
-            : 'bg-primary-light-theme text-primary-theme border-primary-theme'
-            }`}
+          className={`px-2.5 sm:px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5 border truncate ${
+            isWeb
+              ? 'bg-emerald-500/15 text-emerald-500 dark:text-emerald-400 border-emerald-500/30'
+              : 'bg-primary-light-theme text-primary-theme border-primary-theme'
+          }`}
         >
-          {isWeb ? <LuGlobe size={14} /> : <LuShieldCheck size={14} />}
-          {isWeb ? 'Live Web Search' : 'Document Grounded RAG'}
+          {isWeb ? <LuGlobe size={14} className="shrink-0" /> : <LuShieldCheck size={14} className="shrink-0" />}
+          <span className="hidden sm:inline">{isWeb ? 'Live Web Search' : 'Document Grounded RAG'}</span>
+          <span className="sm:hidden">{isWeb ? 'Web Search' : 'Doc RAG'}</span>
         </span>
       </div>
 
@@ -71,20 +88,24 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
 
         {/* If user is a Guest, show Sign In and Sign Up buttons */}
         {!currentUser && (
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             <button
               type="button"
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-(--text-main) bg-(--border-subtle) hover:bg-(--border-hover) border border-(--border-subtle) rounded-lg cursor-pointer"
+              className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1.5 text-xs font-medium text-(--text-main) bg-(--border-subtle) hover:bg-(--border-hover) border border-(--border-subtle) rounded-lg cursor-pointer transition-colors"
               onClick={() => onOpenUserModal('login')}
             >
-              <LuLogIn size={14} /> Sign in
+              <LuLogIn size={13} />
+              <span className="hidden sm:inline">Sign in</span>
+              <span className="sm:hidden">Login</span>
             </button>
             <button
               type="button"
-              className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-primary-theme hover:opacity-90 rounded-lg cursor-pointer"
+              className="flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3.5 py-1.5 text-xs font-semibold text-white bg-primary-theme hover:opacity-90 rounded-lg cursor-pointer transition-opacity shadow-xs"
               onClick={() => onOpenUserModal('register')}
             >
-              <LuUserPlus size={14} /> Sign up
+              <LuUserPlus size={13} />
+              <span className="hidden sm:inline">Sign up</span>
+              <span className="sm:hidden">Join</span>
             </button>
           </div>
         )}

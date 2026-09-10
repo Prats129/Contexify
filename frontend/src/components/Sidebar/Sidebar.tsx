@@ -1,5 +1,5 @@
 import React from 'react';
-import { LuPlus } from 'react-icons/lu';
+import { LuPlus, LuX } from 'react-icons/lu';
 import { FiSidebar } from 'react-icons/fi';
 import { UserProfileCard } from './UserProfileCard';
 import { SessionHistory } from './SessionHistory';
@@ -9,6 +9,7 @@ import type { User, ChatSession, DocumentMetadata } from '../../types';
 interface SidebarProps {
   isOpen: boolean;
   onToggleSidebar: () => void;
+  onCloseMobile?: () => void;
   currentUser: User | null;
   onOpenUserModal: () => void;
   onLogout: () => void;
@@ -24,6 +25,7 @@ interface SidebarProps {
 export const Sidebar: React.FC<SidebarProps> = ({
   isOpen,
   onToggleSidebar,
+  onCloseMobile,
   currentUser,
   onOpenUserModal,
   onLogout,
@@ -37,13 +39,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   return (
     <aside
-      className={`h-screen bg-(--bg-sidebar) border-r border-(--border-subtle) flex flex-col gap-3 shrink-0 overflow-y-auto overflow-x-hidden ${isOpen ? 'w-72 p-3.5' : 'w-16 p-2.5 items-center'
-        }`}
+      className={`h-screen bg-(--bg-sidebar) border-r border-(--border-subtle) flex flex-col gap-3 shrink-0 overflow-y-auto overflow-x-hidden transition-[transform,width] duration-200 ease-in-out
+        max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-50 max-md:w-72 max-md:p-3.5 max-md:shadow-2xl
+        ${isOpen ? 'max-md:translate-x-0' : 'max-md:-translate-x-full max-md:pointer-events-none'}
+        md:relative md:translate-x-0 md:pointer-events-auto md:shadow-none
+        ${isOpen ? 'md:w-72 md:p-3.5' : 'md:w-16 md:p-2.5 md:items-center'}
+      `}
     >
       {/* Brand & Toggle Sidebar Button */}
       <div
-        className={`flex items-center pb-2.5 border-b border-(--border-subtle) w-full ${isOpen ? 'justify-between gap-2' : 'justify-center'
-          }`}
+        className={`flex items-center pb-2.5 border-b border-(--border-subtle) w-full ${
+          isOpen ? 'justify-between gap-2' : 'justify-center'
+        }`}
       >
         {isOpen ? (
           <>
@@ -67,20 +74,33 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </div>
             </button>
 
-            <button
-              type="button"
-              className="w-8 h-8 rounded-lg bg-(--border-subtle) hover:bg-(--border-hover) text-(--text-muted) hover:text-(--text-main) border border-(--border-subtle) flex items-center justify-center cursor-pointer shrink-0"
-              onClick={onToggleSidebar}
-              title="Collapse sidebar"
-            >
-              <FiSidebar size={18} />
-            </button>
+            <div className="flex items-center gap-1 shrink-0">
+              {/* Desktop toggle collapse */}
+              <button
+                type="button"
+                className="hidden md:flex w-8 h-8 rounded-lg bg-(--border-subtle) hover:bg-(--border-hover) text-(--text-muted) hover:text-(--text-main) border border-(--border-subtle) items-center justify-center cursor-pointer shrink-0"
+                onClick={onToggleSidebar}
+                title="Collapse sidebar"
+              >
+                <FiSidebar size={18} />
+              </button>
+              {/* Mobile close drawer button */}
+              <button
+                type="button"
+                className="flex md:hidden w-8 h-8 rounded-lg bg-(--border-subtle) hover:bg-(--border-hover) text-(--text-muted) hover:text-(--text-main) border border-(--border-subtle) items-center justify-center cursor-pointer shrink-0"
+                onClick={onCloseMobile || onToggleSidebar}
+                title="Close sidebar"
+                aria-label="Close sidebar"
+              >
+                <LuX size={18} />
+              </button>
+            </div>
           </>
         ) : (
-          /* Collapsed State: Shows Brand Icon normally, reveals Expand icon on hover */
+          /* Desktop Collapsed State: Shows Brand Icon normally, reveals Expand icon on hover */
           <button
             type="button"
-            className="group relative w-10 h-10 rounded-lg flex items-center justify-center cursor-pointer hover:bg-(--border-subtle) transition-colors"
+            className="group relative w-10 h-10 rounded-lg hidden md:flex items-center justify-center cursor-pointer hover:bg-(--border-subtle) transition-colors"
             onClick={onToggleSidebar}
             title="Expand sidebar"
           >

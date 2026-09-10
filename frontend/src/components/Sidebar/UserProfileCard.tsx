@@ -69,10 +69,10 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
   const handleToggleMenu = () => {
     if (!isMenuOpen && buttonRef.current) {
       const rect = buttonRef.current.getBoundingClientRect();
-      setMenuPosition({
-        left: rect.left,
-        bottom: window.innerHeight - rect.top + 8,
-      });
+      const popoverWidth = 256;
+      const left = Math.min(Math.max(8, rect.left), Math.max(8, window.innerWidth - popoverWidth - 8));
+      const bottom = Math.max(8, window.innerHeight - rect.top + 8);
+      setMenuPosition({ left, bottom });
     }
     setIsMenuOpen((prev) => !prev);
   };

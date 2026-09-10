@@ -240,17 +240,17 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const isExpanded = isMultiline || documents.length > 0 || isUploading;
 
   return (
-    <div className="p-4 max-w-4xl w-full mx-auto shrink-0 flex flex-col gap-2">
+    <div className="p-2 sm:p-4 max-w-4xl w-full mx-auto shrink-0 flex flex-col gap-1.5 sm:gap-2">
       <form onSubmit={onSubmit} className="w-full">
         <div
           className={`bg-(--bg-input) border border-(--border-subtle) hover:border-(--border-hover) shadow-lg transition-[border-radius] duration-150 ease-out grid ${isExpanded
-            ? 'rounded-3xl p-3 pt-0 gap-y-2 grid-cols-[auto_1fr_auto]'
-            : 'rounded-full px-3.5 py-1.5 gap-x-2 grid-cols-[auto_1fr_auto] items-center'
+            ? 'rounded-3xl p-2.5 sm:p-3 pt-0 gap-y-2 grid-cols-[auto_1fr_auto]'
+            : 'rounded-full px-3 sm:px-3.5 py-1.5 gap-x-1.5 sm:gap-x-2 grid-cols-[auto_1fr_auto] items-center'
             }`}
         >
           {/* Uploading progress indicator or attached documents banner */}
           {(isUploading || documents.length > 0) && (
-            <div className="col-span-full row-start-1 flex flex-wrap items-center gap-1.5 pb-2 mb-1 mt-3 border-b border-(--border-subtle)/50">
+            <div className="col-span-full row-start-1 flex flex-wrap items-center gap-1.5 pb-2 mb-1 mt-3 border-b border-(--border-subtle)/50 max-h-24 overflow-y-auto">
               {isUploading && (
                 <div className="flex items-center gap-1.5 px-2.5 py-1 bg-primary-light-theme border border-primary-theme text-primary-theme rounded-full text-xs animate-pulse">
                   <LuLoader size={13} className="icon-spin" />
@@ -261,7 +261,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
               {documents.map((doc) => (
                 <div
                   key={doc.document_id}
-                  className="flex items-center gap-1.5 px-2.5 py-1 bg-(--border-subtle) border border-(--border-subtle) text-(--text-main) rounded-full text-xs max-w-50"
+                  className="flex items-center gap-1.5 px-2.5 py-1 bg-(--border-subtle) border border-(--border-subtle) text-(--text-main) rounded-full text-xs max-w-40 sm:max-w-50"
                   title={`${doc.filename} (${(doc.file_size_bytes / 1024).toFixed(1)} KB)`}
                 >
                   {getFileIcon(doc.file_type)}
@@ -313,7 +313,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             placeholder="Ask anything ..."
             rows={1}
             required
-            className={`bg-transparent border-0 outline-none resize-none text-[15px] text-(--text-main) px-2 leading-normal ${isExpanded
+            className={`bg-transparent border-0 outline-none resize-none text-[16px] sm:text-[15px] text-(--text-main) px-2 leading-normal ${isExpanded
               ? 'col-span-full row-start-2 w-full max-h-52 overflow-y-auto py-1'
               : 'col-start-2 row-start-1 w-full h-6.5 max-h-6.5 overflow-hidden py-0'
               }`}
@@ -321,7 +321,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
           {/* Right Actions: Engine Mode Selector + Send/Stop Button */}
           <div
-            className={`flex items-center gap-2 shrink-0 ${isExpanded
+            className={`flex items-center gap-1.5 sm:gap-2 shrink-0 ${isExpanded
               ? 'col-start-3 row-start-3 justify-self-end'
               : 'col-start-3 row-start-1'
               }`}
@@ -330,7 +330,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             <div className="relative" ref={dropdownRef}>
               <button
                 type="button"
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-full border cursor-pointer transition-colors ${isDropdownOpen
+                className={`flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-medium rounded-full border cursor-pointer transition-colors ${isDropdownOpen
                   ? 'bg-primary-light-theme text-primary-theme border-primary-theme'
                   : 'bg-(--border-subtle) text-(--text-muted) hover:text-(--text-main) border-(--border-subtle) hover:border-(--border-hover)'
                   }`}
@@ -344,7 +344,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
               {/* Dropdown Popup Menu */}
               {isDropdownOpen && (
-                <div className="absolute bottom-full right-0 mb-2 w-56 bg-(--bg-card) border border-(--border-hover) rounded-xl shadow-2xl z-50 p-1.5 flex flex-col gap-1 backdrop-blur-xl">
+                <div className="absolute bottom-full right-0 mb-2 w-56 max-w-[calc(100vw-2rem)] bg-(--bg-card) border border-(--border-hover) rounded-xl shadow-2xl z-50 p-1.5 flex flex-col gap-1 backdrop-blur-xl">
                   <div className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-semibold text-(--text-muted) uppercase tracking-wider border-b border-(--border-subtle) mb-0.5">
                     <LuSlidersHorizontal size={12} /> Engine Mode
                   </div>
