@@ -1,0 +1,334 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Platform } from 'react-native';
+import type {
+  User,
+  ChatSession,
+  ChatMode,
+  SessionHistoryResponse,
+  DocumentMetadata,
+  Citation,
+} from '../types';
+
+// Default development IP matching your current Wi-Fi network (10.66.137.54:8001)
+const DEFAULT_WIFI_IP = '10.66.137.54';
+const DEFAULT_HOST: string = Platform.select({
+  android: `http://${DEFAULT_WIFI_IP}:8001`,
+  ios: `http://${DEFAULT_WIFI_IP}:8001`,
+  default: 'http://localhost:8001',
+}) || 'http://localhost:8001';
+
+let cachedBaseUrl: string | null = null;
+
+export const getApiBaseUrl = async (): Promise<string> => {
+  if (cachedBaseUrl) return cachedBaseUrl;
+  try {
+    const saved = await AsyncStorage.getItem('contexify_server_url');
+    if (saved && saved.trim()) {
+      const clean = saved.trim().replace(/\/+$/, '');
+      cachedBaseUrl = clean;
+      return clean;
+    }
+  } catch {}
+
+  const envUrl = process.env.EXPO_PUBLIC_API_URL;
+  if (envUrl && envUrl.trim()) {
+    const clean = envUrl.trim().replace(/\/+$/, '');
+    cachedBaseUrl = clean;
+    return clean;
+  }
+
+  cachedBaseUrl = DEFAULT_HOST;
+  return DEFAULT_HOST;
+};
+
+export const setApiBaseUrl = async (newUrl: string) => {
+  const clean = newUrl.trim().replace(/\/+$/, '');
+  cachedBaseUrl = clean;
+  await AsyncStorage.setItem('contexify_server_url', clean);
+};
+
+export const resetApiBaseUrl = async () => {
+  cachedBaseUrl = DEFAULT_HOST;
+  await AsyncStorage.removeItem('contexify_server_url');
+};
+
+const getEndpoint = async (path: string): Promise<string> => {
+  const base = await getApiBaseUrl();
+  return `${base}/api/v1${path}`;
+};
+
+export interface StreamHandlers {
+  onToken: (token: string) => void;
+  onCitations: (citations: Citation[]) => void;
+  onComplete: () => void;
+  onError: (err: string) => void;
+}
+
+export const apiService = {
+  // --- Health Check ---
+  async pingHealth(): Promise<boolean> {
+    try {
+      const url = await getEndpoint('/health');
+      const res = await fetch(url, { method: 'GET' });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  },
+
+  // --- Authentication ---
+  async register(
+    displayName: string,
+    username: string,
+    email: string,
+    password: string
+  ): Promise<User> {
+    const url = await getEndpoint('/user/register');
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        display_name: displayName,
+        username,
+        email,
+        password,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Registration failed' }));
+      throw new Error(err.detail || 'Registration failed');
+    }
+    return res.json();
+  },
+
+  async login(usernameOrEmail: string, password: string): Promise<User> {
+    const url = await getEndpoint('/user/login');
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username_or_email: usernameOrEmail,
+        password,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Invalid credentials' }));
+      throw new Error(err.detail || 'Invalid credentials');
+    }
+    return res.json();
+  },
+
+  async sendOtp(emailOrUsername: string): Promise<{ message: string; cooldown_seconds: number }> {
+    const url = await getEndpoint('/user/otp/send');
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email_or_username: emailOrUsername }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Failed to send OTP' }));
+      throw new Error(err.detail || 'Failed to send OTP');
+    }
+    return res.json();
+  },
+
+  async loginWithOtp(emailOrUsername: string, otp: string): Promise<User> {
+    const url = await getEndpoint('/user/otp/verify');
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email_or_username: emailOrUsername,
+        otp,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Invalid or expired OTP' }));
+      throw new Error(err.detail || 'Invalid or expired OTP');
+    }
+    return res.json();
+  },
+
+  // --- Sessions & History ---
+  async getUserSessions(userId: string): Promise<ChatSession[]> {
+    try {
+      if (!userId || userId.startsWith('guest')) return [];
+      const url = await getEndpoint(`/session/list?user_id=${encodeURIComponent(userId)}`);
+      const res = await fetch(url);
+      if (!res.ok) return [];
+      const data = await res.json();
+      return Array.isArray(data) ? data : [];
+    } catch {
+      return [];
+    }
+  },
+
+  async getSessionHistory(sessionId: string): Promise<SessionHistoryResponse> {
+    try {
+      const url = await getEndpoint(`/session/${encodeURIComponent(sessionId)}/history`);
+      const res = await fetch(url);
+      if (!res.ok) {
+        return { session: null as any, messages: [], documents: [] };
+      }
+      const data = await res.json();
+      return {
+        session: data?.session || null,
+        messages: Array.isArray(data?.messages) ? data.messages : [],
+        documents: Array.isArray(data?.documents) ? data.documents : [],
+      };
+    } catch {
+      return { session: null as any, messages: [], documents: [] };
+    }
+  },
+
+  async createSession(userId: string, title: string, mode: ChatMode): Promise<ChatSession> {
+    const url = await getEndpoint('/session/create');
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: userId, title, mode }),
+    });
+    if (!res.ok) throw new Error('Failed to create conversation');
+    return res.json();
+  },
+
+  async deleteSession(sessionId: string): Promise<void> {
+    const url = await getEndpoint(`/session/${encodeURIComponent(sessionId)}`);
+    const res = await fetch(url, { method: 'DELETE' });
+    if (!res.ok) throw new Error('Failed to delete conversation');
+  },
+
+  async updateSessionMode(sessionId: string, mode: ChatMode): Promise<void> {
+    const url = await getEndpoint(`/session/${encodeURIComponent(sessionId)}/mode`);
+    await fetch(url, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode }),
+    });
+  },
+
+  // --- Document Upload & Management ---
+  async uploadDocument(
+    sessionId: string,
+    fileUri: string,
+    fileName: string,
+    mimeType: string = 'application/octet-stream',
+    userId?: string
+  ): Promise<DocumentMetadata> {
+    const url = await getEndpoint('/document/upload');
+    const formData = new FormData();
+    formData.append('file', {
+      uri: fileUri,
+      name: fileName,
+      type: mimeType,
+    } as any);
+    formData.append('session_id', sessionId);
+    if (userId) {
+      formData.append('user_id', userId);
+    }
+
+    const res = await fetch(url, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Failed to upload document' }));
+      throw new Error(err.detail || 'Failed to upload document');
+    }
+    const data = await res.json();
+    return data.document || data;
+  },
+
+  async deleteDocument(documentId: string, sessionId: string): Promise<void> {
+    const url = await getEndpoint(
+      `/document/${encodeURIComponent(documentId)}?session_id=${encodeURIComponent(sessionId)}`
+    );
+    const res = await fetch(url, { method: 'DELETE' });
+    if (!res.ok) throw new Error('Failed to remove document');
+  },
+
+  // --- Real-time SSE Chat Stream ---
+  streamChat(
+    sessionId: string,
+    query: string,
+    mode: ChatMode,
+    handlers: StreamHandlers
+  ): () => void {
+    let isAborted = false;
+    const xhr = new XMLHttpRequest();
+
+    getEndpoint('/chat/stream').then((url) => {
+      if (isAborted) return;
+
+      xhr.open('POST', url, true);
+      xhr.setRequestHeader('Content-Type', 'application/json');
+      xhr.setRequestHeader('Accept', 'text/event-stream');
+
+      let lastIndex = 0;
+
+      xhr.onprogress = () => {
+        const currText = xhr.responseText;
+        const newChunks = currText.substring(lastIndex);
+        lastIndex = currText.length;
+
+        const lines = newChunks.split('\n');
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith('data: ')) continue;
+          const payload = trimmed.substring(6);
+
+          if (payload === '[DONE]') {
+            handlers.onComplete();
+            return;
+          }
+
+          try {
+            const data = JSON.parse(payload);
+            if (data.token) {
+              handlers.onToken(data.token);
+            }
+            if (data.citations && Array.isArray(data.citations)) {
+              handlers.onCitations(data.citations);
+            }
+            if (data.error) {
+              handlers.onError(data.error);
+            }
+          } catch {
+            // Partial JSON chunk, continue
+          }
+        }
+      };
+
+      xhr.onload = () => {
+        if (xhr.status >= 400) {
+          handlers.onError(`Server error: ${xhr.status}`);
+        } else {
+          handlers.onComplete();
+        }
+      };
+
+      xhr.onerror = () => {
+        if (!isAborted) {
+          handlers.onError('Network connection error with backend server');
+        }
+      };
+
+      xhr.send(
+        JSON.stringify({
+          session_id: sessionId,
+          query,
+          mode,
+        })
+      );
+    });
+
+    // Return cancellation function
+    return () => {
+      isAborted = true;
+      try {
+        xhr.abort();
+      } catch {}
+    };
+  },
+};
