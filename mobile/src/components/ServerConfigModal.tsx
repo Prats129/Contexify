@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from "react";
 import {
   View,
   Text,
@@ -10,11 +10,16 @@ import {
   Pressable,
   KeyboardAvoidingView,
   Platform,
-} from 'react-native';
-import { Feather, Ionicons } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
-import { getAppTheme, type AppTheme } from '../theme/colors';
-import { getApiBaseUrl, setApiBaseUrl, resetApiBaseUrl, apiService } from '../services/api';
+} from "react-native";
+import { Feather, Ionicons } from "@expo/vector-icons";
+import * as Haptics from "expo-haptics";
+import { getAppTheme, type AppTheme } from "../theme/colors";
+import {
+  getApiBaseUrl,
+  setApiBaseUrl,
+  resetApiBaseUrl,
+  apiService,
+} from "../services/api";
 
 interface ServerConfigModalProps {
   visible: boolean;
@@ -30,33 +35,35 @@ export const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
   theme: customTheme,
 }) => {
   const theme = customTheme || getAppTheme(isDark);
-  const [currentUrl, setCurrentUrl] = useState('');
-  const [inputUrl, setInputUrl] = useState('');
-  const [pingStatus, setPingStatus] = useState<'idle' | 'testing' | 'online' | 'offline'>('idle');
+  const [currentUrl, setCurrentUrl] = useState("");
+  const [inputUrl, setInputUrl] = useState("");
+  const [pingStatus, setPingStatus] = useState<
+    "idle" | "testing" | "online" | "offline"
+  >("idle");
 
   useEffect(() => {
     if (visible) {
       getApiBaseUrl().then((url) => {
         setCurrentUrl(url);
         setInputUrl(url);
-        setPingStatus('idle');
+        setPingStatus("idle");
       });
     }
   }, [visible]);
 
   const handleTestPing = async () => {
-    setPingStatus('testing');
+    setPingStatus("testing");
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     try {
       const isOnline = await apiService.pingHealth();
-      setPingStatus(isOnline ? 'online' : 'offline');
+      setPingStatus(isOnline ? "online" : "offline");
       Haptics.notificationAsync(
         isOnline
           ? Haptics.NotificationFeedbackType.Success
-          : Haptics.NotificationFeedbackType.Error
+          : Haptics.NotificationFeedbackType.Error,
       );
     } catch {
-      setPingStatus('offline');
+      setPingStatus("offline");
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     }
   };
@@ -73,29 +80,42 @@ export const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
     const def = await getApiBaseUrl();
     setCurrentUrl(def);
     setInputUrl(def);
-    setPingStatus('idle');
+    setPingStatus("idle");
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
   };
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={onClose}
+    >
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
         style={styles.container}
       >
         <Pressable style={styles.backdrop} onPress={onClose}>
           <Pressable
-            style={[styles.dialog, { backgroundColor: theme.bgCard, borderColor: theme.borderHover }]}
+            style={[
+              styles.dialog,
+              { backgroundColor: theme.bgCard, borderColor: theme.borderHover },
+            ]}
             onPress={(e) => e.stopPropagation()}
           >
             {/* Header */}
             <View style={styles.header}>
               <View style={styles.headerLeft}>
                 <Feather name="server" size={17} color={theme.primary} />
-                <Text style={[styles.title, { color: theme.textMain }]}>Backend Server Config</Text>
+                <Text style={[styles.title, { color: theme.textMain }]}>
+                  Backend Server Config
+                </Text>
               </View>
               <TouchableOpacity
-                style={[styles.closeBtn, { backgroundColor: theme.borderSubtle }]}
+                style={[
+                  styles.closeBtn,
+                  { backgroundColor: theme.borderSubtle },
+                ]}
                 onPress={onClose}
               >
                 <Feather name="x" size={16} color={theme.textMain} />
@@ -103,17 +123,26 @@ export const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
             </View>
 
             <Text style={[styles.description, { color: theme.textMuted }]}>
-              Enter your computer's local Wi-Fi IP and port (default is port 8001) so your phone can reach FastAPI.
+              Enter your computer's local Wi-Fi IP and port (default is port
+              8001) so your phone can reach FastAPI.
             </Text>
 
             {/* Input URL */}
-            <View style={[styles.inputBox, { backgroundColor: theme.bgInput, borderColor: theme.borderSubtle }]}>
+            <View
+              style={[
+                styles.inputBox,
+                {
+                  backgroundColor: theme.bgInput,
+                  borderColor: theme.borderSubtle,
+                },
+              ]}
+            >
               <TextInput
                 style={[styles.input, { color: theme.textMain }]}
                 value={inputUrl}
                 onChangeText={(t) => {
                   setInputUrl(t);
-                  setPingStatus('idle');
+                  setPingStatus("idle");
                 }}
                 placeholder="http://192.168.1.10:8001"
                 placeholderTextColor={theme.textMuted}
@@ -125,31 +154,52 @@ export const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
             {/* Live Ping Status Indicator */}
             <View style={styles.pingRow}>
               <TouchableOpacity
-                style={[styles.pingBtn, { backgroundColor: theme.borderSubtle }]}
+                style={[
+                  styles.pingBtn,
+                  { backgroundColor: theme.borderSubtle },
+                ]}
                 onPress={handleTestPing}
-                disabled={pingStatus === 'testing'}
+                disabled={pingStatus === "testing"}
               >
-                {pingStatus === 'testing' ? (
+                {pingStatus === "testing" ? (
                   <ActivityIndicator size="small" color={theme.primary} />
                 ) : (
                   <>
                     <Feather name="activity" size={13} color={theme.primary} />
-                    <Text style={[styles.pingBtnText, { color: theme.primary }]}>Test Connection</Text>
+                    <Text
+                      style={[styles.pingBtnText, { color: theme.primary }]}
+                    >
+                      Test Connection
+                    </Text>
                   </>
                 )}
               </TouchableOpacity>
 
-              {pingStatus === 'online' && (
+              {pingStatus === "online" && (
                 <View style={styles.statusRow}>
-                  <View style={[styles.statusDot, { backgroundColor: theme.emerald }]} />
-                  <Text style={[styles.statusText, { color: theme.emerald }]}>Connected</Text>
+                  <View
+                    style={[
+                      styles.statusDot,
+                      { backgroundColor: theme.emerald },
+                    ]}
+                  />
+                  <Text style={[styles.statusText, { color: theme.emerald }]}>
+                    Connected
+                  </Text>
                 </View>
               )}
 
-              {pingStatus === 'offline' && (
+              {pingStatus === "offline" && (
                 <View style={styles.statusRow}>
-                  <View style={[styles.statusDot, { backgroundColor: theme.danger }]} />
-                  <Text style={[styles.statusText, { color: theme.danger }]}>Cannot Reach</Text>
+                  <View
+                    style={[
+                      styles.statusDot,
+                      { backgroundColor: theme.danger },
+                    ]}
+                  />
+                  <Text style={[styles.statusText, { color: theme.danger }]}>
+                    Cannot Reach
+                  </Text>
                 </View>
               )}
             </View>
@@ -157,10 +207,15 @@ export const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
             {/* Actions */}
             <View style={styles.actionRow}>
               <TouchableOpacity
-                style={[styles.resetBtn, { backgroundColor: theme.borderSubtle }]}
+                style={[
+                  styles.resetBtn,
+                  { backgroundColor: theme.borderSubtle },
+                ]}
                 onPress={handleReset}
               >
-                <Text style={[styles.resetText, { color: theme.textMuted }]}>Reset Default</Text>
+                <Text style={[styles.resetText, { color: theme.textMuted }]}>
+                  Reset Default
+                </Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -183,13 +238,13 @@ const styles = StyleSheet.create({
   },
   backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.65)',
-    alignItems: 'center',
-    justifyContent: 'center',
+    backgroundColor: "transparent",
+    alignItems: "center",
+    justifyContent: "center",
     paddingHorizontal: 20,
   },
   dialog: {
-    width: '100%',
+    width: "100%",
     maxWidth: 360,
     borderRadius: 20,
     borderWidth: 1,
@@ -197,25 +252,25 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
   },
   headerLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 8,
   },
   title: {
     fontSize: 15,
-    fontWeight: '700',
+    fontWeight: "700",
   },
   closeBtn: {
     width: 28,
     height: 28,
     borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
   },
   description: {
     fontSize: 12,
@@ -226,19 +281,19 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingHorizontal: 12,
     height: 42,
-    justifyContent: 'center',
+    justifyContent: "center",
   },
   input: {
     fontSize: 14,
   },
   pingRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
   },
   pingBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 6,
     paddingHorizontal: 10,
     paddingVertical: 6,
@@ -246,11 +301,11 @@ const styles = StyleSheet.create({
   },
   pingBtnText: {
     fontSize: 12,
-    fontWeight: '600',
+    fontWeight: "600",
   },
   statusRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 5,
   },
   statusDot: {
@@ -260,10 +315,10 @@ const styles = StyleSheet.create({
   },
   statusText: {
     fontSize: 12,
-    fontWeight: '700',
+    fontWeight: "700",
   },
   actionRow: {
-    flexDirection: 'row',
+    flexDirection: "row",
     gap: 10,
     marginTop: 4,
   },
@@ -271,23 +326,23 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 40,
     borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
   },
   resetText: {
     fontSize: 13,
-    fontWeight: '600',
+    fontWeight: "600",
   },
   saveBtn: {
     flex: 1,
     height: 40,
     borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
   },
   saveText: {
-    color: '#ffffff',
+    color: "#ffffff",
     fontSize: 13,
-    fontWeight: '700',
+    fontWeight: "700",
   },
 });

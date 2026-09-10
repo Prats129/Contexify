@@ -1,13 +1,21 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Clipboard } from 'react-native';
-import { Feather, Ionicons } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
-import { getAppTheme, type AppTheme } from '../theme/colors';
-import type { Citation } from '../types';
+import React, { useState } from "react";
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  Pressable,
+  Platform,
+} from "react-native";
+import { Feather, Ionicons } from "@expo/vector-icons";
+import * as Haptics from "expo-haptics";
+import * as Clipboard from "expo-clipboard";
+import { getAppTheme, type AppTheme } from "../theme/colors";
+import type { Citation } from "../types";
 
 interface MessageItemProps {
   id?: string;
-  role: 'user' | 'assistant';
+  role: "user" | "assistant";
   content: string;
   citations?: Citation[] | null;
   isStreaming?: boolean;
@@ -25,16 +33,20 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   isDark = true,
   theme: customTheme,
 }) => {
-  const isUser = role === 'user';
+  const isUser = role === "user";
   const theme = customTheme || getAppTheme(isDark);
   const [copied, setCopied] = useState(false);
 
-  const handleCopy = () => {
+  const handleCopy = async () => {
     if (!content) return;
-    Clipboard.setString(content);
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    try {
+      await Clipboard.setStringAsync(content);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Fallback
+    }
   };
 
   const handleCitationsPress = () => {
@@ -44,37 +56,100 @@ export const MessageItem: React.FC<MessageItemProps> = ({
     }
   };
 
-  // Helper to format basic markdown blocks cleanly for native display
-  const renderFormattedContent = (text: string) => {
-    if (!text || !text.trim()) return null;
-    const lines = text.split('\n');
+  // Helper to parse inline markdown (**bold**, *italic*, `code`) into styled Text nodes
+  const renderInlineSpans = (text: string, baseColor: string) => {
+    if (!text) return null;
+    const parts = text.split(/(\*\*.*?\*\*|\*.*?\*|`.*?`)/g);
+    if (parts.length === 1) {
+      return text;
+    }
 
-    return lines.map((line, idx) => {
-      const trimmed = line.trim();
-
-      // Heading 3 / 2 / 1
-      if (line.startsWith('### ')) {
+    return parts.map((part, pIdx) => {
+      // Bold: **text**
+      if (part.startsWith("**") && part.endsWith("**") && part.length >= 4) {
         return (
-          <Text key={idx} style={[styles.heading3, { color: theme.textMain }]}>
-            {line.substring(4)}
+          <Text
+            key={pIdx}
+            style={{
+              fontWeight: "700",
+              color: baseColor,
+            }}
+          >
+            {part.slice(2, -2)}
           </Text>
         );
       }
-      if (line.startsWith('## ') || line.startsWith('# ')) {
+      // Italic: *text*
+      if (part.startsWith("*") && part.endsWith("*") && part.length >= 2) {
+        return (
+          <Text
+            key={pIdx}
+            style={{
+              fontStyle: "italic",
+              color: baseColor,
+            }}
+          >
+            {part.slice(1, -1)}
+          </Text>
+        );
+      }
+      // Inline code: `code`
+      if (part.startsWith("`") && part.endsWith("`") && part.length >= 2) {
+        return (
+          <Text
+            key={pIdx}
+            style={[
+              styles.inlineCode,
+              {
+                backgroundColor: isUser
+                  ? "rgba(255, 255, 255, 0.2)"
+                  : theme.borderSubtle,
+                color: isUser ? "#ffffff" : theme.primary,
+              },
+            ]}
+          >
+            {part.slice(1, -1)}
+          </Text>
+        );
+      }
+      return part;
+    });
+  };
+
+  // Helper to format basic markdown blocks cleanly for native display
+  const renderFormattedContent = (text: string) => {
+    if (!text || !text.trim()) return null;
+    const lines = text.split("\n");
+
+    return lines.map((line, idx) => {
+      const trimmed = line.trim();
+      const textColor = isUser ? "#ffffff" : theme.textMain;
+
+      // Heading 3 / 2 / 1
+      if (line.startsWith("### ")) {
+        return (
+          <Text key={idx} style={[styles.heading3, { color: theme.textMain }]}>
+            {renderInlineSpans(line.substring(4), theme.textMain)}
+          </Text>
+        );
+      }
+      if (line.startsWith("## ") || line.startsWith("# ")) {
         return (
           <Text key={idx} style={[styles.heading2, { color: theme.textMain }]}>
-            {line.replace(/^#+\s*/, '')}
+            {renderInlineSpans(line.replace(/^#+\s*/, ""), theme.textMain)}
           </Text>
         );
       }
 
       // Bullet points
-      if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
+      if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
         return (
           <View key={idx} style={styles.bulletRow}>
-            <View style={[styles.bulletDot, { backgroundColor: theme.primary }]} />
-            <Text style={[styles.bulletText, { color: isUser ? '#ffffff' : theme.textMain }]}>
-              {trimmed.substring(2)}
+            <View
+              style={[styles.bulletDot, { backgroundColor: theme.primary }]}
+            />
+            <Text style={[styles.bulletText, { color: textColor }]}>
+              {renderInlineSpans(trimmed.substring(2), textColor)}
             </Text>
           </View>
         );
@@ -85,9 +160,11 @@ export const MessageItem: React.FC<MessageItemProps> = ({
       if (numMatch) {
         return (
           <View key={idx} style={styles.bulletRow}>
-            <Text style={[styles.numberPrefix, { color: theme.primary }]}>{numMatch[1]}.</Text>
-            <Text style={[styles.bulletText, { color: isUser ? '#ffffff' : theme.textMain }]}>
-              {numMatch[2]}
+            <Text style={[styles.numberPrefix, { color: theme.primary }]}>
+              {numMatch[1]}.
+            </Text>
+            <Text style={[styles.bulletText, { color: textColor }]}>
+              {renderInlineSpans(numMatch[2], textColor)}
             </Text>
           </View>
         );
@@ -98,24 +175,25 @@ export const MessageItem: React.FC<MessageItemProps> = ({
         return <View key={idx} style={{ height: 6 }} />;
       }
 
-      // Standard text line
+      // Standard text line with bold parsing
       return (
-        <Text
-          key={idx}
-          style={[
-            styles.messageText,
-            { color: isUser ? '#ffffff' : theme.textMain },
-          ]}
-        >
-          {line}
+        <Text key={idx} style={[styles.messageText, { color: textColor }]}>
+          {renderInlineSpans(line, textColor)}
         </Text>
       );
     });
   };
 
   return (
-    <View style={[styles.container, isUser ? styles.userContainer : styles.assistantContainer]}>
-      <View
+    <View
+      style={[
+        styles.container,
+        isUser ? styles.userContainer : styles.assistantContainer,
+      ]}
+    >
+      <Pressable
+        onLongPress={handleCopy}
+        delayLongPress={350}
         style={[
           styles.bubble,
           isUser
@@ -131,36 +209,61 @@ export const MessageItem: React.FC<MessageItemProps> = ({
       >
         {isStreaming && !content?.trim() ? (
           <View style={styles.thinkingRow}>
-            <View style={[styles.pulseDot, { backgroundColor: theme.primary }]} />
-            <Text style={[styles.thinkingText, { color: theme.textMuted }]}>Thinking...</Text>
+            <View
+              style={[styles.pulseDot, { backgroundColor: theme.primary }]}
+            />
+            <Text style={[styles.thinkingText, { color: theme.textMuted }]}>
+              Thinking...
+            </Text>
           </View>
         ) : (
           renderFormattedContent(content)
         )}
-      </View>
+      </Pressable>
+
+      {/* Action Toolbar for User message */}
+      {isUser && content.length > 0 && (
+        <View style={[styles.toolbarRow, styles.userToolbarRow]}>
+          <TouchableOpacity
+            style={[
+              styles.actionBtn,
+              {
+                backgroundColor: copied ? theme.emeraldLight : theme.bgCard,
+                borderColor: copied ? theme.emeraldBorder : theme.borderSubtle,
+              },
+            ]}
+            onPress={handleCopy}
+            activeOpacity={0.7}
+          >
+            <Feather
+              name={copied ? "check" : "copy"}
+              size={13}
+              color={copied ? theme.emerald : theme.textMuted}
+            />
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* Action Toolbar for AI message */}
       {!isUser && content.length > 0 && !isStreaming && (
         <View style={styles.toolbarRow}>
           {/* Copy Button */}
           <TouchableOpacity
-            style={[styles.actionBtn, { backgroundColor: theme.borderSubtle }]}
+            style={[
+              styles.actionBtn,
+              {
+                backgroundColor: copied ? theme.emeraldLight : theme.bgCard,
+                borderColor: copied ? theme.emeraldBorder : theme.borderSubtle,
+              },
+            ]}
             onPress={handleCopy}
             activeOpacity={0.7}
           >
             <Feather
-              name={copied ? 'check' : 'copy'}
-              size={12}
+              name={copied ? "check" : "copy"}
+              size={13}
               color={copied ? theme.emerald : theme.textMuted}
             />
-            <Text
-              style={[
-                styles.actionBtnText,
-                { color: copied ? theme.emerald : theme.textMuted },
-              ]}
-            >
-              {copied ? 'Copied' : 'Copy'}
-            </Text>
           </TouchableOpacity>
 
           {/* Perplexity Citations Pill Button */}
@@ -178,7 +281,8 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             >
               <Ionicons name="layers-outline" size={12} color={theme.primary} />
               <Text style={[styles.citationPillText, { color: theme.primary }]}>
-                {citations.length} {citations.length === 1 ? 'source' : 'sources'}
+                {citations.length}{" "}
+                {citations.length === 1 ? "source" : "sources"}
               </Text>
               <Feather name="chevron-right" size={11} color={theme.primary} />
             </TouchableOpacity>
@@ -193,16 +297,16 @@ const styles = StyleSheet.create({
   container: {
     marginVertical: 5,
     paddingHorizontal: 12,
-    width: '100%',
+    width: "100%",
   },
   userContainer: {
-    alignItems: 'flex-end',
+    alignItems: "flex-end",
   },
   assistantContainer: {
-    alignItems: 'flex-start',
+    alignItems: "flex-start",
   },
   bubble: {
-    maxWidth: '88%',
+    maxWidth: "88%",
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderRadius: 18,
@@ -221,19 +325,19 @@ const styles = StyleSheet.create({
   },
   heading2: {
     fontSize: 17,
-    fontWeight: '700',
+    fontWeight: "700",
     marginTop: 8,
     marginBottom: 4,
   },
   heading3: {
     fontSize: 15,
-    fontWeight: '700',
+    fontWeight: "700",
     marginTop: 6,
     marginBottom: 2,
   },
   bulletRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
+    flexDirection: "row",
+    alignItems: "flex-start",
     marginVertical: 2,
     paddingLeft: 4,
   },
@@ -246,7 +350,7 @@ const styles = StyleSheet.create({
   },
   numberPrefix: {
     fontSize: 14,
-    fontWeight: '700',
+    fontWeight: "700",
     marginRight: 6,
     minWidth: 16,
   },
@@ -256,8 +360,8 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   thinkingRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 8,
     paddingVertical: 2,
   },
@@ -268,39 +372,50 @@ const styles = StyleSheet.create({
   },
   thinkingText: {
     fontSize: 13,
-    fontStyle: 'italic',
+    fontStyle: "italic",
   },
   toolbarRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    width: '88%',
-    marginTop: 4,
-    paddingHorizontal: 4,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 6,
+    paddingHorizontal: 2,
+  },
+  userToolbarRow: {
+    justifyContent: "flex-end",
+    alignSelf: "flex-end",
+    paddingRight: 4,
   },
   actionBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  actionBtnText: {
-    fontSize: 11,
-    fontWeight: '600',
+    alignItems: "center",
+    justifyContent: "center",
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    borderWidth: 1,
   },
   citationPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 4,
     paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 14,
+    paddingVertical: 5,
+    borderRadius: 8,
     borderWidth: 1,
   },
   citationPillText: {
-    fontSize: 11,
-    fontWeight: '700',
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  inlineCode: {
+    fontFamily: Platform.select({
+      ios: "Menlo",
+      android: "monospace",
+      default: "monospace",
+    }),
+    fontSize: 13,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 4,
   },
 });

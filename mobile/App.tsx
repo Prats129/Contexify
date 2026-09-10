@@ -1,4 +1,10 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import React, {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  useMemo,
+} from "react";
 import {
   View,
   Text,
@@ -9,15 +15,21 @@ import {
   TouchableOpacity,
   Alert,
   Image,
-} from 'react-native';
-import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import { StatusBar } from 'expo-status-bar';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Feather, Ionicons } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
+} from "react-native";
+import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
+import { StatusBar } from "expo-status-bar";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Feather, Ionicons } from "@expo/vector-icons";
+import * as Haptics from "expo-haptics";
 
-import { colors, getAppTheme, ACCENT_PALETTES, type AccentColor, type ThemeMode } from './src/theme/colors';
-import { apiService } from './src/services/api';
+import {
+  colors,
+  getAppTheme,
+  ACCENT_PALETTES,
+  type AccentColor,
+  type ThemeMode,
+} from "./src/theme/colors";
+import { apiService } from "./src/services/api";
 import type {
   User,
   ChatSession,
@@ -26,40 +38,49 @@ import type {
   Citation,
   StreamingMessageState,
   DocumentMetadata,
-} from './src/types';
+} from "./src/types";
 
-import { Header } from './src/components/Header';
-import { MessageItem } from './src/components/MessageItem';
-import { ChatInput } from './src/components/ChatInput';
-import { DrawerMenu } from './src/components/DrawerMenu';
-import { CitationsSheet } from './src/components/CitationsSheet';
-import { AuthModal } from './src/components/AuthModal';
-import { ProfileModal } from './src/components/ProfileModal';
-import { ServerConfigModal } from './src/components/ServerConfigModal';
+import { Header } from "./src/components/Header";
+import { MessageItem } from "./src/components/MessageItem";
+import { ChatInput } from "./src/components/ChatInput";
+import { DrawerMenu } from "./src/components/DrawerMenu";
+import { CitationsSheet } from "./src/components/CitationsSheet";
+import { AuthModal } from "./src/components/AuthModal";
+import { ProfileModal } from "./src/components/ProfileModal";
+import { ServerConfigModal } from "./src/components/ServerConfigModal";
 
 function generateGuestSessionId(): string {
-  return 'guest_' + Math.random().toString(36).substring(2, 11) + Date.now().toString(36);
+  return (
+    "guest_" +
+    Math.random().toString(36).substring(2, 11) +
+    Date.now().toString(36)
+  );
 }
 
 export default function App() {
   // Theme & Appearance State
-  const [themeMode, setThemeMode] = useState<ThemeMode>('dark');
-  const [accentColor, setAccentColor] = useState<AccentColor>('blue');
-  const isDark = themeMode === 'dark';
-  const theme = useMemo(() => getAppTheme(isDark, accentColor), [isDark, accentColor]);
+  const [themeMode, setThemeMode] = useState<ThemeMode>("dark");
+  const [accentColor, setAccentColor] = useState<AccentColor>("blue");
+  const isDark = themeMode === "dark";
+  const theme = useMemo(
+    () => getAppTheme(isDark, accentColor),
+    [isDark, accentColor],
+  );
 
   // Global State
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
-  const [currentMode, setCurrentMode] = useState<ChatMode>('WEB_SEARCH');
+  const [currentMode, setCurrentMode] = useState<ChatMode>("WEB_SEARCH");
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [documents, setDocuments] = useState<DocumentMetadata[]>([]);
 
   // Interaction State
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState("");
   const [isSending, setIsSending] = useState(false);
-  const [streamingMessage, setStreamingMessage] = useState<StreamingMessageState | null>(null);
+  const isSendingRef = useRef(false);
+  const [streamingMessage, setStreamingMessage] =
+    useState<StreamingMessageState | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const streamAbortRef = useRef<(() => void) | null>(null);
 
@@ -81,17 +102,17 @@ export default function App() {
   const initApp = async () => {
     try {
       // Load Theme preferences
-      const savedMode = await AsyncStorage.getItem('contexify_theme_mode');
-      if (savedMode === 'light' || savedMode === 'dark') {
+      const savedMode = await AsyncStorage.getItem("contexify_theme_mode");
+      if (savedMode === "light" || savedMode === "dark") {
         setThemeMode(savedMode);
       }
 
-      const savedAccent = await AsyncStorage.getItem('contexify_theme_accent');
+      const savedAccent = await AsyncStorage.getItem("contexify_theme_accent");
       if (savedAccent && savedAccent in ACCENT_PALETTES) {
         setAccentColor(savedAccent as AccentColor);
       }
 
-      const savedUserStr = await AsyncStorage.getItem('contexify_mobile_user');
+      const savedUserStr = await AsyncStorage.getItem("contexify_mobile_user");
       if (savedUserStr) {
         const user: User = JSON.parse(savedUserStr);
         setCurrentUser(user);
@@ -106,14 +127,14 @@ export default function App() {
   };
 
   const handleToggleTheme = () => {
-    const next: ThemeMode = themeMode === 'dark' ? 'light' : 'dark';
+    const next: ThemeMode = themeMode === "dark" ? "light" : "dark";
     setThemeMode(next);
-    AsyncStorage.setItem('contexify_theme_mode', next);
+    AsyncStorage.setItem("contexify_theme_mode", next);
   };
 
   const handleSelectAccent = (nextAccent: AccentColor) => {
     setAccentColor(nextAccent);
-    AsyncStorage.setItem('contexify_theme_accent', nextAccent);
+    AsyncStorage.setItem("contexify_theme_accent", nextAccent);
   };
 
   const loadUserSessions = async (userId: string) => {
@@ -127,7 +148,7 @@ export default function App() {
         handleNewChat();
       }
     } catch (err) {
-      console.warn('Failed to load sessions:', err);
+      console.warn("Failed to load sessions:", err);
       setSessions([]);
     }
   };
@@ -159,7 +180,7 @@ export default function App() {
     setMessages([]);
     setDocuments([]);
     setStreamingMessage(null);
-    setQuery('');
+    setQuery("");
   };
 
   // --- 4. Delete Session ---
@@ -178,13 +199,14 @@ export default function App() {
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      Alert.alert('Error', msg);
+      Alert.alert("Error", msg);
     }
   };
 
   // --- 5. Toggle Mode ---
   const handleToggleMode = () => {
-    const nextMode: ChatMode = currentMode === 'WEB_SEARCH' ? 'DOCUMENT_RAG' : 'WEB_SEARCH';
+    const nextMode: ChatMode =
+      currentMode === "WEB_SEARCH" ? "DOCUMENT_RAG" : "WEB_SEARCH";
     setCurrentMode(nextMode);
     if (activeSessionId && currentUser) {
       apiService.updateSessionMode(activeSessionId, nextMode).catch(() => {});
@@ -194,9 +216,11 @@ export default function App() {
   // --- 6. Send Message & Streaming ---
   const handleSendMessage = async (customQuery?: string) => {
     const textToSend = (customQuery || query).trim();
-    if (!textToSend || isSending) return;
+    if (!textToSend || isSending || isSendingRef.current) return;
 
-    setQuery('');
+    isSendingRef.current = true;
+    setIsSending(true);
+    setQuery("");
     let sessionId = activeSessionId;
 
     // Create session in backend if user is logged in and no session is active yet
@@ -205,7 +229,7 @@ export default function App() {
         const newSession = await apiService.createSession(
           currentUser.id,
           textToSend.slice(0, 40),
-          currentMode
+          currentMode,
         );
         sessionId = newSession.id;
         setActiveSessionId(sessionId);
@@ -221,23 +245,34 @@ export default function App() {
 
     // Append User Message to UI
     const userMsg: Message = {
-      id: 'usr_' + Date.now(),
+      id: "usr_" + Date.now(),
       session_id: sessionId,
-      role: 'user',
+      role: "user",
       content: textToSend,
       created_at: new Date().toISOString(),
     };
 
     setMessages((prev) => [...prev, userMsg]);
-    setIsSending(true);
-    setStreamingMessage({ content: '', citations: [] });
+    setStreamingMessage({ content: "", citations: [] });
 
     // Stream SSE Response
-    let streamedContent = '';
+    let streamedContent = "";
     let streamedCitations: Citation[] = [];
+    let isStreamFinalized = false;
+
+    const finalizeStream = (action: () => void) => {
+      if (isStreamFinalized) return;
+      isStreamFinalized = true;
+      isSendingRef.current = false;
+      setIsSending(false);
+      setStreamingMessage(null);
+      streamAbortRef.current = null;
+      action();
+    };
 
     const cancel = apiService.streamChat(sessionId, textToSend, currentMode, {
       onToken: (token) => {
+        if (isStreamFinalized) return;
         streamedContent += token;
         setStreamingMessage({
           content: streamedContent,
@@ -245,6 +280,7 @@ export default function App() {
         });
       },
       onCitations: (cits) => {
+        if (isStreamFinalized) return;
         streamedCitations = cits;
         setStreamingMessage({
           content: streamedContent,
@@ -252,36 +288,34 @@ export default function App() {
         });
       },
       onComplete: () => {
-        setIsSending(false);
-        setStreamingMessage(null);
-        streamAbortRef.current = null;
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        finalizeStream(() => {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
-        const aiMsg: Message = {
-          id: 'ai_' + Date.now(),
-          session_id: sessionId!,
-          role: 'assistant',
-          content: streamedContent || 'No response generated.',
-          citations: streamedCitations,
-          created_at: new Date().toISOString(),
-        };
-        setMessages((prev) => [...prev, aiMsg]);
+          const aiMsg: Message = {
+            id: "ai_" + Date.now(),
+            session_id: sessionId!,
+            role: "assistant",
+            content: streamedContent || "No response generated.",
+            citations: streamedCitations,
+            created_at: new Date().toISOString(),
+          };
+          setMessages((prev) => [...prev, aiMsg]);
+        });
       },
       onError: (errMsg) => {
-        setIsSending(false);
-        setStreamingMessage(null);
-        streamAbortRef.current = null;
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        finalizeStream(() => {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
 
-        const errorMsg: Message = {
-          id: 'err_' + Date.now(),
-          session_id: sessionId!,
-          role: 'assistant',
-          content: `⚠️ ${errMsg}`,
-          citations: [],
-          created_at: new Date().toISOString(),
-        };
-        setMessages((prev) => [...prev, errorMsg]);
+          const errorMsg: Message = {
+            id: "err_" + Date.now(),
+            session_id: sessionId!,
+            role: "assistant",
+            content: `⚠️ ${errMsg}`,
+            citations: [],
+            created_at: new Date().toISOString(),
+          };
+          setMessages((prev) => [...prev, errorMsg]);
+        });
       },
     });
 
@@ -289,6 +323,7 @@ export default function App() {
   };
 
   const handleStopGeneration = () => {
+    isSendingRef.current = false;
     if (streamAbortRef.current) {
       streamAbortRef.current();
       streamAbortRef.current = null;
@@ -296,9 +331,9 @@ export default function App() {
     setIsSending(false);
     if (streamingMessage && streamingMessage.content) {
       const partialMsg: Message = {
-        id: 'ai_partial_' + Date.now(),
-        session_id: activeSessionId || 'temp',
-        role: 'assistant',
+        id: "ai_partial_" + Date.now(),
+        session_id: activeSessionId || "temp",
+        role: "assistant",
         content: streamingMessage.content,
         citations: streamingMessage.citations,
         created_at: new Date().toISOString(),
@@ -309,7 +344,11 @@ export default function App() {
   };
 
   // --- 7. File Attachment & Upload ---
-  const handleAttachFile = async (file: { uri: string; name: string; mimeType: string }) => {
+  const handleAttachFile = async (file: {
+    uri: string;
+    name: string;
+    mimeType: string;
+  }) => {
     let sessionId = activeSessionId;
     if (!sessionId) {
       sessionId = generateGuestSessionId();
@@ -323,17 +362,17 @@ export default function App() {
         file.uri,
         file.name,
         file.mimeType,
-        currentUser?.id
+        currentUser?.id,
       );
       setDocuments((prev) => [...(Array.isArray(prev) ? prev : []), doc]);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       // Auto-switch to Document RAG if uploaded
-      if (currentMode !== 'DOCUMENT_RAG') {
-        setCurrentMode('DOCUMENT_RAG');
+      if (currentMode !== "DOCUMENT_RAG") {
+        setCurrentMode("DOCUMENT_RAG");
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      Alert.alert('Upload Failed', msg);
+      Alert.alert("Upload Failed", msg);
     } finally {
       setIsUploading(false);
     }
@@ -341,12 +380,16 @@ export default function App() {
 
   const handleDeleteDocument = async (docId: string) => {
     try {
-      await apiService.deleteDocument(docId, activeSessionId || '');
-      setDocuments((prev) => (Array.isArray(prev) ? prev : []).filter((d) => d.document_id !== docId));
+      await apiService.deleteDocument(docId, activeSessionId || "");
+      setDocuments((prev) =>
+        (Array.isArray(prev) ? prev : []).filter(
+          (d) => d.document_id !== docId,
+        ),
+      );
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      Alert.alert('Delete Failed', msg);
+      Alert.alert("Delete Failed", msg);
     }
   };
 
@@ -359,21 +402,24 @@ export default function App() {
   // --- 9. Auth Success / Logout ---
   const handleAuthSuccess = async (user: User) => {
     setCurrentUser(user);
-    await AsyncStorage.setItem('contexify_mobile_user', JSON.stringify(user));
+    await AsyncStorage.setItem("contexify_mobile_user", JSON.stringify(user));
     await loadUserSessions(user.id);
   };
 
   const handleLogout = async () => {
     setCurrentUser(null);
-    await AsyncStorage.removeItem('contexify_mobile_user');
+    await AsyncStorage.removeItem("contexify_mobile_user");
     setSessions([]);
     handleNewChat();
   };
 
   return (
     <SafeAreaProvider>
-      <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.bgApp }]} edges={['top', 'left', 'right']}>
-        <StatusBar style={isDark ? 'light' : 'dark'} />
+      <SafeAreaView
+        style={[styles.safeArea, { backgroundColor: theme.bgApp }]}
+        edges={["top", "left", "right"]}
+      >
+        <StatusBar style={isDark ? "light" : "dark"} />
 
         {/* Top Native Header */}
         <Header
@@ -386,52 +432,105 @@ export default function App() {
 
         {/* Main Chat Workspace */}
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
           style={styles.workspace}
-          keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
+          keyboardVerticalOffset={Platform.OS === "ios" ? 8 : 0}
         >
           {/* Welcome Screen if empty */}
           {messages.length === 0 && !streamingMessage ? (
             <View style={styles.welcomeContainer}>
               <View style={styles.welcomeLogoWrapper}>
                 <Image
-                  source={require('./assets/logo.png')}
+                  source={require("./assets/logo.png")}
                   style={styles.welcomeLogo}
                   resizeMode="contain"
                 />
               </View>
-              <Text style={[styles.welcomeTitle, { color: theme.textMain }]}>Contexify AI</Text>
-              <Text style={[styles.welcomeSubtitle, { color: theme.textMuted }]}>
-                Ask grounded questions with real-time web search or attach files for instant document RAG.
+              <Text style={[styles.welcomeTitle, { color: theme.textMain }]}>
+                Contexify AI
+              </Text>
+              <Text
+                style={[styles.welcomeSubtitle, { color: theme.textMuted }]}
+              >
+                Ask grounded questions with real-time web search or attach files
+                for instant document RAG.
               </Text>
 
               {/* Starter Prompt Chips */}
               <View style={styles.starterChipsRow}>
                 <TouchableOpacity
-                  style={[styles.starterChip, { backgroundColor: theme.bgCard, borderColor: theme.borderSubtle }]}
-                  onPress={() => handleSendMessage('Summarize key points covered in the document.')}
+                  style={[
+                    styles.starterChip,
+                    {
+                      backgroundColor: theme.bgCard,
+                      borderColor: theme.borderSubtle,
+                    },
+                  ]}
+                  onPress={() =>
+                    handleSendMessage(
+                      "Summarize key points covered in the document.",
+                    )
+                  }
                   activeOpacity={0.8}
                 >
                   <Ionicons name="list" size={14} color={theme.primary} />
-                  <Text style={[styles.starterChipText, { color: theme.textMain }]}>Summarize Document</Text>
+                  <Text
+                    style={[styles.starterChipText, { color: theme.textMain }]}
+                  >
+                    Summarize Document
+                  </Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                  style={[styles.starterChip, { backgroundColor: theme.bgCard, borderColor: theme.borderSubtle }]}
-                  onPress={() => handleSendMessage('Explain the main technical concepts.')}
+                  style={[
+                    styles.starterChip,
+                    {
+                      backgroundColor: theme.bgCard,
+                      borderColor: theme.borderSubtle,
+                    },
+                  ]}
+                  onPress={() =>
+                    handleSendMessage("Explain the main technical concepts.")
+                  }
                   activeOpacity={0.8}
                 >
-                  <Ionicons name="hardware-chip-outline" size={14} color={theme.primary} />
-                  <Text style={[styles.starterChipText, { color: theme.textMain }]}>Key Concepts</Text>
+                  <Ionicons
+                    name="hardware-chip-outline"
+                    size={14}
+                    color={theme.primary}
+                  />
+                  <Text
+                    style={[styles.starterChipText, { color: theme.textMain }]}
+                  >
+                    Key Concepts
+                  </Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                  style={[styles.starterChip, { backgroundColor: theme.bgCard, borderColor: theme.borderSubtle }]}
-                  onPress={() => handleSendMessage('Search the web for the latest updates on this topic.')}
+                  style={[
+                    styles.starterChip,
+                    {
+                      backgroundColor: theme.bgCard,
+                      borderColor: theme.borderSubtle,
+                    },
+                  ]}
+                  onPress={() =>
+                    handleSendMessage(
+                      "Search the web for the latest updates on this topic.",
+                    )
+                  }
                   activeOpacity={0.8}
                 >
-                  <Ionicons name="globe-outline" size={14} color={theme.emerald} />
-                  <Text style={[styles.starterChipText, { color: theme.textMain }]}>Search Live Web</Text>
+                  <Ionicons
+                    name="globe-outline"
+                    size={14}
+                    color={theme.emerald}
+                  />
+                  <Text
+                    style={[styles.starterChipText, { color: theme.textMain }]}
+                  >
+                    Search Live Web
+                  </Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -441,7 +540,9 @@ export default function App() {
               data={messages}
               keyExtractor={(item) => item.id}
               contentContainerStyle={styles.messageListContent}
-              onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
+              onContentSizeChange={() =>
+                flatListRef.current?.scrollToEnd({ animated: true })
+              }
               showsVerticalScrollIndicator={false}
               renderItem={({ item }) => (
                 <MessageItem
@@ -536,11 +637,14 @@ export default function App() {
           themeMode={themeMode}
           onToggleThemeMode={(mode) => {
             setThemeMode(mode);
-            AsyncStorage.setItem('contexify_theme_mode', mode);
+            AsyncStorage.setItem("contexify_theme_mode", mode);
           }}
           onProfileUpdated={(updated) => {
             setCurrentUser(updated);
-            AsyncStorage.setItem('contexify_mobile_user', JSON.stringify(updated));
+            AsyncStorage.setItem(
+              "contexify_mobile_user",
+              JSON.stringify(updated),
+            );
           }}
           onLogout={handleLogout}
           theme={theme}
@@ -567,16 +671,16 @@ const styles = StyleSheet.create({
   },
   welcomeContainer: {
     flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
     paddingHorizontal: 24,
     gap: 12,
   },
   welcomeLogoWrapper: {
     width: 68,
     height: 68,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
     marginBottom: 4,
   },
   welcomeLogo: {
@@ -585,24 +689,24 @@ const styles = StyleSheet.create({
   },
   welcomeTitle: {
     fontSize: 22,
-    fontWeight: '800',
+    fontWeight: "800",
     letterSpacing: 0.3,
   },
   welcomeSubtitle: {
     fontSize: 13,
     lineHeight: 19,
-    textAlign: 'center',
+    textAlign: "center",
     maxWidth: 280,
   },
   starterChipsRow: {
     gap: 8,
-    width: '100%',
+    width: "100%",
     maxWidth: 280,
     marginTop: 12,
   },
   starterChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 8,
     paddingHorizontal: 14,
     paddingVertical: 10,
@@ -611,7 +715,7 @@ const styles = StyleSheet.create({
   },
   starterChipText: {
     fontSize: 13,
-    fontWeight: '600',
+    fontWeight: "600",
   },
   messageListContent: {
     paddingVertical: 12,

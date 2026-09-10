@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef, useEffect } from "react";
 import {
   View,
   Text,
@@ -8,11 +8,13 @@ import {
   ScrollView,
   Linking,
   Pressable,
-} from 'react-native';
-import { Feather, Ionicons } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
-import { getAppTheme, type AppTheme } from '../theme/colors';
-import type { Citation } from '../types';
+  Animated,
+  PanResponder,
+} from "react-native";
+import { Feather, Ionicons } from "@expo/vector-icons";
+import * as Haptics from "expo-haptics";
+import { getAppTheme, type AppTheme } from "../theme/colors";
+import type { Citation } from "../types";
 
 interface CitationsSheetProps {
   visible: boolean;
@@ -22,29 +24,38 @@ interface CitationsSheetProps {
   theme?: AppTheme;
 }
 
-function parseCitation(c: Citation): { title: string; url: string; domain: string; snippet: string } {
-  let url = '';
-  let domain = '';
-  let snippet = c.snippet || '';
+function parseCitation(c: Citation): {
+  title: string;
+  url: string;
+  domain: string;
+  snippet: string;
+} {
+  let url = "";
+  let domain = "";
+  let snippet = c.snippet || "";
 
-  const lines = snippet.split('\n');
-  if (lines[0].startsWith('http://') || lines[0].startsWith('https://')) {
+  const lines = snippet.split("\n");
+  if (lines[0].startsWith("http://") || lines[0].startsWith("https://")) {
     url = lines[0].trim();
-    snippet = lines.slice(1).join(' ').trim();
-  } else if (c.document_id && (c.document_id.startsWith('http://') || c.document_id.startsWith('https://'))) {
+    snippet = lines.slice(1).join(" ").trim();
+  } else if (
+    c.document_id &&
+    (c.document_id.startsWith("http://") ||
+      c.document_id.startsWith("https://"))
+  ) {
     url = c.document_id;
   }
 
   if (url) {
     try {
       const match = url.match(/^https?:\/\/([^/?#]+)(?:[/?#]|$)/i);
-      domain = match ? match[1].replace(/^www\./, '') : 'web';
+      domain = match ? match[1].replace(/^www\./, "") : "web";
     } catch {
-      domain = 'web';
+      domain = "web";
     }
   }
 
-  const title = c.filename || domain || 'Source';
+  const title = c.filename || domain || "Source";
   return { title, url, domain, snippet };
 }
 
@@ -56,43 +67,121 @@ export const CitationsSheet: React.FC<CitationsSheetProps> = ({
   theme: customTheme,
 }) => {
   const theme = customTheme || getAppTheme(isDark);
+  const translateY = useRef(new Animated.Value(700)).current;
+
+  useEffect(() => {
+    if (visible) {
+      translateY.setValue(700);
+      Animated.spring(translateY, {
+        toValue: 0,
+        tension: 65,
+        friction: 11,
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [visible]);
+
+  const handleClose = () => {
+    Animated.timing(translateY, {
+      toValue: 700,
+      duration: 160,
+      useNativeDriver: true,
+    }).start(() => {
+      onClose();
+    });
+  };
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, gestureState) => gestureState.dy > 4,
+      onPanResponderMove: (_, gestureState) => {
+        if (gestureState.dy > 0) {
+          translateY.setValue(gestureState.dy);
+        }
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        if (gestureState.dy > 60 || gestureState.vy > 0.4) {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          Animated.timing(translateY, {
+            toValue: 700,
+            duration: 160,
+            useNativeDriver: true,
+          }).start(() => {
+            onClose();
+          });
+        } else {
+          Animated.spring(translateY, {
+            toValue: 0,
+            velocity: gestureState.vy,
+            tension: 65,
+            friction: 10,
+            useNativeDriver: true,
+          }).start();
+        }
+      },
+    }),
+  ).current;
 
   const handleOpenLink = (url: string) => {
     if (!url) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    Linking.openURL(url).catch(() => { });
+    Linking.openURL(url).catch(() => {});
   };
 
   return (
     <Modal
       visible={visible}
       transparent
-      animationType="slide"
-      onRequestClose={onClose}
+      animationType="none"
+      onRequestClose={handleClose}
     >
-      <Pressable style={styles.backdrop} onPress={onClose}>
-        <Pressable
+      <Pressable style={styles.backdrop} onPress={handleClose}>
+        <Animated.View
+          onStartShouldSetResponder={() => true}
           style={[
             styles.sheetContainer,
             {
               backgroundColor: theme.bgCard,
               borderColor: theme.borderHover,
+              transform: [{ translateY }],
             },
           ]}
-          onPress={(e) => e.stopPropagation()}
         >
-          {/* Pull Handle */}
-          <View style={styles.handleRow}>
-            <View style={[styles.handleBar, { backgroundColor: theme.textMuted }]} />
-          </View>
+          {/* Draggable Pull Handle & Header Area */}
+          <View {...panResponder.panHandlers}>
+            <View style={styles.handleRow}>
+              <View
+                style={[styles.handleBar, { backgroundColor: theme.textMuted }]}
+              />
+            </View>
 
-          {/* Header */}
-          <View style={[styles.headerRow, { borderBottomColor: theme.borderSubtle }]}>
-            <View style={styles.titleRow}>
-              <Ionicons name="layers-outline" size={18} color={theme.primary} />
-              <Text style={[styles.sheetTitle, { color: theme.textMain }]}>Sources & Grounding</Text>
-              <View style={[styles.badge, { backgroundColor: theme.primaryLight }]}>
-                <Text style={[styles.badgeText, { color: theme.primary }]}>{citations.length}</Text>
+            {/* Header */}
+            <View
+              style={[
+                styles.headerRow,
+                { borderBottomColor: theme.borderSubtle },
+              ]}
+            >
+              <View style={styles.titleRow}>
+                <Ionicons
+                  name="layers-outline"
+                  size={18}
+                  color={theme.primary}
+                />
+                <Text style={[styles.sheetTitle, { color: theme.textMain }]}>
+                  Sources & Grounding
+                </Text>
+                <View
+                  style={[
+                    styles.badge,
+                    { backgroundColor: theme.primaryLight },
+                  ]}
+                >
+                  <Text style={[styles.badgeText, { color: theme.primary }]}>
+                    {citations.length}
+                  </Text>
+                </View>
               </View>
             </View>
           </View>
@@ -122,18 +211,30 @@ export const CitationsSheet: React.FC<CitationsSheetProps> = ({
                   <View style={styles.cardMetaRow}>
                     <View style={styles.metaLeft}>
                       <Ionicons
-                        name={isWeb ? 'globe-outline' : 'document-text-outline'}
+                        name={isWeb ? "globe-outline" : "document-text-outline"}
                         size={13}
                         color={isWeb ? theme.emerald : theme.primary}
                       />
-                      <Text style={[styles.domainText, { color: theme.textMuted }]}>
-                        {domain || c.filename || 'Document'}
+                      <Text
+                        style={[styles.domainText, { color: theme.textMuted }]}
+                      >
+                        {domain || c.filename || "Document"}
                       </Text>
                     </View>
 
                     {!isWeb && c.page_number && (
-                      <View style={[styles.pagePill, { backgroundColor: theme.borderSubtle }]}>
-                        <Text style={[styles.pagePillText, { color: theme.textMuted }]}>
+                      <View
+                        style={[
+                          styles.pagePill,
+                          { backgroundColor: theme.borderSubtle },
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.pagePillText,
+                            { color: theme.textMuted },
+                          ]}
+                        >
                           p. {c.page_number}
                         </Text>
                       </View>
@@ -147,20 +248,33 @@ export const CitationsSheet: React.FC<CitationsSheetProps> = ({
                       activeOpacity={0.7}
                       style={styles.linkRow}
                     >
-                      <Text style={[styles.cardTitle, { color: theme.primary }]} numberOfLines={2}>
+                      <Text
+                        style={[styles.cardTitle, { color: theme.primary }]}
+                        numberOfLines={2}
+                      >
                         {title}
                       </Text>
-                      <Feather name="external-link" size={12} color={theme.primary} />
+                      <Feather
+                        name="external-link"
+                        size={12}
+                        color={theme.primary}
+                      />
                     </TouchableOpacity>
                   ) : (
-                    <Text style={[styles.cardTitle, { color: theme.textMain }]} numberOfLines={2}>
+                    <Text
+                      style={[styles.cardTitle, { color: theme.textMain }]}
+                      numberOfLines={2}
+                    >
                       {title}
                     </Text>
                   )}
 
                   {/* Snippet excerpt */}
                   {snippet ? (
-                    <Text style={[styles.snippetText, { color: theme.textMuted }]} numberOfLines={4}>
+                    <Text
+                      style={[styles.snippetText, { color: theme.textMuted }]}
+                      numberOfLines={4}
+                    >
                       {snippet}
                     </Text>
                   ) : null}
@@ -168,7 +282,7 @@ export const CitationsSheet: React.FC<CitationsSheetProps> = ({
               );
             })}
           </ScrollView>
-        </Pressable>
+        </Animated.View>
       </Pressable>
     </Modal>
   );
@@ -177,11 +291,11 @@ export const CitationsSheet: React.FC<CitationsSheetProps> = ({
 const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.65)',
-    justifyContent: 'flex-end',
+    backgroundColor: "transparent",
+    justifyContent: "flex-end",
   },
   sheetContainer: {
-    maxHeight: '80%',
+    maxHeight: "80%",
     minHeight: 280,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
@@ -189,7 +303,7 @@ const styles = StyleSheet.create({
     paddingBottom: 24,
   },
   handleRow: {
-    alignItems: 'center',
+    alignItems: "center",
     paddingVertical: 10,
   },
   handleBar: {
@@ -199,21 +313,21 @@ const styles = StyleSheet.create({
     opacity: 0.3,
   },
   headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     paddingHorizontal: 16,
     paddingBottom: 12,
     borderBottomWidth: 1,
   },
   titleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 8,
   },
   sheetTitle: {
     fontSize: 16,
-    fontWeight: '700',
+    fontWeight: "700",
   },
   badge: {
     paddingHorizontal: 7,
@@ -222,14 +336,14 @@ const styles = StyleSheet.create({
   },
   badgeText: {
     fontSize: 11,
-    fontWeight: '700',
+    fontWeight: "700",
   },
   closeBtn: {
     width: 30,
     height: 30,
     borderRadius: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
   },
   list: {
     paddingHorizontal: 16,
@@ -245,19 +359,19 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   cardMetaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
   },
   metaLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 5,
   },
   domainText: {
     fontSize: 11,
-    fontWeight: '600',
-    textTransform: 'lowercase',
+    fontWeight: "600",
+    textTransform: "lowercase",
   },
   pagePill: {
     paddingHorizontal: 6,
@@ -266,16 +380,16 @@ const styles = StyleSheet.create({
   },
   pagePillText: {
     fontSize: 10,
-    fontWeight: '700',
+    fontWeight: "700",
   },
   linkRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 4,
   },
   cardTitle: {
     fontSize: 14,
-    fontWeight: '700',
+    fontWeight: "700",
     lineHeight: 18,
     flex: 1,
   },

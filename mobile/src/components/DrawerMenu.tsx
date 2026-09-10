@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -9,12 +9,15 @@ import {
   Pressable,
   Alert,
   Image,
-} from 'react-native';
-import { Feather, Ionicons } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
-import { getAppTheme, type AppTheme } from '../theme/colors';
-import { apiService } from '../services/api';
-import type { ChatSession, DocumentMetadata, User } from '../types';
+  Animated,
+  PanResponder,
+  Platform,
+} from "react-native";
+import { Feather, Ionicons } from "@expo/vector-icons";
+import * as Haptics from "expo-haptics";
+import { getAppTheme, type AppTheme } from "../theme/colors";
+import { apiService } from "../services/api";
+import type { ChatSession, DocumentMetadata, User } from "../types";
 
 interface DrawerMenuProps {
   visible: boolean;
@@ -61,9 +64,73 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
   const [isDocsExpanded, setIsDocsExpanded] = useState(true);
   const [resolvedAvatar, setResolvedAvatar] = useState<string | null>(null);
 
+  const translateX = useRef(new Animated.Value(-340)).current;
+
+  useEffect(() => {
+    if (visible) {
+      translateX.setValue(-340);
+      Animated.spring(translateX, {
+        toValue: 0,
+        tension: 65,
+        friction: 11,
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [visible]);
+
+  const handleClose = (callback?: () => void) => {
+    Animated.timing(translateX, {
+      toValue: -340,
+      duration: 160,
+      useNativeDriver: true,
+    }).start(() => {
+      onClose();
+      if (callback) callback();
+    });
+  };
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_, gestureState) => {
+        return (
+          gestureState.dx < -10 &&
+          Math.abs(gestureState.dx) > Math.abs(gestureState.dy)
+        );
+      },
+      onPanResponderMove: (_, gestureState) => {
+        if (gestureState.dx < 0) {
+          translateX.setValue(gestureState.dx);
+        }
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        if (gestureState.dx < -45 || gestureState.vx < -0.35) {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          Animated.timing(translateX, {
+            toValue: -340,
+            duration: 160,
+            useNativeDriver: true,
+          }).start(() => {
+            onClose();
+          });
+        } else {
+          Animated.spring(translateX, {
+            toValue: 0,
+            velocity: gestureState.vx,
+            tension: 65,
+            friction: 10,
+            useNativeDriver: true,
+          }).start();
+        }
+      },
+    }),
+  ).current;
+
   useEffect(() => {
     if (currentUser?.avatar_url) {
-      apiService.resolveAvatarUrl(currentUser.avatar_url).then(setResolvedAvatar);
+      apiService
+        .resolveAvatarUrl(currentUser.avatar_url)
+        .then(setResolvedAvatar);
     } else {
       setResolvedAvatar(null);
     }
@@ -72,67 +139,78 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
   const handleSelect = (id: string) => {
     Haptics.selectionAsync();
     onSelectSession(id);
-    onClose();
+    handleClose();
   };
 
   const handleDeletePress = (id: string, title: string) => {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
     Alert.alert(
-      'Delete Conversation',
+      "Delete Conversation",
       `Delete "${title}"? This cannot be undone.`,
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: "Cancel", style: "cancel" },
         {
-          text: 'Delete',
-          style: 'destructive',
+          text: "Delete",
+          style: "destructive",
           onPress: () => onDeleteSession(id),
         },
-      ]
+      ],
     );
   };
 
   const handleProfilePress = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    onClose();
-    if (currentUser) {
-      onOpenProfile();
-    } else {
-      onOpenAuth();
-    }
+    handleClose(() => {
+      if (currentUser) {
+        onOpenProfile();
+      } else {
+        onOpenAuth();
+      }
+    });
   };
 
   return (
     <Modal
       visible={visible}
-      animationType="fade"
+      animationType="none"
       transparent
-      onRequestClose={onClose}
+      onRequestClose={() => handleClose()}
     >
       <View style={styles.overlay}>
         {/* Backdrop overlay */}
-        <Pressable style={styles.backdrop} onPress={onClose} />
+        <Pressable style={styles.backdrop} onPress={() => handleClose()} />
 
         {/* Slide-over Drawer Panel */}
-        <View
+        <Animated.View
           style={[
             styles.drawer,
             {
               backgroundColor: theme.bgSidebar,
               borderColor: theme.borderSubtle,
+              transform: [{ translateX }],
             },
           ]}
+          {...panResponder.panHandlers}
         >
           {/* Brand Header with Official Logo */}
-          <View style={[styles.brandRow, { borderBottomColor: theme.borderSubtle }]}>
+          <View
+            style={[styles.brandRow, { borderBottomColor: theme.borderSubtle }]}
+          >
             <View style={styles.brandLeft}>
               <Image
-                source={require('../../assets/logo.png')}
+                source={require("../../assets/logo.png")}
                 style={styles.brandLogo}
                 resizeMode="contain"
               />
               <View>
-                <Text style={[styles.brandTitle, { color: theme.textMain }]}>Contexify AI</Text>
-                <Text style={[styles.brandSubtitle, { color: theme.textMuted }]}>Enterprise RAG & Search</Text>
+                <Text style={[styles.brandTitle, { color: theme.textMain }]}>
+                  Contexify AI
+                </Text>
+                <Text
+                  style={[styles.brandSubtitle, { color: theme.textMuted }]}
+                >
+                  Enterprise RAG & Search
+                </Text>
               </View>
             </View>
           </View>
@@ -141,8 +219,7 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
           <TouchableOpacity
             style={[styles.newChatBtn, { backgroundColor: theme.primary }]}
             onPress={() => {
-              onNewChat();
-              onClose();
+              handleClose(() => onNewChat());
             }}
             activeOpacity={0.8}
           >
@@ -167,26 +244,30 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
             >
               <View style={styles.sectionHeaderLeft}>
                 <Feather
-                  name={isChatsExpanded ? 'chevron-down' : 'chevron-right'}
+                  name={isChatsExpanded ? "chevron-down" : "chevron-right"}
                   size={14}
                   color={theme.textMuted}
                 />
-                <Text style={[styles.sectionTitle, { color: theme.textMuted }]}>CHATS</Text>
+                <Text style={[styles.sectionTitle, { color: theme.textMuted }]}>
+                  CHATS
+                </Text>
               </View>
               <Text style={[styles.sectionCount, { color: theme.textMuted }]}>
-                {currentUser ? sessionList.length : 'Guest'}
+                {currentUser ? sessionList.length : "Guest"}
               </Text>
             </TouchableOpacity>
 
-            {isChatsExpanded && (
-              sessionList.length === 0 ? (
+            {isChatsExpanded &&
+              (sessionList.length === 0 ? (
                 <Text style={[styles.emptyText, { color: theme.textMuted }]}>
-                  {currentUser ? 'No conversations yet.' : 'Temporary guest chats.'}
+                  {currentUser
+                    ? "No conversations yet."
+                    : "Temporary guest chats."}
                 </Text>
               ) : (
                 sessionList.map((s) => {
                   const isActive = s.id === activeSessionId;
-                  const isWeb = s.mode === 'WEB_SEARCH';
+                  const isWeb = s.mode === "WEB_SEARCH";
 
                   return (
                     <TouchableOpacity
@@ -194,15 +275,19 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
                       style={[
                         styles.sessionItem,
                         {
-                          backgroundColor: isActive ? theme.primaryLight : 'transparent',
-                          borderColor: isActive ? theme.primaryBorder : 'transparent',
+                          backgroundColor: isActive
+                            ? theme.primaryLight
+                            : "transparent",
+                          borderColor: isActive
+                            ? theme.primaryBorder
+                            : "transparent",
                         },
                       ]}
                       onPress={() => handleSelect(s.id)}
                       activeOpacity={0.7}
                     >
                       <Ionicons
-                        name={isWeb ? 'globe-outline' : 'document-text-outline'}
+                        name={isWeb ? "globe-outline" : "document-text-outline"}
                         size={14}
                         color={isActive ? theme.primary : theme.textMuted}
                       />
@@ -211,7 +296,7 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
                           styles.sessionTitle,
                           {
                             color: isActive ? theme.primary : theme.textMain,
-                            fontWeight: isActive ? '700' : '500',
+                            fontWeight: isActive ? "700" : "500",
                           },
                         ]}
                         numberOfLines={1}
@@ -222,13 +307,16 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
                         onPress={() => handleDeletePress(s.id, s.title)}
                         hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                       >
-                        <Feather name="trash-2" size={13} color={theme.textMuted} />
+                        <Feather
+                          name="trash-2"
+                          size={13}
+                          color={theme.textMuted}
+                        />
                       </TouchableOpacity>
                     </TouchableOpacity>
                   );
                 })
-              )
-            )}
+              ))}
 
             {/* Session Documents Section (Collapsible) */}
             {docList.length > 0 && (
@@ -243,18 +331,24 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
                 >
                   <View style={styles.sectionHeaderLeft}>
                     <Feather
-                      name={isDocsExpanded ? 'chevron-down' : 'chevron-right'}
+                      name={isDocsExpanded ? "chevron-down" : "chevron-right"}
                       size={14}
                       color={theme.textMuted}
                     />
-                    <Text style={[styles.sectionTitle, { color: theme.textMuted }]}>ATTACHED DOCUMENTS</Text>
+                    <Text
+                      style={[styles.sectionTitle, { color: theme.textMuted }]}
+                    >
+                      ATTACHED DOCUMENTS
+                    </Text>
                   </View>
-                  <Text style={[styles.sectionCount, { color: theme.textMuted }]}>
+                  <Text
+                    style={[styles.sectionCount, { color: theme.textMuted }]}
+                  >
                     {docList.length}
                   </Text>
                 </TouchableOpacity>
 
-                {isDocsExpanded && (
+                {isDocsExpanded &&
                   docList.map((doc) => (
                     <View
                       key={doc.document_id}
@@ -268,11 +362,17 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
                     >
                       <Feather name="file" size={13} color={theme.primary} />
                       <View style={{ flex: 1 }}>
-                        <Text style={[styles.docName, { color: theme.textMain }]} numberOfLines={1}>
+                        <Text
+                          style={[styles.docName, { color: theme.textMain }]}
+                          numberOfLines={1}
+                        >
                           {doc.filename}
                         </Text>
-                        <Text style={[styles.docMeta, { color: theme.textMuted }]}>
-                          {doc.total_chunks} chunks • {(doc.file_size_bytes / 1024).toFixed(1)} KB
+                        <Text
+                          style={[styles.docMeta, { color: theme.textMuted }]}
+                        >
+                          {doc.total_chunks} chunks •{" "}
+                          {(doc.file_size_bytes / 1024).toFixed(1)} KB
                         </Text>
                       </View>
                       <TouchableOpacity
@@ -282,18 +382,28 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
                         <Feather name="x" size={13} color={theme.textMuted} />
                       </TouchableOpacity>
                     </View>
-                  ))
-                )}
+                  ))}
               </>
             )}
           </ScrollView>
 
           {/* Bottom Pinned Area: User Profile & Server Config */}
-          <View style={[styles.bottomContainer, { borderTopColor: theme.borderSubtle }]}>
+          <View
+            style={[
+              styles.bottomContainer,
+              { borderTopColor: theme.borderSubtle },
+            ]}
+          >
             {/* User Profile Pill or Sign In Trigger */}
             {currentUser ? (
               <TouchableOpacity
-                style={[styles.userPill, { backgroundColor: theme.bgInput, borderColor: theme.borderSubtle }]}
+                style={[
+                  styles.userPill,
+                  {
+                    backgroundColor: theme.bgInput,
+                    borderColor: theme.borderSubtle,
+                  },
+                ]}
                 onPress={handleProfilePress}
                 activeOpacity={0.7}
               >
@@ -301,7 +411,8 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
                   style={[
                     styles.userAvatar,
                     {
-                      backgroundColor: currentUser.avatar_color || theme.primary,
+                      backgroundColor:
+                        currentUser.avatar_color || theme.primary,
                     },
                   ]}
                 >
@@ -312,16 +423,24 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
                     />
                   ) : (
                     <Text style={styles.userAvatarText}>
-                      {(currentUser.display_name || currentUser.username || 'U').charAt(0).toUpperCase()}
+                      {(currentUser.display_name || currentUser.username || "U")
+                        .charAt(0)
+                        .toUpperCase()}
                     </Text>
                   )}
                 </View>
 
                 <View style={styles.userInfo}>
-                  <Text style={[styles.userName, { color: theme.textMain }]} numberOfLines={1}>
+                  <Text
+                    style={[styles.userName, { color: theme.textMain }]}
+                    numberOfLines={1}
+                  >
                     {currentUser.display_name}
                   </Text>
-                  <Text style={[styles.userEmail, { color: theme.textMuted }]} numberOfLines={1}>
+                  <Text
+                    style={[styles.userEmail, { color: theme.textMuted }]}
+                    numberOfLines={1}
+                  >
                     @{currentUser.username}
                   </Text>
                 </View>
@@ -330,15 +449,29 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
               </TouchableOpacity>
             ) : (
               <TouchableOpacity
-                style={[styles.guestPill, { backgroundColor: theme.primaryLight, borderColor: theme.primaryBorder }]}
+                style={[
+                  styles.guestPill,
+                  {
+                    backgroundColor: theme.primaryLight,
+                    borderColor: theme.primaryBorder,
+                  },
+                ]}
                 onPress={handleProfilePress}
                 activeOpacity={0.8}
               >
                 <View style={styles.guestLeft}>
-                  <Ionicons name="person-circle-outline" size={22} color={theme.primary} />
+                  <Ionicons
+                    name="person-circle-outline"
+                    size={22}
+                    color={theme.primary}
+                  />
                   <View>
-                    <Text style={[styles.guestTitle, { color: theme.primary }]}>Sign In / Register</Text>
-                    <Text style={[styles.guestSubtitle, { color: theme.textMuted }]}>
+                    <Text style={[styles.guestTitle, { color: theme.primary }]}>
+                      Sign In / Register
+                    </Text>
+                    <Text
+                      style={[styles.guestSubtitle, { color: theme.textMuted }]}
+                    >
                       Sync history & documents
                     </Text>
                   </View>
@@ -349,21 +482,30 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
 
             {/* Server IP / Wi-Fi Config Button */}
             <TouchableOpacity
-              style={[styles.serverConfigBtn, { backgroundColor: theme.borderSubtle }]}
+              style={[
+                styles.serverConfigBtn,
+                { backgroundColor: theme.borderSubtle },
+              ]}
               onPress={() => {
-                onClose();
-                onOpenServerConfig();
+                handleClose(() => onOpenServerConfig());
               }}
               activeOpacity={0.7}
             >
               <Feather name="server" size={13} color={theme.textMuted} />
-              <Text style={[styles.serverConfigText, { color: theme.textMuted }]}>
+              <Text
+                style={[styles.serverConfigText, { color: theme.textMuted }]}
+              >
                 Backend Server IP / Wi-Fi
               </Text>
-              <Feather name="sliders" size={12} color={theme.textMuted} style={{ marginLeft: 'auto' }} />
+              <Feather
+                name="sliders"
+                size={12}
+                color={theme.textMuted}
+                style={{ marginLeft: "auto" }}
+              />
             </TouchableOpacity>
           </View>
-        </View>
+        </Animated.View>
       </View>
     </Modal>
   );
@@ -372,31 +514,31 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,
-    flexDirection: 'row',
+    flexDirection: "row",
   },
   backdrop: {
-    position: 'absolute',
+    position: "absolute",
     inset: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.65)',
+    backgroundColor: "transparent",
   },
   drawer: {
-    width: '82%',
+    width: "82%",
     maxWidth: 320,
-    height: '100%',
+    height: "100%",
     borderRightWidth: 1,
-    paddingTop: 50,
+    paddingTop: Platform.OS === "ios" ? 24 : 10,
   },
   brandRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     paddingHorizontal: 16,
     paddingBottom: 14,
     borderBottomWidth: 1,
   },
   brandLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 10,
   },
   brandLogo: {
@@ -405,7 +547,7 @@ const styles = StyleSheet.create({
   },
   brandTitle: {
     fontSize: 15,
-    fontWeight: '700',
+    fontWeight: "700",
   },
   brandSubtitle: {
     fontSize: 11,
@@ -414,13 +556,13 @@ const styles = StyleSheet.create({
     width: 28,
     height: 28,
     borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
   },
   newChatBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
     gap: 8,
     marginHorizontal: 16,
     marginTop: 14,
@@ -428,9 +570,9 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   newChatText: {
-    color: '#ffffff',
+    color: "#ffffff",
     fontSize: 14,
-    fontWeight: '600',
+    fontWeight: "600",
   },
   scrollArea: {
     flex: 1,
@@ -441,36 +583,36 @@ const styles = StyleSheet.create({
     paddingBottom: 16,
   },
   sectionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     marginBottom: 8,
     paddingVertical: 4,
     paddingHorizontal: 4,
   },
   sectionHeaderLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 6,
   },
   sectionTitle: {
     fontSize: 11,
-    fontWeight: '700',
+    fontWeight: "700",
     letterSpacing: 0.8,
   },
   sectionCount: {
     fontSize: 11,
-    fontWeight: '600',
+    fontWeight: "600",
   },
   emptyText: {
     fontSize: 12,
-    fontStyle: 'italic',
+    fontStyle: "italic",
     paddingHorizontal: 6,
     paddingVertical: 8,
   },
   sessionItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 10,
     paddingHorizontal: 12,
     paddingVertical: 10,
@@ -483,8 +625,8 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
   docItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 10,
     paddingHorizontal: 12,
     paddingVertical: 8,
@@ -494,7 +636,7 @@ const styles = StyleSheet.create({
   },
   docName: {
     fontSize: 12,
-    fontWeight: '500',
+    fontWeight: "500",
   },
   docMeta: {
     fontSize: 10,
@@ -508,8 +650,8 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   userPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     padding: 10,
     borderRadius: 14,
     borderWidth: 1,
@@ -519,52 +661,52 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden',
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
   },
   userAvatarImage: {
-    width: '100%',
-    height: '100%',
+    width: "100%",
+    height: "100%",
   },
   userAvatarText: {
-    color: '#ffffff',
+    color: "#ffffff",
     fontSize: 15,
-    fontWeight: '700',
+    fontWeight: "700",
   },
   userInfo: {
     flex: 1,
   },
   userName: {
     fontSize: 13,
-    fontWeight: '600',
+    fontWeight: "600",
   },
   userEmail: {
     fontSize: 11,
   },
   guestPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     padding: 10,
     borderRadius: 14,
     borderWidth: 1,
   },
   guestLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 10,
   },
   guestTitle: {
     fontSize: 13,
-    fontWeight: '700',
+    fontWeight: "700",
   },
   guestSubtitle: {
     fontSize: 11,
   },
   serverConfigBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 8,
     paddingHorizontal: 12,
     paddingVertical: 9,
@@ -572,6 +714,6 @@ const styles = StyleSheet.create({
   },
   serverConfigText: {
     fontSize: 11,
-    fontWeight: '500',
+    fontWeight: "500",
   },
 });

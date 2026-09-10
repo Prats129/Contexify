@@ -357,10 +357,23 @@ export const apiService = {
     handlers: StreamHandlers
   ): () => void {
     let isAborted = false;
+    let hasEnded = false;
     const xhr = new XMLHttpRequest();
 
+    const triggerComplete = () => {
+      if (hasEnded || isAborted) return;
+      hasEnded = true;
+      handlers.onComplete();
+    };
+
+    const triggerError = (errMsg: string) => {
+      if (hasEnded || isAborted) return;
+      hasEnded = true;
+      handlers.onError(errMsg);
+    };
+
     getEndpoint('/chat/stream').then((url) => {
-      if (isAborted) return;
+      if (isAborted || hasEnded) return;
 
       xhr.open('POST', url, true);
       xhr.setRequestHeader('Content-Type', 'application/json');
@@ -368,8 +381,9 @@ export const apiService = {
 
       let lastIndex = 0;
 
-      xhr.onprogress = () => {
-        const currText = xhr.responseText;
+      const processChunks = () => {
+        const currText = xhr.responseText || '';
+        if (currText.length <= lastIndex) return;
         const newChunks = currText.substring(lastIndex);
         lastIndex = currText.length;
 
@@ -380,7 +394,7 @@ export const apiService = {
           const payload = trimmed.substring(6).trim();
 
           if (payload === '[DONE]') {
-            handlers.onComplete();
+            triggerComplete();
             return;
           }
 
@@ -391,16 +405,18 @@ export const apiService = {
             } else if (data.event === 'token' && typeof data.data === 'string') {
               handlers.onToken(data.data);
             } else if (data.event === 'error') {
-              handlers.onError(data.data || 'Streaming error encountered');
+              triggerError(data.data || 'Streaming error encountered');
+              return;
             } else if (data.event === 'done') {
-              handlers.onComplete();
+              triggerComplete();
               return;
             } else if (data.token) {
               handlers.onToken(data.token);
             } else if (data.citations && Array.isArray(data.citations)) {
               handlers.onCitations(data.citations);
             } else if (data.error) {
-              handlers.onError(data.error);
+              triggerError(data.error);
+              return;
             }
           } catch {
             // Partial JSON chunk, continue
@@ -408,18 +424,29 @@ export const apiService = {
         }
       };
 
+      xhr.onprogress = () => {
+        if (hasEnded || isAborted) return;
+        processChunks();
+      };
+
       xhr.onload = () => {
+        if (isAborted || hasEnded) return;
         if (xhr.status >= 400) {
-          handlers.onError(`Server error: ${xhr.status}`);
+          triggerError(`Server error: ${xhr.status}`);
         } else {
-          handlers.onComplete();
+          processChunks();
+          triggerComplete();
         }
       };
 
       xhr.onerror = () => {
-        if (!isAborted) {
-          handlers.onError('Network connection error with backend server');
+        if (!isAborted && !hasEnded) {
+          triggerError('Network connection error with backend server');
         }
+      };
+
+      xhr.onabort = () => {
+        // Aborted cleanly
       };
 
       xhr.send(
@@ -435,6 +462,7 @@ export const apiService = {
     // Return cancellation function
     return () => {
       isAborted = true;
+      hasEnded = true;
       try {
         xhr.abort();
       } catch {}

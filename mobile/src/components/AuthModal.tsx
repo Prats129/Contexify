@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from "react";
 import {
   View,
   Text,
@@ -11,12 +11,14 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
-} from 'react-native';
-import { Feather, Ionicons } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
-import { getAppTheme, type AppTheme } from '../theme/colors';
-import { apiService } from '../services/api';
-import type { User } from '../types';
+  Animated,
+  PanResponder,
+} from "react-native";
+import { Feather, Ionicons } from "@expo/vector-icons";
+import * as Haptics from "expo-haptics";
+import { getAppTheme, type AppTheme } from "../theme/colors";
+import { apiService } from "../services/api";
+import type { User } from "../types";
 
 interface AuthModalProps {
   visible: boolean;
@@ -26,7 +28,7 @@ interface AuthModalProps {
   theme?: AppTheme;
 }
 
-type TabType = 'login' | 'otp' | 'register';
+type TabType = "login" | "otp" | "register";
 
 export const AuthModal: React.FC<AuthModalProps> = ({
   visible,
@@ -36,44 +38,100 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   theme: customTheme,
 }) => {
   const theme = customTheme || getAppTheme(isDark);
-  const [activeTab, setActiveTab] = useState<TabType>('login');
+  const [activeTab, setActiveTab] = useState<TabType>("login");
 
   // Form Fields
-  const [identifier, setIdentifier] = useState('');
-  const [password, setPassword] = useState('');
+  const [identifier, setIdentifier] = useState("");
+  const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
 
   // OTP Fields
-  const [otpEmail, setOtpEmail] = useState('');
-  const [otpCode, setOtpCode] = useState('');
+  const [otpEmail, setOtpEmail] = useState("");
+  const [otpCode, setOtpCode] = useState("");
   const [otpSent, setOtpSent] = useState(false);
 
   // Registration Fields
-  const [regName, setRegName] = useState('');
-  const [regUsername, setRegUsername] = useState('');
-  const [regEmail, setRegEmail] = useState('');
-  const [regPassword, setRegPassword] = useState('');
+  const [regName, setRegName] = useState("");
+  const [regUsername, setRegUsername] = useState("");
+  const [regEmail, setRegEmail] = useState("");
+  const [regPassword, setRegPassword] = useState("");
 
   // Status
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  const translateY = useRef(new Animated.Value(700)).current;
+
+  useEffect(() => {
+    if (visible) {
+      translateY.setValue(700);
+      Animated.spring(translateY, {
+        toValue: 0,
+        tension: 65,
+        friction: 11,
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [visible]);
+
+  const handleClose = () => {
+    Animated.timing(translateY, {
+      toValue: 700,
+      duration: 160,
+      useNativeDriver: true,
+    }).start(() => {
+      onClose();
+    });
+  };
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, gestureState) => gestureState.dy > 4,
+      onPanResponderMove: (_, gestureState) => {
+        if (gestureState.dy > 0) {
+          translateY.setValue(gestureState.dy);
+        }
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        if (gestureState.dy > 65 || gestureState.vy > 0.45) {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          Animated.timing(translateY, {
+            toValue: 700,
+            duration: 160,
+            useNativeDriver: true,
+          }).start(() => {
+            onClose();
+          });
+        } else {
+          Animated.spring(translateY, {
+            toValue: 0,
+            velocity: gestureState.vy,
+            tension: 65,
+            friction: 10,
+            useNativeDriver: true,
+          }).start();
+        }
+      },
+    }),
+  ).current;
+
   const resetForm = () => {
-    setIdentifier('');
-    setPassword('');
-    setOtpEmail('');
-    setOtpCode('');
+    setIdentifier("");
+    setPassword("");
+    setOtpEmail("");
+    setOtpCode("");
     setOtpSent(false);
-    setRegName('');
-    setRegUsername('');
-    setRegEmail('');
-    setRegPassword('');
+    setRegName("");
+    setRegUsername("");
+    setRegEmail("");
+    setRegPassword("");
     setErrorMessage(null);
   };
 
   const handlePasswordLogin = async () => {
     if (!identifier.trim() || !password.trim()) {
-      setErrorMessage('Please enter both username/email and password.');
+      setErrorMessage("Please enter both username/email and password.");
       return;
     }
     setErrorMessage(null);
@@ -96,7 +154,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
   const handleSendOtp = async () => {
     if (!otpEmail.trim()) {
-      setErrorMessage('Please enter your email address.');
+      setErrorMessage("Please enter your email address.");
       return;
     }
     setErrorMessage(null);
@@ -117,14 +175,17 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
   const handleVerifyOtp = async () => {
     if (!otpEmail.trim() || !otpCode.trim()) {
-      setErrorMessage('Please enter the 6-digit OTP.');
+      setErrorMessage("Please enter the 6-digit OTP.");
       return;
     }
     setErrorMessage(null);
     setLoading(true);
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      const user = await apiService.loginWithOtp(otpEmail.trim(), otpCode.trim());
+      const user = await apiService.loginWithOtp(
+        otpEmail.trim(),
+        otpCode.trim(),
+      );
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       resetForm();
       onSuccess(user);
@@ -139,12 +200,17 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   };
 
   const handleRegister = async () => {
-    if (!regName.trim() || !regUsername.trim() || !regEmail.trim() || !regPassword.trim()) {
-      setErrorMessage('Please fill in all required fields.');
+    if (
+      !regName.trim() ||
+      !regUsername.trim() ||
+      !regEmail.trim() ||
+      !regPassword.trim()
+    ) {
+      setErrorMessage("Please fill in all required fields.");
       return;
     }
     if (regPassword.length < 6) {
-      setErrorMessage('Password must be at least 6 characters.');
+      setErrorMessage("Password must be at least 6 characters.");
       return;
     }
     setErrorMessage(null);
@@ -155,7 +221,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         regName.trim(),
         regUsername.trim(),
         regEmail.trim(),
-        regPassword
+        regPassword,
       );
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       resetForm();
@@ -171,71 +237,153 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   };
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+    <Modal
+      visible={visible}
+      transparent
+      animationType="none"
+      onRequestClose={handleClose}
+    >
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
         style={styles.keyboardContainer}
       >
-        <Pressable style={styles.backdrop} onPress={onClose}>
-          <Pressable
-            style={[styles.sheet, { backgroundColor: theme.bgCard, borderColor: theme.borderHover }]}
-            onPress={(e) => e.stopPropagation()}
+        <Pressable style={styles.backdrop} onPress={handleClose}>
+          <Animated.View
+            onStartShouldSetResponder={() => true}
+            style={[
+              styles.sheet,
+              {
+                backgroundColor: theme.bgCard,
+                borderColor: theme.borderHover,
+                transform: [{ translateY }],
+              },
+            ]}
           >
-            {/* Top Handle */}
-            <View style={styles.handleRow}>
-              <View style={[styles.handleBar, { backgroundColor: theme.textMuted }]} />
-            </View>
-
-            {/* Header */}
-            <View style={[styles.headerRow, { borderBottomColor: theme.borderSubtle }]}>
-              <View style={styles.headerLeft}>
-                <View style={[styles.logoIcon, { backgroundColor: theme.primary }]}>
-                  <Ionicons name="shield-checkmark" size={14} color="#ffffff" />
-                </View>
-                <Text style={[styles.title, { color: theme.textMain }]}>Authentication</Text>
+            {/* Top Handle & Header (Draggable to close) */}
+            <View {...panResponder.panHandlers}>
+              <View style={styles.handleRow}>
+                <View
+                  style={[
+                    styles.handleBar,
+                    { backgroundColor: theme.textMuted },
+                  ]}
+                />
               </View>
-              <TouchableOpacity
-                style={[styles.closeBtn, { backgroundColor: theme.borderSubtle }]}
-                onPress={onClose}
+
+              {/* Header */}
+              <View
+                style={[
+                  styles.headerRow,
+                  { borderBottomColor: theme.borderSubtle },
+                ]}
               >
-                <Feather name="x" size={16} color={theme.textMain} />
-              </TouchableOpacity>
+                <View style={styles.headerLeft}>
+                  <View
+                    style={[
+                      styles.logoIcon,
+                      { backgroundColor: theme.primary },
+                    ]}
+                  >
+                    <Ionicons
+                      name="shield-checkmark"
+                      size={14}
+                      color="#ffffff"
+                    />
+                  </View>
+                  <Text style={[styles.title, { color: theme.textMain }]}>
+                    Authentication
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={[
+                    styles.closeBtn,
+                    { backgroundColor: theme.borderSubtle },
+                  ]}
+                  onPress={handleClose}
+                >
+                  <Feather name="x" size={16} color={theme.textMain} />
+                </TouchableOpacity>
+              </View>
             </View>
 
             {/* Navigation Tabs */}
             <View style={[styles.tabsRow, { backgroundColor: theme.bgInput }]}>
               <TouchableOpacity
-                style={[styles.tabBtn, activeTab === 'login' && [styles.activeTab, { backgroundColor: theme.bgCard }]]}
+                style={[
+                  styles.tabBtn,
+                  activeTab === "login" && [
+                    styles.activeTab,
+                    { backgroundColor: theme.bgCard },
+                  ],
+                ]}
                 onPress={() => {
-                  setActiveTab('login');
+                  setActiveTab("login");
                   setErrorMessage(null);
                 }}
               >
-                <Text style={[styles.tabText, { color: activeTab === 'login' ? theme.primary : theme.textMuted }]}>
+                <Text
+                  style={[
+                    styles.tabText,
+                    {
+                      color:
+                        activeTab === "login" ? theme.primary : theme.textMuted,
+                    },
+                  ]}
+                >
                   Sign In
                 </Text>
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={[styles.tabBtn, activeTab === 'otp' && [styles.activeTab, { backgroundColor: theme.bgCard }]]}
+                style={[
+                  styles.tabBtn,
+                  activeTab === "otp" && [
+                    styles.activeTab,
+                    { backgroundColor: theme.bgCard },
+                  ],
+                ]}
                 onPress={() => {
-                  setActiveTab('otp');
+                  setActiveTab("otp");
                   setErrorMessage(null);
                 }}
               >
-                <Text style={[styles.tabText, { color: activeTab === 'otp' ? theme.primary : theme.textMuted }]}>
+                <Text
+                  style={[
+                    styles.tabText,
+                    {
+                      color:
+                        activeTab === "otp" ? theme.primary : theme.textMuted,
+                    },
+                  ]}
+                >
                   Email OTP
                 </Text>
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={[styles.tabBtn, activeTab === 'register' && [styles.activeTab, { backgroundColor: theme.bgCard }]]}
+                style={[
+                  styles.tabBtn,
+                  activeTab === "register" && [
+                    styles.activeTab,
+                    { backgroundColor: theme.bgCard },
+                  ],
+                ]}
                 onPress={() => {
-                  setActiveTab('register');
+                  setActiveTab("register");
                   setErrorMessage(null);
                 }}
               >
-                <Text style={[styles.tabText, { color: activeTab === 'register' ? theme.primary : theme.textMuted }]}>
+                <Text
+                  style={[
+                    styles.tabText,
+                    {
+                      color:
+                        activeTab === "register"
+                          ? theme.primary
+                          : theme.textMuted,
+                    },
+                  ]}
+                >
                   Register
                 </Text>
               </TouchableOpacity>
@@ -243,19 +391,42 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
             {/* Error Message Box */}
             {errorMessage && (
-              <View style={[styles.errorBox, { backgroundColor: theme.dangerLight, borderColor: theme.danger }]}>
+              <View
+                style={[
+                  styles.errorBox,
+                  {
+                    backgroundColor: theme.dangerLight,
+                    borderColor: theme.danger,
+                  },
+                ]}
+              >
                 <Feather name="alert-circle" size={14} color={theme.danger} />
-                <Text style={[styles.errorText, { color: theme.danger }]}>{errorMessage}</Text>
+                <Text style={[styles.errorText, { color: theme.danger }]}>
+                  {errorMessage}
+                </Text>
               </View>
             )}
 
-            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.formContent}>
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={styles.formContent}
+            >
               {/* TAB 1: PASSWORD LOGIN */}
-              {activeTab === 'login' && (
+              {activeTab === "login" && (
                 <View style={styles.formSection}>
                   <View style={styles.inputGroup}>
-                    <Text style={[styles.label, { color: theme.textMuted }]}>Username or Email</Text>
-                    <View style={[styles.inputWrapper, { backgroundColor: theme.bgInput, borderColor: theme.borderSubtle }]}>
+                    <Text style={[styles.label, { color: theme.textMuted }]}>
+                      Username or Email
+                    </Text>
+                    <View
+                      style={[
+                        styles.inputWrapper,
+                        {
+                          backgroundColor: theme.bgInput,
+                          borderColor: theme.borderSubtle,
+                        },
+                      ]}
+                    >
                       <Feather name="user" size={15} color={theme.textMuted} />
                       <TextInput
                         style={[styles.input, { color: theme.textMain }]}
@@ -269,8 +440,18 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   </View>
 
                   <View style={styles.inputGroup}>
-                    <Text style={[styles.label, { color: theme.textMuted }]}>Password</Text>
-                    <View style={[styles.inputWrapper, { backgroundColor: theme.bgInput, borderColor: theme.borderSubtle }]}>
+                    <Text style={[styles.label, { color: theme.textMuted }]}>
+                      Password
+                    </Text>
+                    <View
+                      style={[
+                        styles.inputWrapper,
+                        {
+                          backgroundColor: theme.bgInput,
+                          borderColor: theme.borderSubtle,
+                        },
+                      ]}
+                    >
                       <Feather name="lock" size={15} color={theme.textMuted} />
                       <TextInput
                         style={[styles.input, { color: theme.textMain }]}
@@ -280,14 +461,23 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                         value={password}
                         onChangeText={setPassword}
                       />
-                      <TouchableOpacity onPress={() => setShowPassword(!showPassword)}>
-                        <Feather name={showPassword ? 'eye-off' : 'eye'} size={15} color={theme.textMuted} />
+                      <TouchableOpacity
+                        onPress={() => setShowPassword(!showPassword)}
+                      >
+                        <Feather
+                          name={showPassword ? "eye-off" : "eye"}
+                          size={15}
+                          color={theme.textMuted}
+                        />
                       </TouchableOpacity>
                     </View>
                   </View>
 
                   <TouchableOpacity
-                    style={[styles.submitBtn, { backgroundColor: theme.primary }]}
+                    style={[
+                      styles.submitBtn,
+                      { backgroundColor: theme.primary },
+                    ]}
                     onPress={handlePasswordLogin}
                     disabled={loading}
                     activeOpacity={0.8}
@@ -302,11 +492,21 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               )}
 
               {/* TAB 2: EMAIL OTP */}
-              {activeTab === 'otp' && (
+              {activeTab === "otp" && (
                 <View style={styles.formSection}>
                   <View style={styles.inputGroup}>
-                    <Text style={[styles.label, { color: theme.textMuted }]}>Email Address</Text>
-                    <View style={[styles.inputWrapper, { backgroundColor: theme.bgInput, borderColor: theme.borderSubtle }]}>
+                    <Text style={[styles.label, { color: theme.textMuted }]}>
+                      Email Address
+                    </Text>
+                    <View
+                      style={[
+                        styles.inputWrapper,
+                        {
+                          backgroundColor: theme.bgInput,
+                          borderColor: theme.borderSubtle,
+                        },
+                      ]}
+                    >
                       <Feather name="mail" size={15} color={theme.textMuted} />
                       <TextInput
                         style={[styles.input, { color: theme.textMain }]}
@@ -323,7 +523,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
                   {!otpSent ? (
                     <TouchableOpacity
-                      style={[styles.submitBtn, { backgroundColor: theme.primary }]}
+                      style={[
+                        styles.submitBtn,
+                        { backgroundColor: theme.primary },
+                      ]}
                       onPress={handleSendOtp}
                       disabled={loading}
                       activeOpacity={0.8}
@@ -331,17 +534,42 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       {loading ? (
                         <ActivityIndicator color="#ffffff" size="small" />
                       ) : (
-                        <Text style={styles.submitBtnText}>Send One-Time Code</Text>
+                        <Text style={styles.submitBtnText}>
+                          Send One-Time Code
+                        </Text>
                       )}
                     </TouchableOpacity>
                   ) : (
                     <>
                       <View style={styles.inputGroup}>
-                        <Text style={[styles.label, { color: theme.textMuted }]}>6-Digit Code</Text>
-                        <View style={[styles.inputWrapper, { backgroundColor: theme.bgInput, borderColor: theme.borderSubtle }]}>
-                          <Feather name="key" size={15} color={theme.textMuted} />
+                        <Text
+                          style={[styles.label, { color: theme.textMuted }]}
+                        >
+                          6-Digit Code
+                        </Text>
+                        <View
+                          style={[
+                            styles.inputWrapper,
+                            {
+                              backgroundColor: theme.bgInput,
+                              borderColor: theme.borderSubtle,
+                            },
+                          ]}
+                        >
+                          <Feather
+                            name="key"
+                            size={15}
+                            color={theme.textMuted}
+                          />
                           <TextInput
-                            style={[styles.input, { color: theme.textMain, letterSpacing: 4, fontWeight: '700' }]}
+                            style={[
+                              styles.input,
+                              {
+                                color: theme.textMain,
+                                letterSpacing: 4,
+                                fontWeight: "700",
+                              },
+                            ]}
                             placeholder="123456"
                             placeholderTextColor={theme.textMuted}
                             keyboardType="number-pad"
@@ -353,7 +581,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       </View>
 
                       <TouchableOpacity
-                        style={[styles.submitBtn, { backgroundColor: theme.primary }]}
+                        style={[
+                          styles.submitBtn,
+                          { backgroundColor: theme.primary },
+                        ]}
                         onPress={handleVerifyOtp}
                         disabled={loading}
                         activeOpacity={0.8}
@@ -361,7 +592,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                         {loading ? (
                           <ActivityIndicator color="#ffffff" size="small" />
                         ) : (
-                          <Text style={styles.submitBtnText}>Verify & Sign In</Text>
+                          <Text style={styles.submitBtnText}>
+                            Verify & Sign In
+                          </Text>
                         )}
                       </TouchableOpacity>
                     </>
@@ -370,11 +603,21 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               )}
 
               {/* TAB 3: REGISTER */}
-              {activeTab === 'register' && (
+              {activeTab === "register" && (
                 <View style={styles.formSection}>
                   <View style={styles.inputGroup}>
-                    <Text style={[styles.label, { color: theme.textMuted }]}>Full Name</Text>
-                    <View style={[styles.inputWrapper, { backgroundColor: theme.bgInput, borderColor: theme.borderSubtle }]}>
+                    <Text style={[styles.label, { color: theme.textMuted }]}>
+                      Full Name
+                    </Text>
+                    <View
+                      style={[
+                        styles.inputWrapper,
+                        {
+                          backgroundColor: theme.bgInput,
+                          borderColor: theme.borderSubtle,
+                        },
+                      ]}
+                    >
                       <Feather name="user" size={15} color={theme.textMuted} />
                       <TextInput
                         style={[styles.input, { color: theme.textMain }]}
@@ -387,9 +630,23 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   </View>
 
                   <View style={styles.inputGroup}>
-                    <Text style={[styles.label, { color: theme.textMuted }]}>Username</Text>
-                    <View style={[styles.inputWrapper, { backgroundColor: theme.bgInput, borderColor: theme.borderSubtle }]}>
-                      <Feather name="at-sign" size={15} color={theme.textMuted} />
+                    <Text style={[styles.label, { color: theme.textMuted }]}>
+                      Username
+                    </Text>
+                    <View
+                      style={[
+                        styles.inputWrapper,
+                        {
+                          backgroundColor: theme.bgInput,
+                          borderColor: theme.borderSubtle,
+                        },
+                      ]}
+                    >
+                      <Feather
+                        name="at-sign"
+                        size={15}
+                        color={theme.textMuted}
+                      />
                       <TextInput
                         style={[styles.input, { color: theme.textMain }]}
                         placeholder="alex_smith"
@@ -402,8 +659,18 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   </View>
 
                   <View style={styles.inputGroup}>
-                    <Text style={[styles.label, { color: theme.textMuted }]}>Email Address</Text>
-                    <View style={[styles.inputWrapper, { backgroundColor: theme.bgInput, borderColor: theme.borderSubtle }]}>
+                    <Text style={[styles.label, { color: theme.textMuted }]}>
+                      Email Address
+                    </Text>
+                    <View
+                      style={[
+                        styles.inputWrapper,
+                        {
+                          backgroundColor: theme.bgInput,
+                          borderColor: theme.borderSubtle,
+                        },
+                      ]}
+                    >
                       <Feather name="mail" size={15} color={theme.textMuted} />
                       <TextInput
                         style={[styles.input, { color: theme.textMain }]}
@@ -418,8 +685,18 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   </View>
 
                   <View style={styles.inputGroup}>
-                    <Text style={[styles.label, { color: theme.textMuted }]}>Password (min 6 characters)</Text>
-                    <View style={[styles.inputWrapper, { backgroundColor: theme.bgInput, borderColor: theme.borderSubtle }]}>
+                    <Text style={[styles.label, { color: theme.textMuted }]}>
+                      Password (min 6 characters)
+                    </Text>
+                    <View
+                      style={[
+                        styles.inputWrapper,
+                        {
+                          backgroundColor: theme.bgInput,
+                          borderColor: theme.borderSubtle,
+                        },
+                      ]}
+                    >
                       <Feather name="lock" size={15} color={theme.textMuted} />
                       <TextInput
                         style={[styles.input, { color: theme.textMain }]}
@@ -429,14 +706,23 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                         value={regPassword}
                         onChangeText={setRegPassword}
                       />
-                      <TouchableOpacity onPress={() => setShowPassword(!showPassword)}>
-                        <Feather name={showPassword ? 'eye-off' : 'eye'} size={15} color={theme.textMuted} />
+                      <TouchableOpacity
+                        onPress={() => setShowPassword(!showPassword)}
+                      >
+                        <Feather
+                          name={showPassword ? "eye-off" : "eye"}
+                          size={15}
+                          color={theme.textMuted}
+                        />
                       </TouchableOpacity>
                     </View>
                   </View>
 
                   <TouchableOpacity
-                    style={[styles.submitBtn, { backgroundColor: theme.primary }]}
+                    style={[
+                      styles.submitBtn,
+                      { backgroundColor: theme.primary },
+                    ]}
                     onPress={handleRegister}
                     disabled={loading}
                     activeOpacity={0.8}
@@ -461,7 +747,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 </Text>
               </TouchableOpacity>
             </ScrollView>
-          </Pressable>
+          </Animated.View>
         </Pressable>
       </KeyboardAvoidingView>
     </Modal>
@@ -474,11 +760,11 @@ const styles = StyleSheet.create({
   },
   backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.65)',
-    justifyContent: 'flex-end',
+    backgroundColor: "transparent",
+    justifyContent: "flex-end",
   },
   sheet: {
-    maxHeight: '85%',
+    maxHeight: "85%",
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     borderTopWidth: 1,
@@ -486,7 +772,7 @@ const styles = StyleSheet.create({
     paddingBottom: 24,
   },
   handleRow: {
-    alignItems: 'center',
+    alignItems: "center",
     paddingVertical: 10,
   },
   handleBar: {
@@ -496,37 +782,37 @@ const styles = StyleSheet.create({
     opacity: 0.3,
   },
   headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     paddingBottom: 12,
     borderBottomWidth: 1,
   },
   headerLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 8,
   },
   logoIcon: {
     width: 26,
     height: 26,
     borderRadius: 6,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
   },
   title: {
     fontSize: 16,
-    fontWeight: '700',
+    fontWeight: "700",
   },
   closeBtn: {
     width: 30,
     height: 30,
     borderRadius: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
   },
   tabsRow: {
-    flexDirection: 'row',
+    flexDirection: "row",
     borderRadius: 12,
     padding: 3,
     marginTop: 12,
@@ -534,11 +820,11 @@ const styles = StyleSheet.create({
   tabBtn: {
     flex: 1,
     paddingVertical: 7,
-    alignItems: 'center',
+    alignItems: "center",
     borderRadius: 9,
   },
   activeTab: {
-    shadowColor: '#000',
+    shadowColor: "#000",
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.1,
     shadowRadius: 2,
@@ -546,11 +832,11 @@ const styles = StyleSheet.create({
   },
   tabText: {
     fontSize: 12,
-    fontWeight: '700',
+    fontWeight: "700",
   },
   errorBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 8,
     padding: 10,
     borderRadius: 10,
@@ -559,7 +845,7 @@ const styles = StyleSheet.create({
   },
   errorText: {
     fontSize: 12,
-    fontWeight: '500',
+    fontWeight: "500",
     flex: 1,
   },
   formContent: {
@@ -574,11 +860,11 @@ const styles = StyleSheet.create({
   },
   label: {
     fontSize: 12,
-    fontWeight: '600',
+    fontWeight: "600",
   },
   inputWrapper: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     borderWidth: 1,
     borderRadius: 12,
     paddingHorizontal: 12,
@@ -592,23 +878,23 @@ const styles = StyleSheet.create({
   submitBtn: {
     height: 44,
     borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
     marginTop: 6,
   },
   submitBtnText: {
-    color: '#ffffff',
+    color: "#ffffff",
     fontSize: 14,
-    fontWeight: '700',
+    fontWeight: "700",
   },
   guestBtn: {
-    alignItems: 'center',
+    alignItems: "center",
     paddingVertical: 10,
     marginTop: 4,
   },
   guestBtnText: {
     fontSize: 12,
-    fontWeight: '600',
-    textDecorationLine: 'underline',
+    fontWeight: "600",
+    textDecorationLine: "underline",
   },
 });
