@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Clipboard } from 'react-native';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { colors } from '../theme/colors';
+import { getAppTheme, type AppTheme } from '../theme/colors';
 import type { Citation } from '../types';
 
 interface MessageItemProps {
@@ -13,6 +13,7 @@ interface MessageItemProps {
   isStreaming?: boolean;
   onOpenCitations?: (citations: Citation[]) => void;
   isDark?: boolean;
+  theme?: AppTheme;
 }
 
 export const MessageItem: React.FC<MessageItemProps> = ({
@@ -22,9 +23,10 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   isStreaming = false,
   onOpenCitations,
   isDark = true,
+  theme: customTheme,
 }) => {
   const isUser = role === 'user';
-  const theme = isDark ? colors.dark : colors.light;
+  const theme = customTheme || getAppTheme(isDark);
   const [copied, setCopied] = useState(false);
 
   const handleCopy = () => {
@@ -70,7 +72,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
       if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
         return (
           <View key={idx} style={styles.bulletRow}>
-            <View style={[styles.bulletDot, { backgroundColor: colors.primary }]} />
+            <View style={[styles.bulletDot, { backgroundColor: theme.primary }]} />
             <Text style={[styles.bulletText, { color: isUser ? '#ffffff' : theme.textMain }]}>
               {trimmed.substring(2)}
             </Text>
@@ -83,7 +85,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
       if (numMatch) {
         return (
           <View key={idx} style={styles.bulletRow}>
-            <Text style={[styles.numberPrefix, { color: colors.primary }]}>{numMatch[1]}.</Text>
+            <Text style={[styles.numberPrefix, { color: theme.primary }]}>{numMatch[1]}.</Text>
             <Text style={[styles.bulletText, { color: isUser ? '#ffffff' : theme.textMain }]}>
               {numMatch[2]}
             </Text>
@@ -129,7 +131,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
       >
         {isStreaming && !content?.trim() ? (
           <View style={styles.thinkingRow}>
-            <View style={[styles.pulseDot, { backgroundColor: colors.primary }]} />
+            <View style={[styles.pulseDot, { backgroundColor: theme.primary }]} />
             <Text style={[styles.thinkingText, { color: theme.textMuted }]}>Thinking...</Text>
           </View>
         ) : (
@@ -149,12 +151,12 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             <Feather
               name={copied ? 'check' : 'copy'}
               size={12}
-              color={copied ? colors.emerald : theme.textMuted}
+              color={copied ? theme.emerald : theme.textMuted}
             />
             <Text
               style={[
                 styles.actionBtnText,
-                { color: copied ? colors.emerald : theme.textMuted },
+                { color: copied ? theme.emerald : theme.textMuted },
               ]}
             >
               {copied ? 'Copied' : 'Copy'}
@@ -167,18 +169,18 @@ export const MessageItem: React.FC<MessageItemProps> = ({
               style={[
                 styles.citationPill,
                 {
-                  backgroundColor: colors.primaryLight,
-                  borderColor: colors.primaryBorder,
+                  backgroundColor: theme.primaryLight,
+                  borderColor: theme.primaryBorder,
                 },
               ]}
               onPress={handleCitationsPress}
               activeOpacity={0.7}
             >
-              <Ionicons name="layers-outline" size={12} color={colors.primary} />
-              <Text style={[styles.citationPillText, { color: colors.primary }]}>
+              <Ionicons name="layers-outline" size={12} color={theme.primary} />
+              <Text style={[styles.citationPillText, { color: theme.primary }]}>
                 {citations.length} {citations.length === 1 ? 'source' : 'sources'}
               </Text>
-              <Feather name="chevron-right" size={11} color={colors.primary} />
+              <Feather name="chevron-right" size={11} color={theme.primary} />
             </TouchableOpacity>
           )}
         </View>

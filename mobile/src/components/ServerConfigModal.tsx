@@ -13,21 +13,23 @@ import {
 } from 'react-native';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { colors } from '../theme/colors';
+import { getAppTheme, type AppTheme } from '../theme/colors';
 import { getApiBaseUrl, setApiBaseUrl, resetApiBaseUrl, apiService } from '../services/api';
 
 interface ServerConfigModalProps {
   visible: boolean;
   onClose: () => void;
   isDark?: boolean;
+  theme?: AppTheme;
 }
 
 export const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
   visible,
   onClose,
   isDark = true,
+  theme: customTheme,
 }) => {
-  const theme = isDark ? colors.dark : colors.light;
+  const theme = customTheme || getAppTheme(isDark);
   const [currentUrl, setCurrentUrl] = useState('');
   const [inputUrl, setInputUrl] = useState('');
   const [pingStatus, setPingStatus] = useState<'idle' | 'testing' | 'online' | 'offline'>('idle');
@@ -89,7 +91,7 @@ export const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
             {/* Header */}
             <View style={styles.header}>
               <View style={styles.headerLeft}>
-                <Feather name="server" size={17} color={colors.primary} />
+                <Feather name="server" size={17} color={theme.primary} />
                 <Text style={[styles.title, { color: theme.textMain }]}>Backend Server Config</Text>
               </View>
               <TouchableOpacity
@@ -128,26 +130,26 @@ export const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
                 disabled={pingStatus === 'testing'}
               >
                 {pingStatus === 'testing' ? (
-                  <ActivityIndicator size="small" color={colors.primary} />
+                  <ActivityIndicator size="small" color={theme.primary} />
                 ) : (
                   <>
-                    <Feather name="activity" size={13} color={colors.primary} />
-                    <Text style={[styles.pingBtnText, { color: colors.primary }]}>Test Connection</Text>
+                    <Feather name="activity" size={13} color={theme.primary} />
+                    <Text style={[styles.pingBtnText, { color: theme.primary }]}>Test Connection</Text>
                   </>
                 )}
               </TouchableOpacity>
 
               {pingStatus === 'online' && (
                 <View style={styles.statusRow}>
-                  <View style={[styles.statusDot, { backgroundColor: colors.emerald }]} />
-                  <Text style={[styles.statusText, { color: colors.emerald }]}>Connected</Text>
+                  <View style={[styles.statusDot, { backgroundColor: theme.emerald }]} />
+                  <Text style={[styles.statusText, { color: theme.emerald }]}>Connected</Text>
                 </View>
               )}
 
               {pingStatus === 'offline' && (
                 <View style={styles.statusRow}>
-                  <View style={[styles.statusDot, { backgroundColor: colors.danger }]} />
-                  <Text style={[styles.statusText, { color: colors.danger }]}>Cannot Reach</Text>
+                  <View style={[styles.statusDot, { backgroundColor: theme.danger }]} />
+                  <Text style={[styles.statusText, { color: theme.danger }]}>Cannot Reach</Text>
                 </View>
               )}
             </View>
@@ -162,7 +164,7 @@ export const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={[styles.saveBtn, { backgroundColor: colors.primary }]}
+                style={[styles.saveBtn, { backgroundColor: theme.primary }]}
                 onPress={handleSave}
               >
                 <Text style={styles.saveText}>Save URL</Text>

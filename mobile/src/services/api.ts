@@ -149,6 +149,96 @@ export const apiService = {
     return res.json();
   },
 
+  async updateUserProfile(
+    userId: string,
+    displayName?: string,
+    avatarColor?: string
+  ): Promise<User> {
+    const url = await getEndpoint('/user/profile');
+    const res = await fetch(url, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_id: userId,
+        display_name: displayName,
+        avatar_color: avatarColor,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Failed to update profile' }));
+      throw new Error(err.detail || 'Failed to update profile');
+    }
+    return res.json();
+  },
+
+  async changePassword(
+    userId: string,
+    oldPassword: string,
+    newPassword: string
+  ): Promise<{ message: string }> {
+    const url = await getEndpoint('/user/change-password');
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_id: userId,
+        old_password: oldPassword,
+        new_password: newPassword,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Failed to change password' }));
+      throw new Error(err.detail || 'Failed to change password');
+    }
+    return res.json();
+  },
+
+  async uploadAvatar(
+    userId: string,
+    fileUri: string,
+    fileName: string,
+    mimeType: string = 'image/png'
+  ): Promise<User> {
+    const url = await getEndpoint('/user/avatar');
+    const formData = new FormData();
+    formData.append('user_id', userId);
+    formData.append('file', {
+      uri: fileUri,
+      name: fileName,
+      type: mimeType,
+    } as any);
+
+    const res = await fetch(url, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Failed to upload profile photo' }));
+      throw new Error(err.detail || 'Failed to upload profile photo');
+    }
+    return res.json();
+  },
+
+  async deleteAvatar(userId: string): Promise<User> {
+    const url = await getEndpoint(`/user/avatar?user_id=${encodeURIComponent(userId)}`);
+    const res = await fetch(url, {
+      method: 'DELETE',
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Failed to remove photo' }));
+      throw new Error(err.detail || 'Failed to remove photo');
+    }
+    return res.json();
+  },
+
+  async resolveAvatarUrl(avatarUrl?: string | null): Promise<string | null> {
+    if (!avatarUrl) return null;
+    if (avatarUrl.startsWith('http')) return avatarUrl;
+    const base = await getApiBaseUrl();
+    return `${base}${avatarUrl}`;
+  },
+
   // --- Sessions & History ---
   async getUserSessions(userId: string): Promise<ChatSession[]> {
     try {
@@ -195,7 +285,7 @@ export const apiService = {
   async deleteSession(sessionId: string): Promise<void> {
     const url = await getEndpoint(`/session/${encodeURIComponent(sessionId)}`);
     const res = await fetch(url, { method: 'DELETE' });
-    if (!res.ok) throw new Error('Failed to delete conversation');
+    if (!res.ok) throw new Error('Failed to delete session');
   },
 
   async updateSessionMode(sessionId: string, mode: ChatMode): Promise<void> {
@@ -207,25 +297,36 @@ export const apiService = {
     });
   },
 
-  // --- Document Upload & Management ---
+  // --- Documents ---
+  async getSessionDocuments(sessionId: string): Promise<DocumentMetadata[]> {
+    try {
+      const url = await getEndpoint(`/document/session/${encodeURIComponent(sessionId)}`);
+      const res = await fetch(url);
+      if (!res.ok) return [];
+      return res.json();
+    } catch {
+      return [];
+    }
+  },
+
   async uploadDocument(
     sessionId: string,
     fileUri: string,
     fileName: string,
-    mimeType: string = 'application/octet-stream',
+    mimeType: string = 'application/pdf',
     userId?: string
   ): Promise<DocumentMetadata> {
     const url = await getEndpoint('/document/upload');
     const formData = new FormData();
+    formData.append('session_id', sessionId);
+    if (userId) {
+      formData.append('user_id', userId);
+    }
     formData.append('file', {
       uri: fileUri,
       name: fileName,
       type: mimeType,
     } as any);
-    formData.append('session_id', sessionId);
-    if (userId) {
-      formData.append('user_id', userId);
-    }
 
     const res = await fetch(url, {
       method: 'POST',
@@ -276,7 +377,7 @@ export const apiService = {
         for (const line of lines) {
           const trimmed = line.trim();
           if (!trimmed.startsWith('data: ')) continue;
-          const payload = trimmed.substring(6);
+          const payload = trimmed.substring(6).trim();
 
           if (payload === '[DONE]') {
             handlers.onComplete();
@@ -285,13 +386,20 @@ export const apiService = {
 
           try {
             const data = JSON.parse(payload);
-            if (data.token) {
-              handlers.onToken(data.token);
-            }
-            if (data.citations && Array.isArray(data.citations)) {
+            if (data.event === 'citations' && data.citations) {
               handlers.onCitations(data.citations);
-            }
-            if (data.error) {
+            } else if (data.event === 'token' && typeof data.data === 'string') {
+              handlers.onToken(data.data);
+            } else if (data.event === 'error') {
+              handlers.onError(data.data || 'Streaming error encountered');
+            } else if (data.event === 'done') {
+              handlers.onComplete();
+              return;
+            } else if (data.token) {
+              handlers.onToken(data.token);
+            } else if (data.citations && Array.isArray(data.citations)) {
+              handlers.onCitations(data.citations);
+            } else if (data.error) {
               handlers.onError(data.error);
             }
           } catch {
@@ -317,6 +425,7 @@ export const apiService = {
       xhr.send(
         JSON.stringify({
           session_id: sessionId,
+          message: query,
           query,
           mode,
         })

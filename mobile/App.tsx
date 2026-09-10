@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -8,6 +8,7 @@ import {
   Platform,
   TouchableOpacity,
   Alert,
+  Image,
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -15,7 +16,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 
-import { colors } from './src/theme/colors';
+import { colors, getAppTheme, ACCENT_PALETTES, type AccentColor, type ThemeMode } from './src/theme/colors';
 import { apiService } from './src/services/api';
 import type {
   User,
@@ -33,6 +34,7 @@ import { ChatInput } from './src/components/ChatInput';
 import { DrawerMenu } from './src/components/DrawerMenu';
 import { CitationsSheet } from './src/components/CitationsSheet';
 import { AuthModal } from './src/components/AuthModal';
+import { ProfileModal } from './src/components/ProfileModal';
 import { ServerConfigModal } from './src/components/ServerConfigModal';
 
 function generateGuestSessionId(): string {
@@ -40,8 +42,11 @@ function generateGuestSessionId(): string {
 }
 
 export default function App() {
-  const isDark = true;
-  const theme = isDark ? colors.dark : colors.light;
+  // Theme & Appearance State
+  const [themeMode, setThemeMode] = useState<ThemeMode>('dark');
+  const [accentColor, setAccentColor] = useState<AccentColor>('blue');
+  const isDark = themeMode === 'dark';
+  const theme = useMemo(() => getAppTheme(isDark, accentColor), [isDark, accentColor]);
 
   // Global State
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -61,6 +66,7 @@ export default function App() {
   // Modals & Navigation
   const [drawerVisible, setDrawerVisible] = useState(false);
   const [authVisible, setAuthVisible] = useState(false);
+  const [profileVisible, setProfileVisible] = useState(false);
   const [citationsVisible, setCitationsVisible] = useState(false);
   const [activeCitations, setActiveCitations] = useState<Citation[]>([]);
   const [serverConfigVisible, setServerConfigVisible] = useState(false);
@@ -74,6 +80,17 @@ export default function App() {
 
   const initApp = async () => {
     try {
+      // Load Theme preferences
+      const savedMode = await AsyncStorage.getItem('contexify_theme_mode');
+      if (savedMode === 'light' || savedMode === 'dark') {
+        setThemeMode(savedMode);
+      }
+
+      const savedAccent = await AsyncStorage.getItem('contexify_theme_accent');
+      if (savedAccent && savedAccent in ACCENT_PALETTES) {
+        setAccentColor(savedAccent as AccentColor);
+      }
+
       const savedUserStr = await AsyncStorage.getItem('contexify_mobile_user');
       if (savedUserStr) {
         const user: User = JSON.parse(savedUserStr);
@@ -86,6 +103,17 @@ export default function App() {
     } catch {
       setActiveSessionId(generateGuestSessionId());
     }
+  };
+
+  const handleToggleTheme = () => {
+    const next: ThemeMode = themeMode === 'dark' ? 'light' : 'dark';
+    setThemeMode(next);
+    AsyncStorage.setItem('contexify_theme_mode', next);
+  };
+
+  const handleSelectAccent = (nextAccent: AccentColor) => {
+    setAccentColor(nextAccent);
+    AsyncStorage.setItem('contexify_theme_accent', nextAccent);
   };
 
   const loadUserSessions = async (userId: string) => {
@@ -349,13 +377,11 @@ export default function App() {
 
         {/* Top Native Header */}
         <Header
-          currentMode={currentMode}
-          onToggleMode={handleToggleMode}
           onOpenDrawer={() => setDrawerVisible(true)}
           onNewChat={handleNewChat}
-          onOpenAuth={() => setAuthVisible(true)}
-          currentUser={currentUser}
+          onToggleTheme={handleToggleTheme}
           isDark={isDark}
+          theme={theme}
         />
 
         {/* Main Chat Workspace */}
@@ -367,8 +393,12 @@ export default function App() {
           {/* Welcome Screen if empty */}
           {messages.length === 0 && !streamingMessage ? (
             <View style={styles.welcomeContainer}>
-              <View style={[styles.welcomeIconWrapper, { backgroundColor: colors.primaryLight }]}>
-                <Ionicons name="sparkles" size={28} color={colors.primary} />
+              <View style={styles.welcomeLogoWrapper}>
+                <Image
+                  source={require('./assets/logo.png')}
+                  style={styles.welcomeLogo}
+                  resizeMode="contain"
+                />
               </View>
               <Text style={[styles.welcomeTitle, { color: theme.textMain }]}>Contexify AI</Text>
               <Text style={[styles.welcomeSubtitle, { color: theme.textMuted }]}>
@@ -382,7 +412,7 @@ export default function App() {
                   onPress={() => handleSendMessage('Summarize key points covered in the document.')}
                   activeOpacity={0.8}
                 >
-                  <Ionicons name="list" size={14} color={colors.primary} />
+                  <Ionicons name="list" size={14} color={theme.primary} />
                   <Text style={[styles.starterChipText, { color: theme.textMain }]}>Summarize Document</Text>
                 </TouchableOpacity>
 
@@ -391,7 +421,7 @@ export default function App() {
                   onPress={() => handleSendMessage('Explain the main technical concepts.')}
                   activeOpacity={0.8}
                 >
-                  <Ionicons name="hardware-chip-outline" size={14} color={colors.primary} />
+                  <Ionicons name="hardware-chip-outline" size={14} color={theme.primary} />
                   <Text style={[styles.starterChipText, { color: theme.textMain }]}>Key Concepts</Text>
                 </TouchableOpacity>
 
@@ -400,7 +430,7 @@ export default function App() {
                   onPress={() => handleSendMessage('Search the web for the latest updates on this topic.')}
                   activeOpacity={0.8}
                 >
-                  <Ionicons name="globe-outline" size={14} color={colors.emerald} />
+                  <Ionicons name="globe-outline" size={14} color={theme.emerald} />
                   <Text style={[styles.starterChipText, { color: theme.textMain }]}>Search Live Web</Text>
                 </TouchableOpacity>
               </View>
@@ -421,6 +451,7 @@ export default function App() {
                   citations={item.citations}
                   onOpenCitations={handleOpenCitations}
                   isDark={isDark}
+                  theme={theme}
                 />
               )}
               ListFooterComponent={
@@ -432,6 +463,7 @@ export default function App() {
                     isStreaming={true}
                     onOpenCitations={handleOpenCitations}
                     isDark={isDark}
+                    theme={theme}
                   />
                 ) : null
               }
@@ -450,7 +482,9 @@ export default function App() {
             documents={documents}
             onDeleteDocument={handleDeleteDocument}
             currentMode={currentMode}
+            onToggleMode={handleToggleMode}
             isDark={isDark}
+            theme={theme}
           />
         </KeyboardAvoidingView>
 
@@ -467,9 +501,11 @@ export default function App() {
           documents={documents}
           onDeleteDocument={handleDeleteDocument}
           onOpenAuth={() => setAuthVisible(true)}
+          onOpenProfile={() => setProfileVisible(true)}
           onOpenServerConfig={() => setServerConfigVisible(true)}
           onLogout={handleLogout}
           isDark={isDark}
+          theme={theme}
         />
 
         {/* Citations Bottom Sheet Modal */}
@@ -478,6 +514,7 @@ export default function App() {
           citations={activeCitations}
           onClose={() => setCitationsVisible(false)}
           isDark={isDark}
+          theme={theme}
         />
 
         {/* Auth Modal */}
@@ -486,6 +523,27 @@ export default function App() {
           onClose={() => setAuthVisible(false)}
           onSuccess={handleAuthSuccess}
           isDark={isDark}
+          theme={theme}
+        />
+
+        {/* Profile & Settings Modal */}
+        <ProfileModal
+          visible={profileVisible}
+          onClose={() => setProfileVisible(false)}
+          currentUser={currentUser}
+          currentAccent={accentColor}
+          onSelectAccent={handleSelectAccent}
+          themeMode={themeMode}
+          onToggleThemeMode={(mode) => {
+            setThemeMode(mode);
+            AsyncStorage.setItem('contexify_theme_mode', mode);
+          }}
+          onProfileUpdated={(updated) => {
+            setCurrentUser(updated);
+            AsyncStorage.setItem('contexify_mobile_user', JSON.stringify(updated));
+          }}
+          onLogout={handleLogout}
+          theme={theme}
         />
 
         {/* Server Config Modal */}
@@ -493,6 +551,7 @@ export default function App() {
           visible={serverConfigVisible}
           onClose={() => setServerConfigVisible(false)}
           isDark={isDark}
+          theme={theme}
         />
       </SafeAreaView>
     </SafeAreaProvider>
@@ -513,13 +572,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     gap: 12,
   },
-  welcomeIconWrapper: {
-    width: 60,
-    height: 60,
-    borderRadius: 20,
+  welcomeLogoWrapper: {
+    width: 68,
+    height: 68,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 4,
+  },
+  welcomeLogo: {
+    width: 64,
+    height: 64,
   },
   welcomeTitle: {
     fontSize: 22,

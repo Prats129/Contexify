@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -8,27 +8,31 @@ import {
   ScrollView,
   Pressable,
   Alert,
+  Image,
 } from 'react-native';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { colors } from '../theme/colors';
+import { getAppTheme, type AppTheme } from '../theme/colors';
+import { apiService } from '../services/api';
 import type { ChatSession, DocumentMetadata, User } from '../types';
 
 interface DrawerMenuProps {
   visible: boolean;
   onClose: () => void;
   currentUser: User | null;
-  sessions: ChatSession[];
+  sessions?: ChatSession[];
   activeSessionId: string | null;
   onSelectSession: (id: string) => void;
   onDeleteSession: (id: string) => void;
   onNewChat: () => void;
-  documents: DocumentMetadata[];
+  documents?: DocumentMetadata[];
   onDeleteDocument: (id: string) => void;
   onOpenAuth: () => void;
+  onOpenProfile: () => void;
   onOpenServerConfig: () => void;
   onLogout: () => void;
   isDark?: boolean;
+  theme?: AppTheme;
 }
 
 export const DrawerMenu: React.FC<DrawerMenuProps> = ({
@@ -43,13 +47,27 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
   documents = [],
   onDeleteDocument,
   onOpenAuth,
+  onOpenProfile,
   onOpenServerConfig,
   onLogout,
   isDark = true,
+  theme: customTheme,
 }) => {
-  const theme = isDark ? colors.dark : colors.light;
+  const theme = customTheme || getAppTheme(isDark);
   const sessionList = Array.isArray(sessions) ? sessions : [];
   const docList = Array.isArray(documents) ? documents : [];
+
+  const [isChatsExpanded, setIsChatsExpanded] = useState(true);
+  const [isDocsExpanded, setIsDocsExpanded] = useState(true);
+  const [resolvedAvatar, setResolvedAvatar] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (currentUser?.avatar_url) {
+      apiService.resolveAvatarUrl(currentUser.avatar_url).then(setResolvedAvatar);
+    } else {
+      setResolvedAvatar(null);
+    }
+  }, [currentUser?.avatar_url]);
 
   const handleSelect = (id: string) => {
     Haptics.selectionAsync();
@@ -60,8 +78,8 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
   const handleDeletePress = (id: string, title: string) => {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
     Alert.alert(
-      'Delete Conversation?',
-      `Are you sure you want to delete "${title}"?`,
+      'Delete Conversation',
+      `Delete "${title}"? This cannot be undone.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -73,56 +91,55 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
     );
   };
 
-  const handleLogoutPress = () => {
-    Alert.alert('Log out?', 'Are you sure you want to log out of your account?', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Log out', style: 'destructive', onPress: onLogout },
-    ]);
+  const handleProfilePress = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    onClose();
+    if (currentUser) {
+      onOpenProfile();
+    } else {
+      onOpenAuth();
+    }
   };
 
   return (
     <Modal
       visible={visible}
-      transparent
       animationType="fade"
+      transparent
       onRequestClose={onClose}
     >
       <View style={styles.overlay}>
+        {/* Backdrop overlay */}
         <Pressable style={styles.backdrop} onPress={onClose} />
 
-        {/* Drawer Slide-in Container */}
+        {/* Slide-over Drawer Panel */}
         <View
           style={[
             styles.drawer,
             {
               backgroundColor: theme.bgSidebar,
-              borderRightColor: theme.borderSubtle,
+              borderColor: theme.borderSubtle,
             },
           ]}
         >
-          {/* Brand Header */}
+          {/* Brand Header with Official Logo */}
           <View style={[styles.brandRow, { borderBottomColor: theme.borderSubtle }]}>
             <View style={styles.brandLeft}>
-              <View style={[styles.logoIcon, { backgroundColor: colors.primary }]}>
-                <Ionicons name="sparkles" size={15} color="#ffffff" />
-              </View>
+              <Image
+                source={require('../../assets/logo.png')}
+                style={styles.brandLogo}
+                resizeMode="contain"
+              />
               <View>
                 <Text style={[styles.brandTitle, { color: theme.textMain }]}>Contexify AI</Text>
                 <Text style={[styles.brandSubtitle, { color: theme.textMuted }]}>Enterprise RAG & Search</Text>
               </View>
             </View>
-
-            <TouchableOpacity
-              style={[styles.closeBtn, { backgroundColor: theme.borderSubtle }]}
-              onPress={onClose}
-            >
-              <Feather name="x" size={16} color={theme.textMain} />
-            </TouchableOpacity>
           </View>
 
           {/* New Chat Button */}
           <TouchableOpacity
-            style={[styles.newChatBtn, { backgroundColor: colors.primary }]}
+            style={[styles.newChatBtn, { backgroundColor: theme.primary }]}
             onPress={() => {
               onNewChat();
               onClose();
@@ -133,183 +150,204 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
             <Text style={styles.newChatText}>New Conversation</Text>
           </TouchableOpacity>
 
-          {/* Scrollable Content */}
+          {/* Scrollable Collapsible Conversations and Documents */}
           <ScrollView
             style={styles.scrollArea}
             contentContainerStyle={styles.scrollContent}
             showsVerticalScrollIndicator={false}
           >
-            {/* User or Guest Account Card */}
+            {/* Conversation History Section (Collapsible) */}
+            <TouchableOpacity
+              style={styles.sectionHeader}
+              onPress={() => {
+                Haptics.selectionAsync();
+                setIsChatsExpanded(!isChatsExpanded);
+              }}
+              activeOpacity={0.7}
+            >
+              <View style={styles.sectionHeaderLeft}>
+                <Feather
+                  name={isChatsExpanded ? 'chevron-down' : 'chevron-right'}
+                  size={14}
+                  color={theme.textMuted}
+                />
+                <Text style={[styles.sectionTitle, { color: theme.textMuted }]}>CHATS</Text>
+              </View>
+              <Text style={[styles.sectionCount, { color: theme.textMuted }]}>
+                {currentUser ? sessionList.length : 'Guest'}
+              </Text>
+            </TouchableOpacity>
+
+            {isChatsExpanded && (
+              sessionList.length === 0 ? (
+                <Text style={[styles.emptyText, { color: theme.textMuted }]}>
+                  {currentUser ? 'No conversations yet.' : 'Temporary guest chats.'}
+                </Text>
+              ) : (
+                sessionList.map((s) => {
+                  const isActive = s.id === activeSessionId;
+                  const isWeb = s.mode === 'WEB_SEARCH';
+
+                  return (
+                    <TouchableOpacity
+                      key={s.id}
+                      style={[
+                        styles.sessionItem,
+                        {
+                          backgroundColor: isActive ? theme.primaryLight : 'transparent',
+                          borderColor: isActive ? theme.primaryBorder : 'transparent',
+                        },
+                      ]}
+                      onPress={() => handleSelect(s.id)}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons
+                        name={isWeb ? 'globe-outline' : 'document-text-outline'}
+                        size={14}
+                        color={isActive ? theme.primary : theme.textMuted}
+                      />
+                      <Text
+                        style={[
+                          styles.sessionTitle,
+                          {
+                            color: isActive ? theme.primary : theme.textMain,
+                            fontWeight: isActive ? '700' : '500',
+                          },
+                        ]}
+                        numberOfLines={1}
+                      >
+                        {s.title}
+                      </Text>
+                      <TouchableOpacity
+                        onPress={() => handleDeletePress(s.id, s.title)}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      >
+                        <Feather name="trash-2" size={13} color={theme.textMuted} />
+                      </TouchableOpacity>
+                    </TouchableOpacity>
+                  );
+                })
+              )
+            )}
+
+            {/* Session Documents Section (Collapsible) */}
+            {docList.length > 0 && (
+              <>
+                <TouchableOpacity
+                  style={[styles.sectionHeader, { marginTop: 16 }]}
+                  onPress={() => {
+                    Haptics.selectionAsync();
+                    setIsDocsExpanded(!isDocsExpanded);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.sectionHeaderLeft}>
+                    <Feather
+                      name={isDocsExpanded ? 'chevron-down' : 'chevron-right'}
+                      size={14}
+                      color={theme.textMuted}
+                    />
+                    <Text style={[styles.sectionTitle, { color: theme.textMuted }]}>ATTACHED DOCUMENTS</Text>
+                  </View>
+                  <Text style={[styles.sectionCount, { color: theme.textMuted }]}>
+                    {docList.length}
+                  </Text>
+                </TouchableOpacity>
+
+                {isDocsExpanded && (
+                  docList.map((doc) => (
+                    <View
+                      key={doc.document_id}
+                      style={[
+                        styles.docItem,
+                        {
+                          backgroundColor: theme.bgInput,
+                          borderColor: theme.borderSubtle,
+                        },
+                      ]}
+                    >
+                      <Feather name="file" size={13} color={theme.primary} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.docName, { color: theme.textMain }]} numberOfLines={1}>
+                          {doc.filename}
+                        </Text>
+                        <Text style={[styles.docMeta, { color: theme.textMuted }]}>
+                          {doc.total_chunks} chunks • {(doc.file_size_bytes / 1024).toFixed(1)} KB
+                        </Text>
+                      </View>
+                      <TouchableOpacity
+                        onPress={() => onDeleteDocument(doc.document_id)}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      >
+                        <Feather name="x" size={13} color={theme.textMuted} />
+                      </TouchableOpacity>
+                    </View>
+                  ))
+                )}
+              </>
+            )}
+          </ScrollView>
+
+          {/* Bottom Pinned Area: User Profile & Server Config */}
+          <View style={[styles.bottomContainer, { borderTopColor: theme.borderSubtle }]}>
+            {/* User Profile Pill or Sign In Trigger */}
             {currentUser ? (
-              <View
-                style={[
-                  styles.profileCard,
-                  {
-                    backgroundColor: theme.bgInput,
-                    borderColor: theme.borderSubtle,
-                  },
-                ]}
+              <TouchableOpacity
+                style={[styles.userPill, { backgroundColor: theme.bgInput, borderColor: theme.borderSubtle }]}
+                onPress={handleProfilePress}
+                activeOpacity={0.7}
               >
-                <View style={styles.profileInfo}>
-                  <View
-                    style={[
-                      styles.profileAvatar,
-                      {
-                        backgroundColor: currentUser.avatar_color || colors.primary,
-                      },
-                    ]}
-                  >
-                    <Text style={styles.profileAvatarText}>
+                <View
+                  style={[
+                    styles.userAvatar,
+                    {
+                      backgroundColor: currentUser.avatar_color || theme.primary,
+                    },
+                  ]}
+                >
+                  {resolvedAvatar ? (
+                    <Image
+                      source={{ uri: resolvedAvatar }}
+                      style={styles.userAvatarImage}
+                    />
+                  ) : (
+                    <Text style={styles.userAvatarText}>
                       {(currentUser.display_name || currentUser.username || 'U').charAt(0).toUpperCase()}
                     </Text>
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.profileName, { color: theme.textMain }]} numberOfLines={1}>
-                      {currentUser.display_name}
-                    </Text>
-                    <Text style={[styles.profileEmail, { color: theme.textMuted }]} numberOfLines={1}>
-                      {currentUser.email}
-                    </Text>
-                  </View>
+                  )}
                 </View>
 
-                <TouchableOpacity
-                  onPress={handleLogoutPress}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                >
-                  <Feather name="log-out" size={15} color={colors.danger} />
-                </TouchableOpacity>
-              </View>
+                <View style={styles.userInfo}>
+                  <Text style={[styles.userName, { color: theme.textMain }]} numberOfLines={1}>
+                    {currentUser.display_name}
+                  </Text>
+                  <Text style={[styles.userEmail, { color: theme.textMuted }]} numberOfLines={1}>
+                    @{currentUser.username}
+                  </Text>
+                </View>
+
+                <Feather name="settings" size={16} color={theme.textMuted} />
+              </TouchableOpacity>
             ) : (
               <TouchableOpacity
-                style={[
-                  styles.guestCard,
-                  {
-                    backgroundColor: colors.primaryLight,
-                    borderColor: colors.primaryBorder,
-                  },
-                ]}
-                onPress={() => {
-                  onClose();
-                  onOpenAuth();
-                }}
+                style={[styles.guestPill, { backgroundColor: theme.primaryLight, borderColor: theme.primaryBorder }]}
+                onPress={handleProfilePress}
                 activeOpacity={0.8}
               >
                 <View style={styles.guestLeft}>
-                  <Ionicons name="person-circle-outline" size={24} color={colors.primary} />
+                  <Ionicons name="person-circle-outline" size={22} color={theme.primary} />
                   <View>
-                    <Text style={[styles.guestTitle, { color: colors.primary }]}>Sign In / Register</Text>
+                    <Text style={[styles.guestTitle, { color: theme.primary }]}>Sign In / Register</Text>
                     <Text style={[styles.guestSubtitle, { color: theme.textMuted }]}>
                       Sync history & documents
                     </Text>
                   </View>
                 </View>
-                <Feather name="arrow-right" size={14} color={colors.primary} />
+                <Feather name="arrow-right" size={14} color={theme.primary} />
               </TouchableOpacity>
             )}
 
-            {/* Conversation History Section */}
-            <View style={styles.sectionHeader}>
-              <Text style={[styles.sectionTitle, { color: theme.textMuted }]}>CHATS</Text>
-              <Text style={[styles.sectionCount, { color: theme.textMuted }]}>
-                {currentUser ? sessionList.length : 'Guest'}
-              </Text>
-            </View>
-
-            {sessionList.length === 0 ? (
-              <Text style={[styles.emptyText, { color: theme.textMuted }]}>
-                {currentUser ? 'No conversations yet.' : 'Temporary guest chats.'}
-              </Text>
-            ) : (
-              sessionList.map((s) => {
-                const isActive = s.id === activeSessionId;
-                const isWeb = s.mode === 'WEB_SEARCH';
-
-                return (
-                  <TouchableOpacity
-                    key={s.id}
-                    style={[
-                      styles.sessionItem,
-                      {
-                        backgroundColor: isActive ? colors.primaryLight : 'transparent',
-                        borderColor: isActive ? colors.primaryBorder : 'transparent',
-                      },
-                    ]}
-                    onPress={() => handleSelect(s.id)}
-                    activeOpacity={0.7}
-                  >
-                    <Ionicons
-                      name={isWeb ? 'globe-outline' : 'document-text-outline'}
-                      size={14}
-                      color={isActive ? colors.primary : theme.textMuted}
-                    />
-                    <Text
-                      style={[
-                        styles.sessionTitle,
-                        {
-                          color: isActive ? colors.primary : theme.textMain,
-                          fontWeight: isActive ? '700' : '500',
-                        },
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {s.title}
-                    </Text>
-                    <TouchableOpacity
-                      onPress={() => handleDeletePress(s.id, s.title)}
-                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                    >
-                      <Feather name="trash-2" size={13} color={theme.textMuted} />
-                    </TouchableOpacity>
-                  </TouchableOpacity>
-                );
-              })
-            )}
-
-            {/* Session Documents Section */}
-            {docList.length > 0 && (
-              <>
-                <View style={[styles.sectionHeader, { marginTop: 16 }]}>
-                  <Text style={[styles.sectionTitle, { color: theme.textMuted }]}>ATTACHED DOCUMENTS</Text>
-                  <Text style={[styles.sectionCount, { color: theme.textMuted }]}>
-                    {docList.length}
-                  </Text>
-                </View>
-
-                {docList.map((doc) => (
-                  <View
-                    key={doc.document_id}
-                    style={[
-                      styles.docItem,
-                      {
-                        backgroundColor: theme.bgInput,
-                        borderColor: theme.borderSubtle,
-                      },
-                    ]}
-                  >
-                    <Feather name="file" size={13} color={colors.primary} />
-                    <View style={{ flex: 1 }}>
-                      <Text style={[styles.docName, { color: theme.textMain }]} numberOfLines={1}>
-                        {doc.filename}
-                      </Text>
-                      <Text style={[styles.docMeta, { color: theme.textMuted }]}>
-                        {doc.total_chunks} chunks • {(doc.file_size_bytes / 1024).toFixed(1)} KB
-                      </Text>
-                    </View>
-                    <TouchableOpacity
-                      onPress={() => onDeleteDocument(doc.document_id)}
-                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                    >
-                      <Feather name="x" size={13} color={theme.textMuted} />
-                    </TouchableOpacity>
-                  </View>
-                ))}
-              </>
-            )}
-          </ScrollView>
-
-          {/* Bottom Settings / Server IP Connection */}
-          <View style={[styles.bottomBar, { borderTopColor: theme.borderSubtle }]}>
+            {/* Server IP / Wi-Fi Config Button */}
             <TouchableOpacity
               style={[styles.serverConfigBtn, { backgroundColor: theme.borderSubtle }]}
               onPress={() => {
@@ -322,7 +360,7 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
               <Text style={[styles.serverConfigText, { color: theme.textMuted }]}>
                 Backend Server IP / Wi-Fi
               </Text>
-              <Feather name="settings" size={13} color={theme.textMuted} style={{ marginLeft: 'auto' }} />
+              <Feather name="sliders" size={12} color={theme.textMuted} style={{ marginLeft: 'auto' }} />
             </TouchableOpacity>
           </View>
         </View>
@@ -361,21 +399,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
   },
-  logoIcon: {
+  brandLogo: {
     width: 32,
     height: 32,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   brandTitle: {
     fontSize: 15,
-    fontWeight: '800',
-    letterSpacing: 0.2,
+    fontWeight: '700',
   },
   brandSubtitle: {
-    fontSize: 10,
-    fontWeight: '500',
+    fontSize: 11,
   },
   closeBtn: {
     width: 28,
@@ -385,156 +418,160 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   newChatBtn: {
-    marginHorizontal: 16,
-    marginTop: 12,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    paddingVertical: 10,
-    borderRadius: 14,
-    shadowColor: colors.primary,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-    elevation: 3,
+    marginHorizontal: 16,
+    marginTop: 14,
+    height: 42,
+    borderRadius: 12,
   },
   newChatText: {
     color: '#ffffff',
-    fontSize: 13,
-    fontWeight: '700',
+    fontSize: 14,
+    fontWeight: '600',
   },
   scrollArea: {
     flex: 1,
-    paddingHorizontal: 16,
-    marginTop: 8,
+    marginTop: 14,
   },
   scrollContent: {
-    paddingVertical: 8,
-    gap: 4,
-  },
-  profileCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: 10,
-    borderRadius: 14,
-    borderWidth: 1,
-    marginBottom: 8,
-  },
-  profileInfo: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    flex: 1,
-    marginRight: 8,
-  },
-  profileAvatar: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  profileAvatarText: {
-    color: '#ffffff',
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  profileName: {
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  profileEmail: {
-    fontSize: 11,
-  },
-  guestCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: 10,
-    borderRadius: 14,
-    borderWidth: 1,
-    marginBottom: 8,
-  },
-  guestLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  guestTitle: {
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  guestSubtitle: {
-    fontSize: 10,
+    paddingHorizontal: 16,
+    paddingBottom: 16,
   },
   sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 6,
-    paddingHorizontal: 2,
-    marginTop: 4,
+    marginBottom: 8,
+    paddingVertical: 4,
+    paddingHorizontal: 4,
+  },
+  sectionHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
   sectionTitle: {
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: '700',
     letterSpacing: 0.8,
   },
   sectionCount: {
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: '600',
   },
   emptyText: {
     fontSize: 12,
     fontStyle: 'italic',
-    paddingVertical: 6,
-    paddingHorizontal: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 8,
   },
   sessionItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingVertical: 9,
-    paddingHorizontal: 10,
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     borderRadius: 10,
     borderWidth: 1,
+    marginBottom: 4,
   },
   sessionTitle: {
-    fontSize: 13,
     flex: 1,
+    fontSize: 13,
   },
   docItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    padding: 8,
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
     borderRadius: 10,
     borderWidth: 1,
-    marginTop: 4,
+    marginBottom: 6,
   },
   docName: {
     fontSize: 12,
-    fontWeight: '600',
+    fontWeight: '500',
   },
   docMeta: {
     fontSize: 10,
+    marginTop: 2,
   },
-  bottomBar: {
-    padding: 12,
+  bottomContainer: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 24,
     borderTopWidth: 1,
+    gap: 10,
+  },
+  userPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    gap: 10,
+  },
+  userAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  userAvatarImage: {
+    width: '100%',
+    height: '100%',
+  },
+  userAvatarText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  userInfo: {
+    flex: 1,
+  },
+  userName: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  userEmail: {
+    fontSize: 11,
+  },
+  guestPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+  },
+  guestLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  guestTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  guestSubtitle: {
+    fontSize: 11,
   },
   serverConfigBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    paddingVertical: 8,
     paddingHorizontal: 12,
+    paddingVertical: 9,
     borderRadius: 10,
   },
   serverConfigText: {
     fontSize: 11,
-    fontWeight: '600',
+    fontWeight: '500',
   },
 });

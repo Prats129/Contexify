@@ -14,7 +14,7 @@ import {
 } from 'react-native';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { colors } from '../theme/colors';
+import { getAppTheme, type AppTheme } from '../theme/colors';
 import { apiService } from '../services/api';
 import type { User } from '../types';
 
@@ -23,6 +23,7 @@ interface AuthModalProps {
   onClose: () => void;
   onSuccess: (user: User) => void;
   isDark?: boolean;
+  theme?: AppTheme;
 }
 
 type TabType = 'login' | 'otp' | 'register';
@@ -32,8 +33,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   onClose,
   onSuccess,
   isDark = true,
+  theme: customTheme,
 }) => {
-  const theme = isDark ? colors.dark : colors.light;
+  const theme = customTheme || getAppTheme(isDark);
   const [activeTab, setActiveTab] = useState<TabType>('login');
 
   // Form Fields
@@ -187,7 +189,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             {/* Header */}
             <View style={[styles.headerRow, { borderBottomColor: theme.borderSubtle }]}>
               <View style={styles.headerLeft}>
-                <View style={[styles.logoIcon, { backgroundColor: colors.primary }]}>
+                <View style={[styles.logoIcon, { backgroundColor: theme.primary }]}>
                   <Ionicons name="shield-checkmark" size={14} color="#ffffff" />
                 </View>
                 <Text style={[styles.title, { color: theme.textMain }]}>Authentication</Text>
@@ -209,7 +211,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   setErrorMessage(null);
                 }}
               >
-                <Text style={[styles.tabText, { color: activeTab === 'login' ? colors.primary : theme.textMuted }]}>
+                <Text style={[styles.tabText, { color: activeTab === 'login' ? theme.primary : theme.textMuted }]}>
                   Sign In
                 </Text>
               </TouchableOpacity>
@@ -221,7 +223,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   setErrorMessage(null);
                 }}
               >
-                <Text style={[styles.tabText, { color: activeTab === 'otp' ? colors.primary : theme.textMuted }]}>
+                <Text style={[styles.tabText, { color: activeTab === 'otp' ? theme.primary : theme.textMuted }]}>
                   Email OTP
                 </Text>
               </TouchableOpacity>
@@ -233,7 +235,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   setErrorMessage(null);
                 }}
               >
-                <Text style={[styles.tabText, { color: activeTab === 'register' ? colors.primary : theme.textMuted }]}>
+                <Text style={[styles.tabText, { color: activeTab === 'register' ? theme.primary : theme.textMuted }]}>
                   Register
                 </Text>
               </TouchableOpacity>
@@ -241,9 +243,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
             {/* Error Message Box */}
             {errorMessage && (
-              <View style={[styles.errorBox, { backgroundColor: colors.dangerLight, borderColor: colors.danger }]}>
-                <Feather name="alert-circle" size={14} color={colors.danger} />
-                <Text style={[styles.errorText, { color: colors.danger }]}>{errorMessage}</Text>
+              <View style={[styles.errorBox, { backgroundColor: theme.dangerLight, borderColor: theme.danger }]}>
+                <Feather name="alert-circle" size={14} color={theme.danger} />
+                <Text style={[styles.errorText, { color: theme.danger }]}>{errorMessage}</Text>
               </View>
             )}
 
@@ -285,7 +287,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   </View>
 
                   <TouchableOpacity
-                    style={[styles.submitBtn, { backgroundColor: colors.primary }]}
+                    style={[styles.submitBtn, { backgroundColor: theme.primary }]}
                     onPress={handlePasswordLogin}
                     disabled={loading}
                     activeOpacity={0.8}
@@ -321,7 +323,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
                   {!otpSent ? (
                     <TouchableOpacity
-                      style={[styles.submitBtn, { backgroundColor: colors.primary }]}
+                      style={[styles.submitBtn, { backgroundColor: theme.primary }]}
                       onPress={handleSendOtp}
                       disabled={loading}
                       activeOpacity={0.8}
@@ -351,7 +353,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       </View>
 
                       <TouchableOpacity
-                        style={[styles.submitBtn, { backgroundColor: colors.primary }]}
+                        style={[styles.submitBtn, { backgroundColor: theme.primary }]}
                         onPress={handleVerifyOtp}
                         disabled={loading}
                         activeOpacity={0.8}
@@ -434,7 +436,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   </View>
 
                   <TouchableOpacity
-                    style={[styles.submitBtn, { backgroundColor: colors.primary }]}
+                    style={[styles.submitBtn, { backgroundColor: theme.primary }]}
                     onPress={handleRegister}
                     disabled={loading}
                     activeOpacity={0.8}

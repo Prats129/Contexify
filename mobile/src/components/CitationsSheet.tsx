@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { colors } from '../theme/colors';
+import { getAppTheme, type AppTheme } from '../theme/colors';
 import type { Citation } from '../types';
 
 interface CitationsSheetProps {
@@ -19,6 +19,7 @@ interface CitationsSheetProps {
   citations: Citation[];
   onClose: () => void;
   isDark?: boolean;
+  theme?: AppTheme;
 }
 
 function parseCitation(c: Citation): { title: string; url: string; domain: string; snippet: string } {
@@ -52,13 +53,14 @@ export const CitationsSheet: React.FC<CitationsSheetProps> = ({
   citations,
   onClose,
   isDark = true,
+  theme: customTheme,
 }) => {
-  const theme = isDark ? colors.dark : colors.light;
+  const theme = customTheme || getAppTheme(isDark);
 
   const handleOpenLink = (url: string) => {
     if (!url) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    Linking.openURL(url).catch(() => {});
+    Linking.openURL(url).catch(() => { });
   };
 
   return (
@@ -87,19 +89,12 @@ export const CitationsSheet: React.FC<CitationsSheetProps> = ({
           {/* Header */}
           <View style={[styles.headerRow, { borderBottomColor: theme.borderSubtle }]}>
             <View style={styles.titleRow}>
-              <Ionicons name="layers-outline" size={18} color={colors.primary} />
+              <Ionicons name="layers-outline" size={18} color={theme.primary} />
               <Text style={[styles.sheetTitle, { color: theme.textMain }]}>Sources & Grounding</Text>
-              <View style={[styles.badge, { backgroundColor: colors.primaryLight }]}>
-                <Text style={[styles.badgeText, { color: colors.primary }]}>{citations.length}</Text>
+              <View style={[styles.badge, { backgroundColor: theme.primaryLight }]}>
+                <Text style={[styles.badgeText, { color: theme.primary }]}>{citations.length}</Text>
               </View>
             </View>
-
-            <TouchableOpacity
-              style={[styles.closeBtn, { backgroundColor: theme.borderSubtle }]}
-              onPress={onClose}
-            >
-              <Feather name="x" size={16} color={theme.textMain} />
-            </TouchableOpacity>
           </View>
 
           {/* Citations List */}
@@ -129,7 +124,7 @@ export const CitationsSheet: React.FC<CitationsSheetProps> = ({
                       <Ionicons
                         name={isWeb ? 'globe-outline' : 'document-text-outline'}
                         size={13}
-                        color={isWeb ? colors.emerald : colors.primary}
+                        color={isWeb ? theme.emerald : theme.primary}
                       />
                       <Text style={[styles.domainText, { color: theme.textMuted }]}>
                         {domain || c.filename || 'Document'}
@@ -152,10 +147,10 @@ export const CitationsSheet: React.FC<CitationsSheetProps> = ({
                       activeOpacity={0.7}
                       style={styles.linkRow}
                     >
-                      <Text style={[styles.cardTitle, { color: colors.primary }]} numberOfLines={2}>
+                      <Text style={[styles.cardTitle, { color: theme.primary }]} numberOfLines={2}>
                         {title}
                       </Text>
-                      <Feather name="external-link" size={12} color={colors.primary} />
+                      <Feather name="external-link" size={12} color={theme.primary} />
                     </TouchableOpacity>
                   ) : (
                     <Text style={[styles.cardTitle, { color: theme.textMain }]} numberOfLines={2}>
