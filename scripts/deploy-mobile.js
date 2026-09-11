@@ -85,6 +85,7 @@ const result = spawnSync(easCommand, easArgs, {
   shell: true,
   env: {
     ...process.env,
+    EAS_SKIP_AUTO_FINGERPRINT: '1',
     ...(apiUrl ? { EXPO_PUBLIC_API_URL: apiUrl } : {}),
   },
 });
