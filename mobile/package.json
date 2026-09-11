@@ -23,7 +23,10 @@
     "start": "expo start --go",
     "android": "expo start --android",
     "ios": "expo start --ios",
-    "web": "expo start --web"
+    "web": "expo start --web",
+    "build:apk": "eas build --platform android --profile preview",
+    "build:bundle": "eas build --platform android --profile production",
+    "build:ios": "eas build --platform ios --profile production"
   },
   "private": true
 }

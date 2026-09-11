@@ -12,7 +12,10 @@
     "db:reset": "cd backend && .\\venv\\Scripts\\python.exe reset_db.py",
     "setup:backend": "cd backend && python -m venv venv && .\\venv\\Scripts\\pip install -r requirements.txt",
     "setup:mobile": "npm install --prefix mobile",
-    "setup": "npm install --prefix frontend && npm run setup:backend"
+    "setup": "npm install --prefix frontend && npm run setup:backend",
+    "deploy:mobile": "node scripts/deploy-mobile.js",
+    "deploy:mobile:bundle": "node scripts/deploy-mobile.js --bundle",
+    "deploy:mobile:ios": "node scripts/deploy-mobile.js --ios"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"

@@ -215,6 +215,9 @@ Run these commands from the repository root:
 | `npm run setup`          | Installs frontend npm packages and sets up the Python virtual environment.               |
 | `npm run setup:backend`  | Creates the Python venv and installs `requirements.txt`.                                 |
 | `npm run setup:mobile`   | Installs mobile Expo packages in `mobile/`.                                              |
+| `npm run deploy:mobile`  | 🚀 1-command build: generates free standalone Android APK installer.                     |
+| `npm run deploy:mobile:bundle` | Builds production Android App Bundle (.aab) for Google Play Console.               |
+| `npm run deploy:mobile:ios`    | Builds iOS production IPA for Apple TestFlight / App Store.                         |
 | `npm run db:reset`       | Drops and re-initializes all local database tables.                                      |
 
 ---
