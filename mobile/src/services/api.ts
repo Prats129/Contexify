@@ -24,7 +24,7 @@ export const getApiBaseUrl = async (): Promise<string> => {
   try {
     const saved = await AsyncStorage.getItem('contexify_server_url');
     if (saved && saved.trim()) {
-      const clean = saved.trim().replace(/\/+$/, '');
+      const clean = saved.trim().replace(/^["']|["']$/g, '').replace(/\/+$/, '');
       cachedBaseUrl = clean;
       return clean;
     }
@@ -32,7 +32,7 @@ export const getApiBaseUrl = async (): Promise<string> => {
 
   const envUrl = process.env.EXPO_PUBLIC_API_URL;
   if (envUrl && envUrl.trim()) {
-    const clean = envUrl.trim().replace(/\/+$/, '');
+    const clean = envUrl.trim().replace(/^["']|["']$/g, '').replace(/\/+$/, '');
     cachedBaseUrl = clean;
     return clean;
   }
@@ -42,7 +42,7 @@ export const getApiBaseUrl = async (): Promise<string> => {
 };
 
 export const setApiBaseUrl = async (newUrl: string) => {
-  const clean = newUrl.trim().replace(/\/+$/, '');
+  const clean = newUrl.trim().replace(/^["']|["']$/g, '').replace(/\/+$/, '');
   cachedBaseUrl = clean;
   await AsyncStorage.setItem('contexify_server_url', clean);
 };

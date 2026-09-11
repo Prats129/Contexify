@@ -33,7 +33,7 @@ if (fs.existsSync(envFile)) {
   const content = fs.readFileSync(envFile, 'utf8');
   const match = content.match(/^EXPO_PUBLIC_API_URL\s*=\s*(.+)$/m);
   if (match) {
-    apiUrl = match[1].trim();
+    apiUrl = match[1].trim().replace(/^["']|["']$/g, '');
   }
 }
 
