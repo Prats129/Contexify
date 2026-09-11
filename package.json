@@ -15,7 +15,8 @@
     "setup": "npm install --prefix frontend && npm run setup:backend",
     "deploy:mobile": "node scripts/deploy-mobile.js",
     "deploy:mobile:bundle": "node scripts/deploy-mobile.js --bundle",
-    "deploy:mobile:ios": "node scripts/deploy-mobile.js --ios"
+    "deploy:mobile:ios": "node scripts/deploy-mobile.js --ios",
+    "update:mobile": "node scripts/update-mobile.js"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"

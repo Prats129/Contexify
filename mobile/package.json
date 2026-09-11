@@ -11,6 +11,7 @@
     "expo-haptics": "~57.0.2",
     "expo-linking": "~57.0.9",
     "expo-status-bar": "~57.0.1",
+    "expo-updates": "^57.0.21",
     "react": "19.2.3",
     "react-native": "0.86.3",
     "react-native-safe-area-context": "~5.7.0"
@@ -26,7 +27,8 @@
     "web": "expo start --web",
     "build:apk": "eas build --platform android --profile preview",
     "build:bundle": "eas build --platform android --profile production",
-    "build:ios": "eas build --platform ios --profile production"
+    "build:ios": "eas build --platform ios --profile production",
+    "update": "eas update --channel preview"
   },
   "private": true
 }
