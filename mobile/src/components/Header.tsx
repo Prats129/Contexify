@@ -1,8 +1,8 @@
-import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Image } from 'react-native';
-import { Feather } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
-import { getAppTheme, type AppTheme } from '../theme/colors';
+import React from "react";
+import { View, Text, TouchableOpacity, StyleSheet, Image } from "react-native";
+import { Feather } from "@expo/vector-icons";
+import * as Haptics from "expo-haptics";
+import { getAppTheme, type AppTheme } from "../theme/colors";
 
 interface HeaderProps {
   onOpenDrawer: () => void;
@@ -37,7 +37,12 @@ export const Header: React.FC<HeaderProps> = ({
   };
 
   return (
-    <View style={[styles.container, { backgroundColor: theme.bgApp, borderBottomColor: theme.borderSubtle }]}>
+    <View
+      style={[
+        styles.container,
+        { backgroundColor: theme.bgApp, borderBottomColor: theme.borderSubtle },
+      ]}
+    >
       {/* Left: Hamburger Menu & Logo Branding */}
       <View style={styles.leftGroup}>
         <TouchableOpacity
@@ -56,11 +61,13 @@ export const Header: React.FC<HeaderProps> = ({
           activeOpacity={0.8}
         >
           <Image
-            source={require('../../assets/logo.png')}
+            source={require("../../assets/logo.png")}
             style={styles.logoImage}
             resizeMode="contain"
           />
-          <Text style={[styles.brandTitle, { color: theme.textMain }]}>Contexify</Text>
+          <Text style={[styles.brandTitle, { color: theme.textMain }]}>
+            Contexify
+          </Text>
         </TouchableOpacity>
       </View>
 
@@ -81,12 +88,14 @@ export const Header: React.FC<HeaderProps> = ({
           onPress={handleThemePress}
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           activeOpacity={0.7}
-          accessibilityLabel={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+          accessibilityLabel={
+            isDark ? "Switch to Light Mode" : "Switch to Dark Mode"
+          }
         >
           <Feather
-            name={isDark ? 'sun' : 'moon'}
+            name={isDark ? "sun" : "moon"}
             size={17}
-            color={isDark ? '#fbbf24' : theme.textMain}
+            color={isDark ? "#fbbf24" : theme.textMain}
           />
         </TouchableOpacity>
       </View>
@@ -97,41 +106,41 @@ export const Header: React.FC<HeaderProps> = ({
 const styles = StyleSheet.create({
   container: {
     height: 54,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     paddingHorizontal: 14,
     borderBottomWidth: 1,
   },
   leftGroup: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 12,
   },
   iconButton: {
     width: 36,
     height: 36,
     borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
   },
   brandRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 8,
   },
   logoImage: {
-    width: 28,
-    height: 28,
+    width: 30,
+    height: 30,
   },
   brandTitle: {
-    fontSize: 17,
-    fontWeight: '700',
+    fontSize: 18,
+    fontWeight: "700",
     letterSpacing: -0.3,
   },
   rightActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
   },
 });

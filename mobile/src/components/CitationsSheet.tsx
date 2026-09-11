@@ -326,7 +326,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   sheetTitle: {
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: "700",
   },
   badge: {
@@ -335,7 +335,7 @@ const styles = StyleSheet.create({
     borderRadius: 10,
   },
   badgeText: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: "700",
   },
   closeBtn: {
@@ -353,10 +353,10 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   card: {
-    padding: 12,
+    padding: 13,
     borderRadius: 16,
     borderWidth: 1,
-    gap: 6,
+    gap: 7,
   },
   cardMetaRow: {
     flexDirection: "row",
@@ -369,7 +369,7 @@ const styles = StyleSheet.create({
     gap: 5,
   },
   domainText: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: "600",
     textTransform: "lowercase",
   },
@@ -379,7 +379,7 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   pagePillText: {
-    fontSize: 10,
+    fontSize: 10.5,
     fontWeight: "700",
   },
   linkRow: {
@@ -388,13 +388,13 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   cardTitle: {
-    fontSize: 14,
+    fontSize: 15.5,
     fontWeight: "700",
-    lineHeight: 18,
+    lineHeight: 21,
     flex: 1,
   },
   snippetText: {
-    fontSize: 12,
-    lineHeight: 18,
+    fontSize: 13.5,
+    lineHeight: 20,
   },
 });

@@ -273,7 +273,7 @@ const styles = StyleSheet.create({
     maxWidth: 160,
   },
   chipText: {
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '600',
   },
   inputContainer: {
@@ -283,7 +283,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     paddingHorizontal: 8,
     paddingVertical: 4,
-    minHeight: 48,
+    minHeight: 50,
     gap: 6,
   },
   attachButton: {
@@ -297,19 +297,19 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 5,
+    paddingHorizontal: 9,
+    paddingVertical: 5.5,
     borderRadius: 12,
     borderWidth: 1,
   },
   modeChipText: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '700',
   },
   textInput: {
     flex: 1,
-    fontSize: 15,
-    lineHeight: 20,
+    fontSize: 16,
+    lineHeight: 22,
     maxHeight: 110,
     paddingVertical: 6,
     paddingHorizontal: 4,

@@ -142,14 +142,12 @@ export default function App() {
       const list = await apiService.getUserSessions(userId);
       const safeList = Array.isArray(list) ? list : [];
       setSessions(safeList);
-      if (safeList.length > 0) {
-        selectSession(safeList[0].id, safeList[0].mode);
-      } else {
-        handleNewChat();
-      }
+      // Always start in a fresh new chat on app launch
+      handleNewChat();
     } catch (err) {
       console.warn("Failed to load sessions:", err);
       setSessions([]);
+      handleNewChat();
     }
   };
 
@@ -439,16 +437,16 @@ export default function App() {
           {/* Welcome Screen if empty */}
           {messages.length === 0 && !streamingMessage ? (
             <View style={styles.welcomeContainer}>
-              <View style={styles.welcomeLogoWrapper}>
+              <View style={styles.welcomeBrandGroup}>
                 <Image
                   source={require("./assets/logo.png")}
                   style={styles.welcomeLogo}
                   resizeMode="contain"
                 />
+                <Text style={[styles.welcomeTitle, { color: theme.textMain }]}>
+                  Contexify AI
+                </Text>
               </View>
-              <Text style={[styles.welcomeTitle, { color: theme.textMain }]}>
-                Contexify AI
-              </Text>
               <Text
                 style={[styles.welcomeSubtitle, { color: theme.textMuted }]}
               >
@@ -674,34 +672,31 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 24,
-    gap: 12,
+    gap: 10,
   },
-  welcomeLogoWrapper: {
-    width: 68,
-    height: 68,
+  welcomeBrandGroup: {
     alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 4,
+    marginBottom: 0,
   },
   welcomeLogo: {
-    width: 64,
-    height: 64,
+    width: 72,
+    height: 72,
   },
   welcomeTitle: {
-    fontSize: 22,
+    fontSize: 24,
     fontWeight: "800",
     letterSpacing: 0.3,
   },
   welcomeSubtitle: {
-    fontSize: 13,
-    lineHeight: 19,
+    fontSize: 14.5,
+    lineHeight: 22,
     textAlign: "center",
-    maxWidth: 280,
+    maxWidth: 300,
   },
   starterChipsRow: {
     gap: 8,
     width: "100%",
-    maxWidth: 280,
+    maxWidth: 300,
     marginTop: 12,
   },
   starterChip: {
@@ -709,12 +704,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 8,
     paddingHorizontal: 14,
-    paddingVertical: 10,
+    paddingVertical: 11,
     borderRadius: 14,
     borderWidth: 1,
   },
   starterChipText: {
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: "600",
   },
   messageListContent: {
