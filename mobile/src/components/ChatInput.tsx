@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState, useEffect } from "react";
 import {
   View,
   TextInput,
@@ -7,7 +7,10 @@ import {
   StyleSheet,
   ActivityIndicator,
   ScrollView,
+  Platform,
+  Keyboard,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather, Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import * as DocumentPicker from "expo-document-picker";
@@ -48,6 +51,25 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const theme = customTheme || getAppTheme(isDark);
   const isWeb = currentMode === "WEB_SEARCH";
   const canSend = query.trim().length > 0 && !isSending;
+  const insets = useSafeAreaInsets();
+  const [isKeyboardOpen, setIsKeyboardOpen] = useState(false);
+
+  useEffect(() => {
+    const showEvent =
+      Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
+    const hideEvent =
+      Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
+    const showSub = Keyboard.addListener(showEvent, () =>
+      setIsKeyboardOpen(true),
+    );
+    const hideSub = Keyboard.addListener(hideEvent, () =>
+      setIsKeyboardOpen(false),
+    );
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   const handlePickDocument = async () => {
     try {
@@ -90,7 +112,19 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   };
 
   return (
-    <View style={[styles.outerContainer, { backgroundColor: theme.bgApp }]}>
+    <View
+      style={[
+        styles.outerContainer,
+        {
+          backgroundColor: theme.bgApp,
+          paddingBottom: isKeyboardOpen
+            ? Platform.OS === "ios"
+              ? 12
+              : 16
+            : Math.max(insets.bottom + 8, 18),
+        },
+      ]}
+    >
       {/* Attached Documents Row */}
       {(documents.length > 0 || isUploading) && (
         <ScrollView
@@ -260,7 +294,6 @@ const styles = StyleSheet.create({
   outerContainer: {
     paddingHorizontal: 12,
     paddingTop: 4,
-    paddingBottom: 8,
   },
   attachmentScroll: {
     flexDirection: "row",

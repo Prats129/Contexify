@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState } from "react";
 import {
   LuPlus,
   LuFileText,
@@ -15,8 +15,8 @@ import {
   LuX,
   LuDatabase,
   LuSlidersHorizontal,
-} from 'react-icons/lu';
-import type { ChatMode, DocumentMetadata } from '../../types';
+} from "react-icons/lu";
+import type { ChatMode, DocumentMetadata } from "../../types";
 
 interface ChatInputProps {
   inputQuery: string;
@@ -60,20 +60,20 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     // When empty, instantly retract to sleek single-line pill
     if (!inputQuery.trim()) {
       setIsMultiline(false);
-      textarea.style.height = '26px';
+      textarea.style.height = "26px";
       return;
     }
 
     // If explicit newline exists, always multiline
-    if (inputQuery.includes('\n')) {
+    if (inputQuery.includes("\n")) {
       setIsMultiline(true);
-      textarea.style.height = 'auto';
+      textarea.style.height = "auto";
       textarea.style.height = `${Math.min(textarea.scrollHeight, 220)}px`;
       return;
     }
 
     if (isMultiline) {
-      textarea.style.height = 'auto';
+      textarea.style.height = "auto";
       const sh = textarea.scrollHeight;
       if (sh > 34) {
         textarea.style.height = `${Math.min(sh, 220)}px`;
@@ -81,19 +81,19 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         // Fits on one line, retract back to single-line pill if text fits
         if (inputQuery.length < 50) {
           setIsMultiline(false);
-          textarea.style.height = '26px';
+          textarea.style.height = "26px";
         } else {
           textarea.style.height = `${sh}px`;
         }
       }
     } else {
-      textarea.style.height = 'auto';
+      textarea.style.height = "auto";
       const sh = textarea.scrollHeight;
       if (sh > 34) {
         setIsMultiline(true);
         textarea.style.height = `${Math.min(sh, 220)}px`;
       } else {
-        textarea.style.height = '26px';
+        textarea.style.height = "26px";
       }
     }
   }, [inputQuery, isMultiline]);
@@ -101,7 +101,13 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   // Global '/' keyboard shortcut to focus chat input like ChatGPT
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
-      if (e.key === '/' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (
+        e.key === "/" &&
+        !e.shiftKey &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey
+      ) {
         const activeElement = document.activeElement;
         const isEditable =
           activeElement instanceof HTMLInputElement ||
@@ -114,7 +120,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         }
 
         // If a modal dialog is open, do not intercept
-        const isModalOpen = !!document.querySelector('[role="dialog"], .fixed.inset-0.z-50');
+        const isModalOpen = !!document.querySelector(
+          '[role="dialog"], .fixed.inset-0.z-50',
+        );
         if (isModalOpen) {
           return;
         }
@@ -129,9 +137,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       }
     };
 
-    window.addEventListener('keydown', handleGlobalKeyDown);
+    window.addEventListener("keydown", handleGlobalKeyDown);
     return () => {
-      window.removeEventListener('keydown', handleGlobalKeyDown);
+      window.removeEventListener("keydown", handleGlobalKeyDown);
     };
   }, []);
 
@@ -146,31 +154,31 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     };
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+      if (event.key === "Escape") {
         setIsDropdownOpen(false);
       }
     };
 
     if (isDropdownOpen) {
-      document.addEventListener('mousedown', handleClickOutside);
-      document.addEventListener('keydown', handleKeyDown);
+      document.addEventListener("mousedown", handleClickOutside);
+      document.addEventListener("keydown", handleKeyDown);
     }
 
     return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleKeyDown);
     };
   }, [isDropdownOpen]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       if (isSending) {
         // While response is streaming, do not submit another prompt concurrently
         return;
       }
       onSubmit(e);
-    } else if (e.key === 'Escape') {
+    } else if (e.key === "Escape") {
       if (isSending && onStopGeneration) {
         onStopGeneration();
       } else {
@@ -183,7 +191,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     if (e.target.files && e.target.files.length > 0) {
       const files = Array.from(e.target.files);
       files.forEach((file) => onFileUpload(file));
-      e.target.value = '';
+      e.target.value = "";
     }
   };
 
@@ -194,28 +202,28 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
   const getModeDetails = (mode: ChatMode) => {
     switch (mode) {
-      case 'WEB_SEARCH':
+      case "WEB_SEARCH":
         return {
-          title: 'Web Search',
-          desc: 'Live Internet Access',
+          title: "Web Search",
+          desc: "Live Internet Access",
           icon: <LuGlobe size={15} />,
         };
-      case 'DOCUMENT_RAG':
+      case "DOCUMENT_RAG":
         return {
-          title: 'Document RAG',
-          desc: 'Grounded Context QA',
+          title: "Document RAG",
+          desc: "Grounded Context QA",
           icon: <LuFileText size={15} />,
         };
-      case 'MULTIMODAL':
+      case "MULTIMODAL":
         return {
-          title: 'Multimodal',
-          desc: 'Vision & Audio (Coming)',
+          title: "Multimodal",
+          desc: "Vision & Audio (Coming)",
           icon: <LuImage size={15} />,
         };
       default:
         return {
-          title: 'Document RAG',
-          desc: 'Grounded Context QA',
+          title: "Document RAG",
+          desc: "Grounded Context QA",
           icon: <LuFileText size={15} />,
         };
     }
@@ -223,15 +231,16 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
   const currentModeDetails = getModeDetails(currentMode);
 
-
   const getFileIcon = (fileType: string) => {
-    if (fileType === '.pdf') return <LuFileText size={13} className="text-red-500" />;
-    if (fileType === '.txt' || fileType === '.md') return <LuFileCode size={13} className="text-primary-theme" />;
+    if (fileType === ".pdf")
+      return <LuFileText size={13} className="text-red-500" />;
+    if (fileType === ".txt" || fileType === ".md")
+      return <LuFileCode size={13} className="text-primary-theme" />;
     if (
-      fileType === '.png' ||
-      fileType === '.jpg' ||
-      fileType === '.jpeg' ||
-      fileType === '.webp'
+      fileType === ".png" ||
+      fileType === ".jpg" ||
+      fileType === ".jpeg" ||
+      fileType === ".webp"
     )
       return <LuFileImage size={13} className="text-emerald-500" />;
     return <LuFile size={13} className="text-(--text-muted)" />;
@@ -243,10 +252,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     <div className="p-2 sm:p-4 max-w-4xl w-full mx-auto shrink-0 flex flex-col gap-1.5 sm:gap-2">
       <form onSubmit={onSubmit} className="w-full">
         <div
-          className={`bg-(--bg-input) border border-(--border-subtle) hover:border-(--border-hover) shadow-lg transition-[border-radius] duration-150 ease-out grid ${isExpanded
-            ? 'rounded-3xl p-2.5 sm:p-3 pt-0 gap-y-2 grid-cols-[auto_1fr_auto]'
-            : 'rounded-full px-3 sm:px-3.5 py-1.5 gap-x-1.5 sm:gap-x-2 grid-cols-[auto_1fr_auto] items-center'
-            }`}
+          className={`bg-(--bg-input) border border-(--border-subtle) hover:border-(--border-hover) shadow-lg transition-[border-radius] duration-150 ease-out grid ${
+            isExpanded
+              ? "rounded-3xl p-2.5 sm:p-3 pt-0 gap-y-2 grid-cols-[auto_1fr_auto]"
+              : "rounded-full px-3 sm:px-3.5 py-1.5 gap-x-1.5 sm:gap-x-2 grid-cols-[auto_1fr_auto] items-center"
+          }`}
         >
           {/* Uploading progress indicator or attached documents banner */}
           {(isUploading || documents.length > 0) && (
@@ -254,7 +264,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
               {isUploading && (
                 <div className="flex items-center gap-1.5 px-2.5 py-1 bg-primary-light-theme border border-primary-theme text-primary-theme rounded-full text-xs animate-pulse">
                   <LuLoader size={13} className="icon-spin" />
-                  <span>{uploadStatusText || 'Vectorizing document...'}</span>
+                  <span>{uploadStatusText || "Vectorizing document..."}</span>
                 </div>
               )}
 
@@ -283,7 +293,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
           {/* Left: Plus Attach Button */}
           <div
-            className={`relative flex items-center shrink-0 ${isExpanded ? 'col-start-1 row-start-3' : 'col-start-1 row-start-1'}`}
+            className={`relative flex items-center shrink-0 ${isExpanded ? "col-start-1 row-start-3" : "col-start-1 row-start-1"}`}
           >
             <input
               type="file"
@@ -300,7 +310,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({
               title="Add document or image"
               disabled={isUploading}
             >
-              {isUploading ? <LuLoader size={16} className="icon-spin" /> : <LuPlus size={18} />}
+              {isUploading ? (
+                <LuLoader size={16} className="icon-spin" />
+              ) : (
+                <LuPlus size={18} />
+              )}
             </button>
           </div>
 
@@ -310,36 +324,55 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             value={inputQuery}
             onChange={(e) => setInputQuery(e.target.value)}
             onKeyDown={handleKeyDown}
+            onFocus={() => {
+              if (typeof window !== "undefined" && window.innerWidth < 768) {
+                setTimeout(() => {
+                  textareaRef.current?.scrollIntoView({
+                    block: "nearest",
+                    behavior: "smooth",
+                  });
+                }, 300);
+              }
+            }}
             placeholder="Ask anything ..."
             rows={1}
             required
-            className={`bg-transparent border-0 outline-none resize-none text-[16px] sm:text-[15px] text-(--text-main) px-2 leading-normal ${isExpanded
-              ? 'col-span-full row-start-2 w-full max-h-52 overflow-y-auto py-1'
-              : 'col-start-2 row-start-1 w-full h-6.5 max-h-6.5 overflow-hidden py-0'
-              }`}
+            className={`bg-transparent border-0 outline-none resize-none text-[16px] sm:text-[15px] text-(--text-main) px-2 leading-normal ${
+              isExpanded
+                ? "col-span-full row-start-2 w-full max-h-52 overflow-y-auto py-1"
+                : "col-start-2 row-start-1 w-full h-6.5 max-h-6.5 overflow-hidden py-0"
+            }`}
           />
 
           {/* Right Actions: Engine Mode Selector + Send/Stop Button */}
           <div
-            className={`flex items-center gap-1.5 sm:gap-2 shrink-0 ${isExpanded
-              ? 'col-start-3 row-start-3 justify-self-end'
-              : 'col-start-3 row-start-1'
-              }`}
+            className={`flex items-center gap-1.5 sm:gap-2 shrink-0 ${
+              isExpanded
+                ? "col-start-3 row-start-3 justify-self-end"
+                : "col-start-3 row-start-1"
+            }`}
           >
             {/* Mode Dropdown Selector */}
             <div className="relative" ref={dropdownRef}>
               <button
                 type="button"
-                className={`flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-medium rounded-full border cursor-pointer transition-colors ${isDropdownOpen
-                  ? 'bg-primary-light-theme text-primary-theme border-primary-theme'
-                  : 'bg-(--border-subtle) text-(--text-muted) hover:text-(--text-main) border-(--border-subtle) hover:border-(--border-hover)'
-                  }`}
+                className={`flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-medium rounded-full border cursor-pointer transition-colors ${
+                  isDropdownOpen
+                    ? "bg-primary-light-theme text-primary-theme border-primary-theme"
+                    : "bg-(--border-subtle) text-(--text-muted) hover:text-(--text-main) border-(--border-subtle) hover:border-(--border-hover)"
+                }`}
                 onClick={() => setIsDropdownOpen((prev) => !prev)}
                 title="Select Engine Mode"
               >
                 {currentModeDetails.icon}
-                <span className="hidden sm:inline-block">{currentModeDetails.title}</span>
-                {isDropdownOpen ? <LuChevronUp size={13} /> : <LuChevronDown size={13} />}
+                <span className="hidden sm:inline-block">
+                  {currentModeDetails.title}
+                </span>
+                {isDropdownOpen ? (
+                  <LuChevronUp size={13} />
+                ) : (
+                  <LuChevronDown size={13} />
+                )}
               </button>
 
               {/* Dropdown Popup Menu */}
@@ -351,40 +384,52 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
                   <button
                     type="button"
-                    className={`flex items-center justify-between p-2 rounded-lg text-left text-xs cursor-pointer w-full ${currentMode === 'WEB_SEARCH'
-                      ? 'bg-emerald-500/15 text-emerald-500 dark:text-emerald-400 font-medium'
-                      : 'hover:bg-(--border-subtle) text-(--text-main)'
-                      }`}
-                    onClick={() => handleSelectMode('WEB_SEARCH')}
+                    className={`flex items-center justify-between p-2 rounded-lg text-left text-xs cursor-pointer w-full ${
+                      currentMode === "WEB_SEARCH"
+                        ? "bg-emerald-500/15 text-emerald-500 dark:text-emerald-400 font-medium"
+                        : "hover:bg-(--border-subtle) text-(--text-main)"
+                    }`}
+                    onClick={() => handleSelectMode("WEB_SEARCH")}
                   >
                     <div className="flex items-center gap-2">
-                      <LuGlobe size={16} className="text-emerald-500 dark:text-emerald-400" />
+                      <LuGlobe
+                        size={16}
+                        className="text-emerald-500 dark:text-emerald-400"
+                      />
                       <div className="flex flex-col">
                         <span className="font-semibold">Web Search</span>
-                        <span className="text-[10px] text-(--text-muted)">Live Internet Access</span>
+                        <span className="text-[10px] text-(--text-muted)">
+                          Live Internet Access
+                        </span>
                       </div>
                     </div>
-                    {currentMode === 'WEB_SEARCH' && (
-                      <LuCheck size={14} className="text-emerald-500 dark:text-emerald-400" />
+                    {currentMode === "WEB_SEARCH" && (
+                      <LuCheck
+                        size={14}
+                        className="text-emerald-500 dark:text-emerald-400"
+                      />
                     )}
                   </button>
 
                   <button
                     type="button"
-                    className={`flex items-center justify-between p-2 rounded-lg text-left text-xs cursor-pointer w-full ${currentMode === 'DOCUMENT_RAG'
-                      ? 'bg-primary-light-theme text-primary-theme font-medium'
-                      : 'hover:bg-(--border-subtle) text-(--text-main)'
-                      }`}
-                    onClick={() => handleSelectMode('DOCUMENT_RAG')}
+                    className={`flex items-center justify-between p-2 rounded-lg text-left text-xs cursor-pointer w-full ${
+                      currentMode === "DOCUMENT_RAG"
+                        ? "bg-primary-light-theme text-primary-theme font-medium"
+                        : "hover:bg-(--border-subtle) text-(--text-main)"
+                    }`}
+                    onClick={() => handleSelectMode("DOCUMENT_RAG")}
                   >
                     <div className="flex items-center gap-2">
                       <LuFileText size={16} className="text-primary-theme" />
                       <div className="flex flex-col">
                         <span className="font-semibold">Document RAG</span>
-                        <span className="text-[10px] text-(--text-muted)">Grounded Context QA</span>
+                        <span className="text-[10px] text-(--text-muted)">
+                          Grounded Context QA
+                        </span>
                       </div>
                     </div>
-                    {currentMode === 'DOCUMENT_RAG' && (
+                    {currentMode === "DOCUMENT_RAG" && (
                       <LuCheck size={14} className="text-primary-theme" />
                     )}
                   </button>
@@ -404,7 +449,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                             Soon
                           </span>
                         </div>
-                        <span className="text-[10px] text-(--text-muted)">Vision & Audio (Coming)</span>
+                        <span className="text-[10px] text-(--text-muted)">
+                          Vision & Audio (Coming)
+                        </span>
                       </div>
                     </div>
                   </button>
@@ -438,7 +485,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
       <div className="text-center text-[11px] text-(--text-muted) flex items-center justify-center gap-1.5">
         <LuDatabase size={11} />
-        <span>Persistent Relational Storage • Real-time Stream with Citations</span>
+        <span>
+          Persistent Relational Storage • Real-time Stream with Citations
+        </span>
       </div>
     </div>
   );

@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { apiService } from './services/api';
-import { Sidebar } from './components/Sidebar/Sidebar';
-import { ChatWorkspace } from './components/Chat/ChatWorkspace';
-import { UserModal } from './components/Modals/UserModal';
+import React, { useState, useEffect, useCallback, useRef } from "react";
+import { apiService } from "./services/api";
+import { Sidebar } from "./components/Sidebar/Sidebar";
+import { ChatWorkspace } from "./components/Chat/ChatWorkspace";
+import { UserModal } from "./components/Modals/UserModal";
 import type {
   User,
   ChatSession,
@@ -12,10 +12,10 @@ import type {
   StreamingMessageState,
   Citation,
   GoogleAuthRequest,
-} from './types';
-import { useTheme } from './context/ThemeContext';
-import { useConfirm } from './context/ConfirmContext';
-import './styles/main.css';
+} from "./types";
+import { useTheme } from "./context/ThemeContext";
+import { useConfirm } from "./context/ConfirmContext";
+import "./styles/main.css";
 
 function generateGuestSessionId(): string {
   return crypto.randomUUID();
@@ -31,40 +31,53 @@ function getUrlRouteInfo(): UrlRouteInfo {
   // Authenticated chat: /c/:id
   const authMatch = path.match(/^\/c\/([^/]+)/);
   if (authMatch && authMatch[1]) {
-    return { sessionId: decodeURIComponent(authMatch[1]), isUnauthenticated: false };
+    return {
+      sessionId: decodeURIComponent(authMatch[1]),
+      isUnauthenticated: false,
+    };
   }
   // Unauthenticated guest temp chat: /uc/:id
   const guestMatch = path.match(/^\/uc\/([^/]+)/);
   if (guestMatch && guestMatch[1]) {
-    return { sessionId: decodeURIComponent(guestMatch[1]), isUnauthenticated: true };
+    return {
+      sessionId: decodeURIComponent(guestMatch[1]),
+      isUnauthenticated: true,
+    };
   }
   // Query parameters fallback
   const params = new URLSearchParams(window.location.search);
-  const ucParam = params.get('uc');
+  const ucParam = params.get("uc");
   if (ucParam) {
     return { sessionId: ucParam, isUnauthenticated: true };
   }
-  const cParam = params.get('c');
+  const cParam = params.get("c");
   if (cParam) {
     return { sessionId: cParam, isUnauthenticated: false };
   }
-  const sid = params.get('session') || params.get('id');
+  const sid = params.get("session") || params.get("id");
   if (sid) {
     return { sessionId: sid, isUnauthenticated: false };
   }
   return { sessionId: null, isUnauthenticated: false };
 }
 
-function updateUrlForSession(sessionId: string | null, isUnauthenticated: boolean = false) {
+function updateUrlForSession(
+  sessionId: string | null,
+  isUnauthenticated: boolean = false,
+) {
   if (sessionId) {
-    const prefix = isUnauthenticated ? '/uc' : '/c';
+    const prefix = isUnauthenticated ? "/uc" : "/c";
     const targetPath = `${prefix}/${encodeURIComponent(sessionId)}`;
     if (window.location.pathname !== targetPath) {
-      window.history.pushState({ sessionId, isUnauthenticated }, '', targetPath);
+      window.history.pushState(
+        { sessionId, isUnauthenticated },
+        "",
+        targetPath,
+      );
     }
   } else {
-    if (window.location.pathname !== '/' && window.location.pathname !== '') {
-      window.history.pushState({}, '', '/');
+    if (window.location.pathname !== "/" && window.location.pathname !== "") {
+      window.history.pushState({}, "", "/");
     }
   }
 }
@@ -77,30 +90,32 @@ export const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
-  const [currentMode, setCurrentMode] = useState<ChatMode>('WEB_SEARCH');
+  const [currentMode, setCurrentMode] = useState<ChatMode>("WEB_SEARCH");
   const [documents, setDocuments] = useState<DocumentMetadata[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
 
   // --- Interaction States ---
-  const [inputQuery, setInputQuery] = useState('');
+  const [inputQuery, setInputQuery] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [streamingMessage, setStreamingMessage] =
     useState<StreamingMessageState | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const [isUploading, setIsUploading] = useState(false);
-  const [uploadStatusText, setUploadStatusText] = useState('');
+  const [uploadStatusText, setUploadStatusText] = useState("");
   const [isUserModalOpen, setIsUserModalOpen] = useState(false);
-  const [userModalTab, setUserModalTab] = useState<'login' | 'register'>('login');
+  const [userModalTab, setUserModalTab] = useState<"login" | "register">(
+    "login",
+  );
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(() => {
-    if (typeof window !== 'undefined' && window.innerWidth < 768) {
+    if (typeof window !== "undefined" && window.innerWidth < 768) {
       return false;
     }
-    const saved = localStorage.getItem('contexify_sidebar_open');
+    const saved = localStorage.getItem("contexify_sidebar_open");
     return saved !== null ? JSON.parse(saved) : true;
   });
 
-  const handleOpenUserModal = (tab: 'login' | 'register' = 'login') => {
-    if (typeof window !== 'undefined' && window.innerWidth < 768) {
+  const handleOpenUserModal = (tab: "login" | "register" = "login") => {
+    if (typeof window !== "undefined" && window.innerWidth < 768) {
       setIsSidebarOpen(false);
     }
     setUserModalTab(tab);
@@ -110,23 +125,27 @@ export const App: React.FC = () => {
   const handleToggleSidebar = () => {
     setIsSidebarOpen((prev) => {
       const next = !prev;
-      localStorage.setItem('contexify_sidebar_open', JSON.stringify(next));
+      localStorage.setItem("contexify_sidebar_open", JSON.stringify(next));
       return next;
     });
   };
 
   // --- 1. Select / Switch Active Session ---
   const selectSession = useCallback(
-    async (sessionId: string, pushUrl: boolean = true, isUnauthenticated: boolean = false) => {
+    async (
+      sessionId: string,
+      pushUrl: boolean = true,
+      isUnauthenticated: boolean = false,
+    ) => {
       if (!sessionId) return;
-      if (typeof window !== 'undefined' && window.innerWidth < 768) {
+      if (typeof window !== "undefined" && window.innerWidth < 768) {
         setIsSidebarOpen(false);
       }
       setActiveSessionId(sessionId);
       setStreamingMessage(null);
 
       if (currentUser?.id && !isUnauthenticated) {
-        localStorage.setItem('contexify_active_session', sessionId);
+        localStorage.setItem("contexify_active_session", sessionId);
         if (pushUrl) {
           updateUrlForSession(sessionId, false);
         }
@@ -138,7 +157,7 @@ export const App: React.FC = () => {
           setDocuments(history.documents || []);
           setMessages(history.messages || []);
         } catch (e) {
-          console.error('Failed to load session history:', e);
+          console.error("Failed to load session history:", e);
         }
       } else {
         if (pushUrl) {
@@ -146,7 +165,7 @@ export const App: React.FC = () => {
         }
       }
     },
-    [currentUser]
+    [currentUser],
   );
 
   // --- 2. User Initialization (Guest vs Logged In) ---
@@ -156,7 +175,7 @@ export const App: React.FC = () => {
 
   const initUser = async () => {
     try {
-      const savedUserStr = localStorage.getItem('contexify_user');
+      const savedUserStr = localStorage.getItem("contexify_user");
       let user: User | null = null;
       if (savedUserStr) {
         const parsed = JSON.parse(savedUserStr);
@@ -166,18 +185,19 @@ export const App: React.FC = () => {
       if (user) {
         // Logged-in user found
         setCurrentUser(user);
-        localStorage.setItem('contexify_user', JSON.stringify(user));
+        localStorage.setItem("contexify_user", JSON.stringify(user));
       } else {
         // Ephemeral Guest Mode (No DB Save)
         setCurrentUser(null);
-        localStorage.removeItem('contexify_user');
-        localStorage.removeItem('contexify_active_session');
+        localStorage.removeItem("contexify_user");
+        localStorage.removeItem("contexify_active_session");
         setSessions([]);
         setMessages([]);
         setDocuments([]);
-        setMode('light');
-        
-        const { sessionId: urlSessionId, isUnauthenticated } = getUrlRouteInfo();
+        setMode("light");
+
+        const { sessionId: urlSessionId, isUnauthenticated } =
+          getUrlRouteInfo();
         if (urlSessionId) {
           if (isUnauthenticated) {
             // Guest active temp chat from URL
@@ -185,7 +205,7 @@ export const App: React.FC = () => {
           } else {
             // User attempting to open private /c/:id without session
             setIsUserModalOpen(true);
-            setUserModalTab('login');
+            setUserModalTab("login");
           }
         } else {
           setActiveSessionId(null);
@@ -193,49 +213,58 @@ export const App: React.FC = () => {
         }
       }
     } catch (e) {
-      console.error('Failed to initialize user:', e);
+      console.error("Failed to initialize user:", e);
       setCurrentUser(null);
       setActiveSessionId(null);
     }
   };
 
   // --- 3. Load Sessions when Logged In ---
-  const loadSessions = useCallback(async (userId: string) => {
-    try {
-      const sessionList = await apiService.listSessions(userId);
-      setSessions(sessionList || []);
+  const loadSessions = useCallback(
+    async (userId: string) => {
+      try {
+        const sessionList = await apiService.listSessions(userId);
+        setSessions(sessionList || []);
 
-      const { sessionId: urlSessionId, isUnauthenticated } = getUrlRouteInfo();
+        const { sessionId: urlSessionId, isUnauthenticated } =
+          getUrlRouteInfo();
 
-      // If URL explicitly specifies a session ID (/c/:id or ?c=:id), select it
-      if (urlSessionId && !isUnauthenticated) {
-        const matchingUrlSession = sessionList.find((s) => s.id === urlSessionId);
-        if (matchingUrlSession) {
-          await selectSession(matchingUrlSession.id, false, false);
-          return;
-        }
-        // If not directly in list, attempt to fetch history directly (e.g. valid session)
-        try {
-          const hist = await apiService.getSessionHistory(urlSessionId);
-          if (hist.session) {
-            setSessions((prev) => [hist.session, ...prev.filter(s => s.id !== hist.session.id)]);
-            await selectSession(hist.session.id, false, false);
+        // If URL explicitly specifies a session ID (/c/:id or ?c=:id), select it
+        if (urlSessionId && !isUnauthenticated) {
+          const matchingUrlSession = sessionList.find(
+            (s) => s.id === urlSessionId,
+          );
+          if (matchingUrlSession) {
+            await selectSession(matchingUrlSession.id, false, false);
             return;
           }
-        } catch {
-          // If session doesn't exist, ignore and fallback to root new chat
+          // If not directly in list, attempt to fetch history directly (e.g. valid session)
+          try {
+            const hist = await apiService.getSessionHistory(urlSessionId);
+            if (hist.session) {
+              setSessions((prev) => [
+                hist.session,
+                ...prev.filter((s) => s.id !== hist.session.id),
+              ]);
+              await selectSession(hist.session.id, false, false);
+              return;
+            }
+          } catch {
+            // If session doesn't exist, ignore and fallback to root new chat
+          }
         }
-      }
 
-      // If on root '/', start on clean new chat (no ID in URL)
-      setActiveSessionId(null);
-      setMessages([]);
-      setDocuments([]);
-      updateUrlForSession(null);
-    } catch (e) {
-      console.error('Failed to load user sessions:', e);
-    }
-  }, [selectSession]);
+        // If on root '/', start on clean new chat (no ID in URL)
+        setActiveSessionId(null);
+        setMessages([]);
+        setDocuments([]);
+        updateUrlForSession(null);
+      } catch (e) {
+        console.error("Failed to load user sessions:", e);
+      }
+    },
+    [selectSession],
+  );
 
   useEffect(() => {
     if (currentUser?.id) {
@@ -246,7 +275,8 @@ export const App: React.FC = () => {
   // --- 4. Listen to Browser Back / Forward History Navigation ---
   useEffect(() => {
     const handlePopState = () => {
-      const { sessionId: targetSessionId, isUnauthenticated } = getUrlRouteInfo();
+      const { sessionId: targetSessionId, isUnauthenticated } =
+        getUrlRouteInfo();
       if (targetSessionId) {
         if (currentUser?.id && !isUnauthenticated) {
           selectSession(targetSessionId, false, false);
@@ -262,36 +292,36 @@ export const App: React.FC = () => {
       }
     };
 
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
   }, [currentUser, sessions, selectSession]);
 
   // --- 5. Start New Chat / Conversation ---
   const handleNewSession = () => {
-    if (typeof window !== 'undefined' && window.innerWidth < 768) {
+    if (typeof window !== "undefined" && window.innerWidth < 768) {
       setIsSidebarOpen(false);
     }
     setActiveSessionId(null);
     setMessages([]);
     setDocuments([]);
     setStreamingMessage(null);
-    setInputQuery('');
+    setInputQuery("");
     updateUrlForSession(null);
-    localStorage.removeItem('contexify_active_session');
+    localStorage.removeItem("contexify_active_session");
   };
 
   // --- 5. Delete Session ---
   const handleDeleteSession = async (sessionId: string) => {
     if (!currentUser?.id) return;
     const targetSession = sessions.find((s) => s.id === sessionId);
-    const sessionTitle = targetSession?.title || 'this chat';
+    const sessionTitle = targetSession?.title || "this chat";
 
     const confirmed = await confirm({
-      type: 'delete-chat',
-      title: 'Delete chat?',
+      type: "delete-chat",
+      title: "Delete chat?",
       chatTitle: sessionTitle,
-      confirmText: 'Delete',
-      cancelText: 'Cancel',
+      confirmText: "Delete",
+      cancelText: "Cancel",
     });
     if (!confirmed) return;
 
@@ -306,11 +336,14 @@ export const App: React.FC = () => {
         setDocuments([]);
         setStreamingMessage(null);
         updateUrlForSession(null);
-        localStorage.removeItem('contexify_active_session');
+        localStorage.removeItem("contexify_active_session");
       }
     } catch (e: unknown) {
       const err = e instanceof Error ? e.message : String(e);
-      await showAlert({ title: 'Delete Failed', message: `Failed to delete session: ${err}` });
+      await showAlert({
+        title: "Delete Failed",
+        message: `Failed to delete session: ${err}`,
+      });
     }
   };
 
@@ -321,10 +354,10 @@ export const App: React.FC = () => {
       try {
         await apiService.updateSessionMode(activeSessionId, mode);
         setSessions((prev) =>
-          prev.map((s) => (s.id === activeSessionId ? { ...s, mode } : s))
+          prev.map((s) => (s.id === activeSessionId ? { ...s, mode } : s)),
         );
       } catch (err) {
-        console.error('Failed to persist session mode switch:', err);
+        console.error("Failed to persist session mode switch:", err);
       }
     }
   };
@@ -337,16 +370,16 @@ export const App: React.FC = () => {
         try {
           const newSess = await apiService.createSession(
             currentUser.id,
-            'New Conversation',
-            currentMode
+            "New Conversation",
+            currentMode,
           );
           targetSessionId = newSess.id;
           setActiveSessionId(newSess.id);
           setSessions((prev) => [newSess, ...prev]);
           updateUrlForSession(newSess.id, false);
-          localStorage.setItem('contexify_active_session', newSess.id);
+          localStorage.setItem("contexify_active_session", newSess.id);
         } catch (err) {
-          console.error('Failed to create session on file upload:', err);
+          console.error("Failed to create session on file upload:", err);
           return;
         }
       } else {
@@ -360,36 +393,39 @@ export const App: React.FC = () => {
     setUploadStatusText(`Vectorizing '${file.name}'...`);
 
     try {
-      const res = await apiService.uploadDocument(file, targetSessionId, currentUser?.id);
+      const res = await apiService.uploadDocument(
+        file,
+        targetSessionId,
+        currentUser?.id,
+      );
       // Update local document state
       setDocuments((prev) => {
         const exists = prev.some(
-          (d) => d.document_id === res.document.document_id
+          (d) => d.document_id === res.document.document_id,
         );
         return exists ? prev : [res.document, ...prev];
       });
     } catch (e: unknown) {
       const err = e instanceof Error ? e.message : String(e);
-      await showAlert({ title: 'Upload Failed', message: err });
+      await showAlert({ title: "Upload Failed", message: err });
     } finally {
       setIsUploading(false);
-      setUploadStatusText('');
+      setUploadStatusText("");
     }
   };
-
 
   const handleDeleteDocument = async (documentId: string) => {
     if (!activeSessionId) return;
     const doc = documents.find((d) => d.document_id === documentId);
-    const docName = doc?.filename || 'this document';
+    const docName = doc?.filename || "this document";
 
     const confirmed = await confirm({
-      type: 'default',
-      title: 'Remove document?',
+      type: "default",
+      title: "Remove document?",
       message: `Are you sure you want to remove "${docName}" and purge its vectors? Grounded answers will no longer cite this document.`,
-      confirmText: 'Remove',
-      cancelText: 'Cancel',
-      variant: 'danger',
+      confirmText: "Remove",
+      cancelText: "Cancel",
+      variant: "danger",
     });
     if (!confirmed) return;
 
@@ -398,20 +434,26 @@ export const App: React.FC = () => {
       setDocuments((prev) => prev.filter((d) => d.document_id !== documentId));
     } catch (e: unknown) {
       const err = e instanceof Error ? e.message : String(e);
-      await showAlert({ title: 'Deletion Failed', message: err });
+      await showAlert({ title: "Deletion Failed", message: err });
     }
   };
 
   // --- Clear Messages in Active Conversation (Authenticated Users Only) ---
   const handleClearMessages = async () => {
-    if (!currentUser || !activeSessionId || (messages.length === 0 && !streamingMessage)) return;
+    if (
+      !currentUser ||
+      !activeSessionId ||
+      (messages.length === 0 && !streamingMessage)
+    )
+      return;
     const confirmed = await confirm({
-      type: 'default',
-      title: 'Clear conversation?',
-      message: 'Clear all messages in this conversation? Attached documents and vector knowledge will remain intact.',
-      confirmText: 'Clear',
-      cancelText: 'Cancel',
-      variant: 'danger',
+      type: "default",
+      title: "Clear conversation?",
+      message:
+        "Clear all messages in this conversation? Attached documents and vector knowledge will remain intact.",
+      confirmText: "Clear",
+      cancelText: "Cancel",
+      variant: "danger",
     });
     if (!confirmed) return;
 
@@ -421,10 +463,12 @@ export const App: React.FC = () => {
       setStreamingMessage(null);
     } catch (e: unknown) {
       const err = e instanceof Error ? e.message : String(e);
-      await showAlert({ title: 'Clear Failed', message: `Failed to clear messages: ${err}` });
+      await showAlert({
+        title: "Clear Failed",
+        message: `Failed to clear messages: ${err}`,
+      });
     }
   };
-
 
   // Stop generating response (like ChatGPT)
   const handleStopGeneration = useCallback(() => {
@@ -438,8 +482,8 @@ export const App: React.FC = () => {
       if (prev && prev.content && prev.content.trim()) {
         const stoppedMsg: Message = {
           id: `asst-${Date.now()}`,
-          session_id: activeSessionId || 'default',
-          role: 'assistant',
+          session_id: activeSessionId || "default",
+          role: "assistant",
           content: prev.content,
           citations: prev.citations,
           created_at: new Date().toISOString(),
@@ -479,16 +523,16 @@ export const App: React.FC = () => {
         try {
           const newSess = await apiService.createSession(
             currentUser.id,
-            'New Conversation',
-            currentMode
+            "New Conversation",
+            currentMode,
           );
           targetSessionId = newSess.id;
           setActiveSessionId(newSess.id);
           setSessions((prev) => [newSess, ...prev]);
           updateUrlForSession(newSess.id, false);
-          localStorage.setItem('contexify_active_session', newSess.id);
+          localStorage.setItem("contexify_active_session", newSess.id);
         } catch (err) {
-          console.error('Failed to create session on message send:', err);
+          console.error("Failed to create session on message send:", err);
           return;
         }
       } else {
@@ -499,26 +543,26 @@ export const App: React.FC = () => {
     }
 
     // Reset input
-    setInputQuery('');
+    setInputQuery("");
     setIsSending(true);
 
     // Append optimistic user message
     const userMsg: Message = {
       id: `user-${Date.now()}`,
       session_id: targetSessionId,
-      role: 'user',
+      role: "user",
       content: query,
       created_at: new Date().toISOString(),
     };
     setMessages((prev) => [...prev, userMsg]);
 
     // Setup streaming placeholder
-    let accumulatedText = '';
+    let accumulatedText = "";
     let receivedCitations: Citation[] | null = null;
 
     setStreamingMessage({
-      role: 'assistant',
-      content: '',
+      role: "assistant",
+      content: "",
       citations: null,
       isStreaming: true,
       isError: false,
@@ -535,10 +579,10 @@ export const App: React.FC = () => {
           setStreamingMessage((prev) =>
             prev
               ? {
-                ...prev,
-                citations,
-              }
-              : null
+                  ...prev,
+                  citations,
+                }
+              : null,
           );
         },
         onToken: (token) => {
@@ -547,19 +591,19 @@ export const App: React.FC = () => {
           setStreamingMessage((prev) =>
             prev
               ? {
-                ...prev,
-                content: accumulatedText,
-                citations: receivedCitations,
-                isStreaming: true,
-              }
-              : null
+                  ...prev,
+                  content: accumulatedText,
+                  citations: receivedCitations,
+                  isStreaming: true,
+                }
+              : null,
           );
         },
         onError: (errMsg) => {
           if (abortController.signal.aborted) return;
           abortControllerRef.current = null;
           setStreamingMessage({
-            role: 'assistant',
+            role: "assistant",
             content: `Error: ${errMsg}`,
             citations: null,
             isStreaming: false,
@@ -574,7 +618,7 @@ export const App: React.FC = () => {
           const finishedAssistantMsg: Message = {
             id: `asst-${Date.now()}`,
             session_id: targetSessionId,
-            role: 'assistant',
+            role: "assistant",
             content: accumulatedText,
             citations: receivedCitations,
             created_at: new Date().toISOString(),
@@ -588,16 +632,16 @@ export const App: React.FC = () => {
           if (currentUser?.id) {
             try {
               const freshSessions = await apiService.listSessions(
-                currentUser.id
+                currentUser.id,
               );
               setSessions(freshSessions || []);
             } catch (err) {
-              console.error('Failed to sync sessions list:', err);
+              console.error("Failed to sync sessions list:", err);
             }
           }
         },
       },
-      abortController.signal
+      abortController.signal,
     );
   };
 
@@ -610,7 +654,7 @@ export const App: React.FC = () => {
   const handleLogin = async (usernameOrEmail: string, password: string) => {
     const user = await apiService.login(usernameOrEmail, password);
     setCurrentUser(user);
-    localStorage.setItem('contexify_user', JSON.stringify(user));
+    localStorage.setItem("contexify_user", JSON.stringify(user));
     setIsUserModalOpen(false);
     setActiveSessionId(null);
     await loadSessions(user.id);
@@ -619,7 +663,7 @@ export const App: React.FC = () => {
   const handleLoginWithOtp = async (usernameOrEmail: string, otp: string) => {
     const user = await apiService.loginWithOtp(usernameOrEmail, otp);
     setCurrentUser(user);
-    localStorage.setItem('contexify_user', JSON.stringify(user));
+    localStorage.setItem("contexify_user", JSON.stringify(user));
     setIsUserModalOpen(false);
     setActiveSessionId(null);
     await loadSessions(user.id);
@@ -628,7 +672,7 @@ export const App: React.FC = () => {
   const handleGoogleAuth = async (data: GoogleAuthRequest) => {
     const user = await apiService.loginWithGoogle(data);
     setCurrentUser(user);
-    localStorage.setItem('contexify_user', JSON.stringify(user));
+    localStorage.setItem("contexify_user", JSON.stringify(user));
     setIsUserModalOpen(false);
     setActiveSessionId(null);
     await loadSessions(user.id);
@@ -645,42 +689,52 @@ export const App: React.FC = () => {
   const handleResetPasswordWithOtp = async (
     usernameOrEmail: string,
     otp: string,
-    newPassword: string
+    newPassword: string,
   ) => {
-    return await apiService.resetPasswordWithOtp(usernameOrEmail, otp, newPassword);
+    return await apiService.resetPasswordWithOtp(
+      usernameOrEmail,
+      otp,
+      newPassword,
+    );
   };
 
   const handleRegister = async (
     displayName: string,
     username: string,
     email: string,
-    password: string
+    password: string,
   ) => {
     const user = await apiService.register(
       displayName,
       username,
       email,
-      password
+      password,
     );
     setCurrentUser(user);
-    localStorage.setItem('contexify_user', JSON.stringify(user));
+    localStorage.setItem("contexify_user", JSON.stringify(user));
     setIsUserModalOpen(false);
     setActiveSessionId(null);
     await loadSessions(user.id);
   };
 
-  const handleUpdateProfile = async (displayName: string, avatarColor: string) => {
+  const handleUpdateProfile = async (
+    displayName: string,
+    avatarColor: string,
+  ) => {
     if (!currentUser?.id) return;
     const updated = await apiService.updateUserProfile(
       currentUser.id,
       displayName,
-      avatarColor
+      avatarColor,
     );
     setCurrentUser(updated);
-    localStorage.setItem('contexify_user', JSON.stringify(updated));
+    localStorage.setItem("contexify_user", JSON.stringify(updated));
   };
 
-  const handleChangePassword = async (oldPassword: string, newPassword: string) => {
+  const handleChangePassword = async (
+    oldPassword: string,
+    newPassword: string,
+  ) => {
     if (!currentUser?.id) return;
     await apiService.changePassword(currentUser.id, oldPassword, newPassword);
   };
@@ -689,26 +743,26 @@ export const App: React.FC = () => {
     if (!currentUser?.id) return;
     const updated = await apiService.uploadAvatar(currentUser.id, file);
     setCurrentUser(updated);
-    localStorage.setItem('contexify_user', JSON.stringify(updated));
+    localStorage.setItem("contexify_user", JSON.stringify(updated));
   };
 
   const handleDeleteAvatar = async () => {
     if (!currentUser?.id) return;
     const updated = await apiService.deleteAvatar(currentUser.id);
     setCurrentUser(updated);
-    localStorage.setItem('contexify_user', JSON.stringify(updated));
+    localStorage.setItem("contexify_user", JSON.stringify(updated));
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('contexify_user');
-    localStorage.removeItem('contexify_active_session');
+    localStorage.removeItem("contexify_user");
+    localStorage.removeItem("contexify_active_session");
     setCurrentUser(null);
     setSessions([]);
     setMessages([]);
     setDocuments([]);
     setActiveSessionId(generateGuestSessionId());
     setIsUserModalOpen(false);
-    setMode('light');
+    setMode("light");
   };
 
   const handleContinueAsGuest = () => {
@@ -716,7 +770,7 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-(--bg-app) text-(--text-main) font-sans relative">
+    <div className="flex h-dvh w-screen overflow-hidden bg-(--bg-app) text-(--text-main) font-sans relative">
       {/* Mobile Drawer Backdrop Overlay */}
       {isSidebarOpen && (
         <div
@@ -731,7 +785,7 @@ export const App: React.FC = () => {
         onToggleSidebar={handleToggleSidebar}
         onCloseMobile={() => setIsSidebarOpen(false)}
         currentUser={currentUser}
-        onOpenUserModal={() => handleOpenUserModal('login')}
+        onOpenUserModal={() => handleOpenUserModal("login")}
         onLogout={handleLogout}
         sessions={sessions}
         activeSessionId={activeSessionId}
@@ -788,5 +842,3 @@ export const App: React.FC = () => {
 };
 
 export default App;
-
-

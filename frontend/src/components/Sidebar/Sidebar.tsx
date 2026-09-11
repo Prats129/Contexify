@@ -1,10 +1,10 @@
-import React from 'react';
-import { LuPlus, LuX } from 'react-icons/lu';
-import { FiSidebar } from 'react-icons/fi';
-import { UserProfileCard } from './UserProfileCard';
-import { SessionHistory } from './SessionHistory';
-import { DocumentList } from './DocumentList';
-import type { User, ChatSession, DocumentMetadata } from '../../types';
+import React from "react";
+import { LuPlus, LuX } from "react-icons/lu";
+import { FiSidebar } from "react-icons/fi";
+import { UserProfileCard } from "./UserProfileCard";
+import { SessionHistory } from "./SessionHistory";
+import { DocumentList } from "./DocumentList";
+import type { User, ChatSession, DocumentMetadata } from "../../types";
 
 interface SidebarProps {
   isOpen: boolean;
@@ -39,17 +39,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   return (
     <aside
-      className={`h-screen bg-(--bg-sidebar) border-r border-(--border-subtle) flex flex-col gap-3 shrink-0 overflow-y-auto overflow-x-hidden transition-[transform,width] duration-200 ease-in-out
+      className={`h-full max-h-dvh bg-(--bg-sidebar) border-r border-(--border-subtle) flex flex-col gap-3 shrink-0 overflow-y-auto overflow-x-hidden transition-[transform,width] duration-200 ease-in-out
         max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-50 max-md:w-72 max-md:p-3.5 max-md:shadow-2xl
-        ${isOpen ? 'max-md:translate-x-0' : 'max-md:-translate-x-full max-md:pointer-events-none'}
+        ${isOpen ? "max-md:translate-x-0" : "max-md:-translate-x-full max-md:pointer-events-none"}
         md:relative md:translate-x-0 md:pointer-events-auto md:shadow-none
-        ${isOpen ? 'md:w-72 md:p-3.5' : 'md:w-16 md:p-2.5 md:items-center'}
+        ${isOpen ? "md:w-72 md:p-3.5" : "md:w-16 md:p-2.5 md:items-center"}
       `}
     >
       {/* Brand & Toggle Sidebar Button */}
       <div
         className={`flex items-center pb-2.5 border-b border-(--border-subtle) w-full ${
-          isOpen ? 'justify-between gap-2' : 'justify-center'
+          isOpen ? "justify-between gap-2" : "justify-center"
         }`}
       >
         {isOpen ? (
@@ -70,7 +70,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <h1 className="text-sm font-bold text-(--text-main) truncate leading-tight group-hover:text-primary-theme transition-colors">
                   Contexify AI
                 </h1>
-                <span className="text-[11px] text-(--text-muted) truncate">Enterprise RAG & Search</span>
+                <span className="text-[11px] text-(--text-muted) truncate">
+                  Enterprise RAG & Search
+                </span>
               </div>
             </button>
 
@@ -105,7 +107,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
             title="Expand sidebar"
           >
             <div className="w-10 h-10 flex items-center justify-center shrink-0 group-hover:hidden">
-              <img src="/logo.png" alt="Contexify Logo" className="w-full h-full object-contain" />
+              <img
+                src="/logo.png"
+                alt="Contexify Logo"
+                className="w-full h-full object-contain"
+              />
             </div>
             <div className="hidden group-hover:flex w-8 h-8 rounded-lg items-center justify-center text-(--text-main) border border-(--border-subtle) bg-(--border-hover)">
               <FiSidebar size={18} />
@@ -116,11 +122,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* New Conversation Button (Logged-in users only) */}
       {currentUser && (
-        <div className={`${isOpen ? 'w-full' : 'w-10'} flex justify-center`}>
+        <div className={`${isOpen ? "w-full" : "w-10"} flex justify-center`}>
           <button
             type="button"
-            className={`w-full flex items-center justify-center gap-2 bg-primary-theme hover:opacity-90 text-white font-semibold rounded-lg cursor-pointer ${isOpen ? 'py-2.5 px-3 text-xs' : 'h-10 w-10 p-0 text-sm'
-              }`}
+            className={`w-full flex items-center justify-center gap-2 bg-primary-theme hover:opacity-90 text-white font-semibold rounded-lg cursor-pointer ${
+              isOpen ? "py-2.5 px-3 text-xs" : "h-10 w-10 p-0 text-sm"
+            }`}
             onClick={onNewSession}
             title="New Conversation"
           >

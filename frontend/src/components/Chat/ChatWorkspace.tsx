@@ -1,9 +1,9 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { LuCloudUpload } from 'react-icons/lu';
-import { ChatHeader } from './ChatHeader';
-import { MessageList } from './MessageList';
-import { ChatInput } from './ChatInput';
-import { SourcesPopover } from './SourcesPopover';
+import React, { useState, useRef, useEffect, useCallback } from "react";
+import { LuCloudUpload } from "react-icons/lu";
+import { ChatHeader } from "./ChatHeader";
+import { MessageList } from "./MessageList";
+import { ChatInput } from "./ChatInput";
+import { SourcesPopover } from "./SourcesPopover";
 import type {
   ChatMode,
   Message,
@@ -11,7 +11,7 @@ import type {
   DocumentMetadata,
   User,
   Citation,
-} from '../../types';
+} from "../../types";
 
 interface ChatWorkspaceProps {
   currentMode: ChatMode;
@@ -30,7 +30,7 @@ interface ChatWorkspaceProps {
   documents: DocumentMetadata[];
   onDeleteDocument: (documentId: string) => void;
   currentUser: User | null;
-  onOpenUserModal: (tab?: 'login' | 'register') => void;
+  onOpenUserModal: (tab?: "login" | "register") => void;
   onClearChat?: () => void;
   onToggleSidebar?: () => void;
 }
@@ -98,7 +98,7 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
       if (
         e.dataTransfer?.types &&
         Array.from(e.dataTransfer.types).some(
-          (t) => t === 'Files' || t === 'application/x-moz-file'
+          (t) => t === "Files" || t === "application/x-moz-file",
         )
       ) {
         setIsDragging(true);
@@ -119,7 +119,7 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
       e.preventDefault();
       e.stopPropagation();
       if (e.dataTransfer) {
-        e.dataTransfer.dropEffect = 'copy';
+        e.dataTransfer.dropEffect = "copy";
       }
     };
 
@@ -137,23 +137,24 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
       }
     };
 
-    window.addEventListener('dragenter', handleDragEnter);
-    window.addEventListener('dragleave', handleDragLeave);
-    window.addEventListener('dragover', handleDragOver);
-    window.addEventListener('drop', handleDrop);
+    window.addEventListener("dragenter", handleDragEnter);
+    window.addEventListener("dragleave", handleDragLeave);
+    window.addEventListener("dragover", handleDragOver);
+    window.addEventListener("drop", handleDrop);
 
     return () => {
-      window.removeEventListener('dragenter', handleDragEnter);
-      window.removeEventListener('dragleave', handleDragLeave);
-      window.removeEventListener('dragover', handleDragOver);
-      window.removeEventListener('drop', handleDrop);
+      window.removeEventListener("dragenter", handleDragEnter);
+      window.removeEventListener("dragleave", handleDragLeave);
+      window.removeEventListener("dragover", handleDragOver);
+      window.removeEventListener("drop", handleDrop);
     };
   }, [onFileUpload]);
 
   return (
     <main
-      className={`flex-1 flex flex-col bg-(--bg-app) text-(--text-main) relative overflow-hidden h-screen ${isDragging ? 'ring-2 border-primary-theme ring-inset' : ''
-        }`}
+      className={`flex-1 flex flex-col bg-(--bg-app) text-(--text-main) relative overflow-hidden h-full max-h-dvh ${
+        isDragging ? "ring-2 border-primary-theme ring-inset" : ""
+      }`}
     >
       {/* Drag & Drop Visual Overlay */}
       {isDragging && (
@@ -162,8 +163,12 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
             <div className="w-16 h-16 rounded-full bg-primary-light-theme flex items-center justify-center text-primary-theme text-3xl animate-bounce">
               <LuCloudUpload size={32} />
             </div>
-            <h3 className="text-xl font-bold text-(--text-main)">Drop your files here</h3>
-            <p className="text-xs text-(--text-muted)">PDF, TXT, MD, CSV, JSON or images to attach to this chat</p>
+            <h3 className="text-xl font-bold text-(--text-main)">
+              Drop your files here
+            </h3>
+            <p className="text-xs text-(--text-muted)">
+              PDF, TXT, MD, CSV, JSON or images to attach to this chat
+            </p>
           </div>
         </div>
       )}
@@ -179,8 +184,9 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
 
       {/* Main Workspace: Chat Column + Sources Card anchored to right */}
       <div
-        className={`flex-1 flex overflow-hidden w-full transition-all duration-150 ${activeSources ? 'lg:justify-between justify-center' : 'justify-center'
-          }`}
+        className={`flex-1 flex overflow-hidden w-full transition-all duration-150 ${
+          activeSources ? "lg:justify-between justify-center" : "justify-center"
+        }`}
       >
         {/* Main Conversation Column: MessageList + ChatInput */}
         <div className="flex-1 flex flex-col h-full min-w-0 w-full">
@@ -194,8 +200,10 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
             activeSources={!!activeSources}
           />
 
-          <div className="w-full shrink-0 px-2 sm:px-6 pb-2 pb-safe">
-            <div className={`mx-auto ${activeSources ? 'max-w-4xl lg:mr-auto lg:ml-4' : 'max-w-3xl'}`}>
+          <div className="w-full shrink-0 px-2 sm:px-6 pb-3.5 sm:pb-4 pb-safe">
+            <div
+              className={`mx-auto ${activeSources ? "max-w-4xl lg:mr-auto lg:ml-4" : "max-w-3xl"}`}
+            >
               <ChatInput
                 inputQuery={inputQuery}
                 setInputQuery={setInputQuery}
@@ -216,7 +224,9 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
 
         {/* Perplexity Sources Panel (Desktop side panel + Mobile bottom sheet handled internally) */}
         {activeSources && (
-          <div className={`shrink-0 lg:sticky lg:top-2 lg:h-fit lg:pt-4 lg:pl-4 ${isSourcesCollapsed ? 'lg:mr-2' : 'lg:mr-8'} animate-[fadeIn_0.15s_ease-out]`}>
+          <div
+            className={`shrink-0 lg:sticky lg:top-2 lg:h-fit lg:pt-4 lg:pl-4 ${isSourcesCollapsed ? "lg:mr-2" : "lg:mr-8"} animate-[fadeIn_0.15s_ease-out]`}
+          >
             <SourcesPopover
               isOpen={!!activeSources}
               onHide={handleHideSources}

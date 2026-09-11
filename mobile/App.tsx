@@ -15,6 +15,8 @@ import {
   TouchableOpacity,
   Alert,
   Image,
+  Keyboard,
+  TouchableWithoutFeedback,
 } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
@@ -97,6 +99,18 @@ export default function App() {
   // --- 1. App Initialization ---
   useEffect(() => {
     initApp();
+  }, []);
+
+  // --- Keyboard Auto-scroll (ChatGPT behavior: scroll messages when keyboard appears) ---
+  useEffect(() => {
+    const showEvent =
+      Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
+    const sub = Keyboard.addListener(showEvent, () => {
+      setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: true });
+      }, 100);
+    });
+    return () => sub.remove();
   }, []);
 
   const initApp = async () => {
@@ -430,114 +444,132 @@ export default function App() {
 
         {/* Main Chat Workspace */}
         <KeyboardAvoidingView
-          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          behavior="padding"
           style={styles.workspace}
-          keyboardVerticalOffset={Platform.OS === "ios" ? 8 : 0}
+          keyboardVerticalOffset={Platform.OS === "ios" ? 54 : 0}
         >
           {/* Welcome Screen if empty */}
           {messages.length === 0 && !streamingMessage ? (
-            <View style={styles.welcomeContainer}>
-              <View style={styles.welcomeBrandGroup}>
-                <Image
-                  source={require("./assets/logo.png")}
-                  style={styles.welcomeLogo}
-                  resizeMode="contain"
-                />
-                <Text style={[styles.welcomeTitle, { color: theme.textMain }]}>
-                  Contexify AI
+            <TouchableWithoutFeedback
+              onPress={Keyboard.dismiss}
+              accessible={false}
+            >
+              <View style={styles.welcomeContainer}>
+                <View style={styles.welcomeBrandGroup}>
+                  <Image
+                    source={require("./assets/logo.png")}
+                    style={styles.welcomeLogo}
+                    resizeMode="contain"
+                  />
+                  <Text
+                    style={[styles.welcomeTitle, { color: theme.textMain }]}
+                  >
+                    Contexify AI
+                  </Text>
+                </View>
+                <Text
+                  style={[styles.welcomeSubtitle, { color: theme.textMuted }]}
+                >
+                  Ask grounded questions with real-time web search or attach
+                  files for instant document RAG.
                 </Text>
+
+                {/* Starter Prompt Chips */}
+                <View style={styles.starterChipsRow}>
+                  <TouchableOpacity
+                    style={[
+                      styles.starterChip,
+                      {
+                        backgroundColor: theme.bgCard,
+                        borderColor: theme.borderSubtle,
+                      },
+                    ]}
+                    onPress={() =>
+                      handleSendMessage(
+                        "Summarize key points covered in the document.",
+                      )
+                    }
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="list" size={14} color={theme.primary} />
+                    <Text
+                      style={[
+                        styles.starterChipText,
+                        { color: theme.textMain },
+                      ]}
+                    >
+                      Summarize Document
+                    </Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[
+                      styles.starterChip,
+                      {
+                        backgroundColor: theme.bgCard,
+                        borderColor: theme.borderSubtle,
+                      },
+                    ]}
+                    onPress={() =>
+                      handleSendMessage("Explain the main technical concepts.")
+                    }
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons
+                      name="hardware-chip-outline"
+                      size={14}
+                      color={theme.primary}
+                    />
+                    <Text
+                      style={[
+                        styles.starterChipText,
+                        { color: theme.textMain },
+                      ]}
+                    >
+                      Key Concepts
+                    </Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[
+                      styles.starterChip,
+                      {
+                        backgroundColor: theme.bgCard,
+                        borderColor: theme.borderSubtle,
+                      },
+                    ]}
+                    onPress={() =>
+                      handleSendMessage(
+                        "Search the web for the latest updates on this topic.",
+                      )
+                    }
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons
+                      name="globe-outline"
+                      size={14}
+                      color={theme.emerald}
+                    />
+                    <Text
+                      style={[
+                        styles.starterChipText,
+                        { color: theme.textMain },
+                      ]}
+                    >
+                      Search Live Web
+                    </Text>
+                  </TouchableOpacity>
+                </View>
               </View>
-              <Text
-                style={[styles.welcomeSubtitle, { color: theme.textMuted }]}
-              >
-                Ask grounded questions with real-time web search or attach files
-                for instant document RAG.
-              </Text>
-
-              {/* Starter Prompt Chips */}
-              <View style={styles.starterChipsRow}>
-                <TouchableOpacity
-                  style={[
-                    styles.starterChip,
-                    {
-                      backgroundColor: theme.bgCard,
-                      borderColor: theme.borderSubtle,
-                    },
-                  ]}
-                  onPress={() =>
-                    handleSendMessage(
-                      "Summarize key points covered in the document.",
-                    )
-                  }
-                  activeOpacity={0.8}
-                >
-                  <Ionicons name="list" size={14} color={theme.primary} />
-                  <Text
-                    style={[styles.starterChipText, { color: theme.textMain }]}
-                  >
-                    Summarize Document
-                  </Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[
-                    styles.starterChip,
-                    {
-                      backgroundColor: theme.bgCard,
-                      borderColor: theme.borderSubtle,
-                    },
-                  ]}
-                  onPress={() =>
-                    handleSendMessage("Explain the main technical concepts.")
-                  }
-                  activeOpacity={0.8}
-                >
-                  <Ionicons
-                    name="hardware-chip-outline"
-                    size={14}
-                    color={theme.primary}
-                  />
-                  <Text
-                    style={[styles.starterChipText, { color: theme.textMain }]}
-                  >
-                    Key Concepts
-                  </Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[
-                    styles.starterChip,
-                    {
-                      backgroundColor: theme.bgCard,
-                      borderColor: theme.borderSubtle,
-                    },
-                  ]}
-                  onPress={() =>
-                    handleSendMessage(
-                      "Search the web for the latest updates on this topic.",
-                    )
-                  }
-                  activeOpacity={0.8}
-                >
-                  <Ionicons
-                    name="globe-outline"
-                    size={14}
-                    color={theme.emerald}
-                  />
-                  <Text
-                    style={[styles.starterChipText, { color: theme.textMain }]}
-                  >
-                    Search Live Web
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            </View>
+            </TouchableWithoutFeedback>
           ) : (
             <FlatList
               ref={flatListRef}
               data={messages}
               keyExtractor={(item) => item.id}
               contentContainerStyle={styles.messageListContent}
+              keyboardDismissMode="on-drag"
+              keyboardShouldPersistTaps="handled"
               onContentSizeChange={() =>
                 flatListRef.current?.scrollToEnd({ animated: true })
               }

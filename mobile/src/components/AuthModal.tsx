@@ -244,7 +244,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       onRequestClose={handleClose}
     >
       <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
         style={styles.keyboardContainer}
       >
         <Pressable style={styles.backdrop} onPress={handleClose}>

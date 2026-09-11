@@ -92,7 +92,7 @@ export const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
       onRequestClose={onClose}
     >
       <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
         style={styles.container}
       >
         <Pressable style={styles.backdrop} onPress={onClose}>
