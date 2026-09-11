@@ -218,7 +218,38 @@ Run these commands from the repository root:
 | `npm run deploy:mobile`  | 🚀 1-command build: generates free standalone Android APK installer.                     |
 | `npm run deploy:mobile:bundle` | Builds production Android App Bundle (.aab) for Google Play Console.               |
 | `npm run deploy:mobile:ios`    | Builds iOS production IPA for Apple TestFlight / App Store.                         |
+| `npm run update:mobile`  | ⚡ Instant Over-The-Air (OTA) update: pushes new UI/features directly to phones without new APK. |
 | `npm run db:reset`       | Drops and re-initializes all local database tables.                                      |
+
+---
+
+## 📲 Mobile Deployment & Over-The-Air (OTA) Updates
+
+Contexify Mobile supports automated cloud builds and zero-downtime **Over-The-Air (OTA)** updates powered by EAS:
+
+### 1. Daily Development & Instant Updates (No APK Download Needed)
+Whenever you make UI improvements, fix bugs, or add new frontend features:
+```bash
+npm run update:mobile
+# Or double-click: update_mobile.bat
+```
+* **Takes ~15-30 seconds** to upload your code bundle.
+* When users open the app on their phone, it **silently downloads and applies the changes automatically over Wi-Fi/cellular**.
+* **Zero APK downloads or reinstalls required!**
+
+### 2. Standalone APK Builds (First-Time Installation)
+When installing Contexify on a new Android device for the first time, or after modifying native Android configurations:
+```bash
+npm run deploy:mobile
+# Or double-click: deploy_mobile.bat
+```
+* Builds a 100% free standalone `.apk` in the Expo cloud.
+* Scan the terminal QR code or open the link on your phone to download and install.
+* *(Note: If the CLI asks `Run build on an Android emulator? (Y/n)`, enter `n` to get the direct mobile download link).*
+
+### 3. Backend Updates (Render)
+* If you only make changes to the Python FastAPI backend, database, or RAG pipeline on Render:
+* **No mobile rebuild or update is needed!** The mobile app immediately connects to the updated backend APIs in real time.
 
 ---
 
