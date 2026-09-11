@@ -6,7 +6,7 @@ backend_dir = Path(__file__).resolve().parent.parent
 if str(backend_dir) not in sys.path:
     sys.path.insert(0, str(backend_dir))
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.logging import logger
@@ -52,7 +52,7 @@ if frontend_dist.exists() and (frontend_dist / "index.html").exists():
     @app.get("/{full_path:path}")
     async def serve_frontend(full_path: str):
         if full_path.startswith("api/") or full_path.startswith("docs") or full_path.startswith("redoc") or full_path.startswith("openapi.json"):
-            return None
+            raise HTTPException(status_code=404, detail="Not Found")
         candidate = frontend_dist / full_path
         if candidate.is_file():
             return FileResponse(candidate)

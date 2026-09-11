@@ -1,0 +1,28 @@
+{
+  "expo": {
+    "name": "Contexify AI",
+    "slug": "contexify",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "backgroundColor": "#030712",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "ai.contexify.app"
+    },
+    "android": {
+      "package": "ai.contexify.app",
+      "adaptiveIcon": {
+        "backgroundColor": "#030712",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}
