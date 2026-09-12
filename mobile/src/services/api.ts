@@ -52,10 +52,59 @@ export const resetApiBaseUrl = async () => {
   await AsyncStorage.removeItem('contexify_server_url');
 };
 
-const getEndpoint = async (path: string): Promise<string> => {
+const getCleanHost = async (): Promise<string> => {
   const base = await getApiBaseUrl();
-  return `${base}/api/v1${path}`;
+  return base.replace(/\/api\/v1\/?$/, '').replace(/\/+$/, '');
 };
+
+const getEndpoint = async (path: string): Promise<string> => {
+  const host = await getCleanHost();
+  const cleanPath = path.startsWith('/') ? path : `/${path}`;
+  return `${host}/api/v1${cleanPath}`;
+};
+
+/**
+ * Upload multipart form data using native XMLHttpRequest.
+ * Bypasses Expo 57's WinterCG fetch polyfill which throws
+ * "Unsupported FormDataPart implementation" when passing React Native's { uri, name, type } object.
+ */
+function uploadMultipart<T>(url: string, formData: FormData): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', url, true);
+    xhr.timeout = 60000;
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const data = JSON.parse(xhr.responseText);
+          resolve(data);
+        } catch {
+          resolve(xhr.responseText as any);
+        }
+      } else {
+        let errorDetail = `Upload failed (${xhr.status})`;
+        try {
+          const err = JSON.parse(xhr.responseText);
+          if (err.detail) {
+            errorDetail = typeof err.detail === 'string' ? err.detail : JSON.stringify(err.detail);
+          }
+        } catch {}
+        reject(new Error(errorDetail));
+      }
+    };
+
+    xhr.onerror = () => {
+      reject(new Error('Network error during file upload. Please verify backend connection.'));
+    };
+
+    xhr.ontimeout = () => {
+      reject(new Error('File upload timed out. Please try again.'));
+    };
+
+    xhr.send(formData);
+  });
+}
 
 export interface StreamHandlers {
   onToken: (token: string) => void;
@@ -193,31 +242,47 @@ export const apiService = {
     return res.json();
   },
 
+  async getCurrentUser(userId: string): Promise<User | null> {
+    try {
+      const url = await getEndpoint(`/user/me?user_id=${encodeURIComponent(userId)}`);
+      const res = await fetch(url);
+      if (!res.ok) return null;
+      return res.json();
+    } catch {
+      return null;
+    }
+  },
+
   async uploadAvatar(
     userId: string,
     fileUri: string,
     fileName: string,
-    mimeType: string = 'image/png'
+    mimeType: string = 'image/jpeg'
   ): Promise<User> {
+    let safeName = fileName || 'avatar.jpg';
+    if (!/\.(png|jpe?g|webp|gif)$/i.test(safeName)) {
+      const ext = mimeType.includes('png')
+        ? '.png'
+        : mimeType.includes('webp')
+          ? '.webp'
+          : mimeType.includes('gif')
+            ? '.gif'
+            : '.jpg';
+      safeName = `${safeName}${ext}`;
+    }
+
+    // Native XMLHttpRequest multipart upload directly to /user/avatar.
+    // Universally supported by Render and local backends. Bypasses Expo 57 fetch polyfill.
     const url = await getEndpoint('/user/avatar');
     const formData = new FormData();
     formData.append('user_id', userId);
     formData.append('file', {
       uri: fileUri,
-      name: fileName,
-      type: mimeType,
+      name: safeName,
+      type: mimeType || 'image/jpeg',
     } as any);
 
-    const res = await fetch(url, {
-      method: 'POST',
-      body: formData,
-    });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ detail: 'Failed to upload profile photo' }));
-      throw new Error(err.detail || 'Failed to upload profile photo');
-    }
-    return res.json();
+    return uploadMultipart<User>(url, formData);
   },
 
   async deleteAvatar(userId: string): Promise<User> {
@@ -233,10 +298,25 @@ export const apiService = {
   },
 
   async resolveAvatarUrl(avatarUrl?: string | null): Promise<string | null> {
-    if (!avatarUrl) return null;
-    if (avatarUrl.startsWith('http')) return avatarUrl;
-    const base = await getApiBaseUrl();
-    return `${base}${avatarUrl}`;
+    if (!avatarUrl || !avatarUrl.trim()) return null;
+    let clean = avatarUrl.trim();
+
+    // Dicebear SVGs cannot be decoded natively by React Native <Image>.
+    // Convert /svg to /png format supported directly by Dicebear CDN.
+    if (clean.includes('api.dicebear.com') && clean.includes('/svg')) {
+      clean = clean.replace('/svg', '/png');
+    }
+
+    if (clean.startsWith('http://') || clean.startsWith('https://')) {
+      return clean;
+    }
+
+    const host = await getCleanHost();
+    const path = clean.startsWith('/') ? clean : `/${clean}`;
+    if (!path.startsWith('/api/v1')) {
+      return `${host}/api/v1${path}`;
+    }
+    return `${host}${path}`;
   },
 
   // --- Sessions & History ---
@@ -324,20 +404,14 @@ export const apiService = {
     }
     formData.append('file', {
       uri: fileUri,
-      name: fileName,
-      type: mimeType,
+      name: fileName || 'document.pdf',
+      type: mimeType || 'application/octet-stream',
     } as any);
 
-    const res = await fetch(url, {
-      method: 'POST',
-      body: formData,
-    });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ detail: 'Failed to upload document' }));
-      throw new Error(err.detail || 'Failed to upload document');
-    }
-    const data = await res.json();
+    const data = await uploadMultipart<{ document?: DocumentMetadata } & DocumentMetadata>(
+      url,
+      formData
+    );
     return data.document || data;
   },
 

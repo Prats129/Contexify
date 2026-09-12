@@ -58,6 +58,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
 
   // Avatar states
   const [resolvedAvatar, setResolvedAvatar] = useState<string | null>(null);
+  const [avatarLoadError, setAvatarLoadError] = useState(false);
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
   const [isRemovingAvatar, setIsRemovingAvatar] = useState(false);
 
@@ -133,11 +134,11 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   useEffect(() => {
     if (currentUser) {
       setDisplayName(currentUser.display_name || "");
-      setStatusMessage(null);
       setOldPassword("");
       setNewPassword("");
       setShowPasswordSection(false);
 
+      setAvatarLoadError(false);
       if (currentUser.avatar_url) {
         apiService
           .resolveAvatarUrl(currentUser.avatar_url)
@@ -146,7 +147,21 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
         setResolvedAvatar(null);
       }
     }
-  }, [currentUser, visible]);
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (visible) {
+      setStatusMessage(null);
+      if (currentUser?.id) {
+        apiService
+          .getCurrentUser(currentUser.id)
+          .then((fresh) => {
+            if (fresh) onProfileUpdated(fresh);
+          })
+          .catch(() => {});
+      }
+    }
+  }, [visible]);
 
   if (!currentUser) return null;
 
@@ -206,44 +221,63 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       const res = await DocumentPicker.getDocumentAsync({
-        type: [
-          "image/png",
-          "image/jpeg",
-          "image/jpg",
-          "image/webp",
-          "image/gif",
-        ],
+        type: "image/*",
         copyToCacheDirectory: true,
       });
 
-      if (!res.canceled && res.assets && res.assets.length > 0) {
-        const file = res.assets[0];
-        setIsUploadingAvatar(true);
-        setStatusMessage(null);
-
-        const updated = await apiService.uploadAvatar(
-          currentUser.id,
-          file.uri,
-          file.name,
-          file.mimeType || "image/png",
-        );
-        onProfileUpdated(updated);
-        if (updated.avatar_url) {
-          const resolved = await apiService.resolveAvatarUrl(
-            updated.avatar_url,
-          );
-          setResolvedAvatar(resolved);
-        }
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        setStatusMessage({
-          text: "Profile picture updated successfully!",
-          isError: false,
-        });
+      if (res.canceled) {
+        return;
       }
+
+      if (!res.assets || res.assets.length === 0) {
+        Alert.alert(
+          "No Image Selected",
+          "Please choose a valid photo from your gallery.",
+        );
+        return;
+      }
+
+      const file = res.assets[0];
+
+      // Check file size (max 2MB)
+      if (file.size && file.size > 2 * 1024 * 1024) {
+        const sizeMb = (file.size / (1024 * 1024)).toFixed(1);
+        const errText = `Selected photo is too large (${sizeMb}MB). The maximum allowed image size is 2MB.`;
+        setStatusMessage({ text: errText, isError: true });
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        Alert.alert("Image Too Large", errText);
+        return;
+      }
+
+      setIsUploadingAvatar(true);
+      setStatusMessage(null);
+      setAvatarLoadError(false);
+
+      const updated = await apiService.uploadAvatar(
+        currentUser.id,
+        file.uri,
+        file.name,
+        file.mimeType || "image/jpeg",
+      );
+      onProfileUpdated(updated);
+      if (updated.avatar_url) {
+        const resolved = await apiService.resolveAvatarUrl(updated.avatar_url);
+        setResolvedAvatar(resolved);
+      } else {
+        setResolvedAvatar(null);
+      }
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      const successMsg = "Profile picture uploaded and updated successfully!";
+      setStatusMessage({
+        text: successMsg,
+        isError: false,
+      });
+      Alert.alert("Upload Successful", successMsg);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       setStatusMessage({ text: msg, isError: true });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      Alert.alert("Upload Failed", msg);
     } finally {
       setIsUploadingAvatar(false);
     }
@@ -258,12 +292,16 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
       const updated = await apiService.deleteAvatar(currentUser.id);
       onProfileUpdated(updated);
       setResolvedAvatar(null);
+      setAvatarLoadError(false);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      setStatusMessage({ text: "Profile picture removed.", isError: false });
+      const removeMsg = "Profile picture removed successfully.";
+      setStatusMessage({ text: removeMsg, isError: false });
+      Alert.alert("Removed", removeMsg);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       setStatusMessage({ text: msg, isError: true });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      Alert.alert("Failed to Remove", msg);
     } finally {
       setIsRemovingAvatar(false);
     }
@@ -434,10 +472,19 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
                     },
                   ]}
                 >
-                  {resolvedAvatar ? (
+                  {resolvedAvatar && !avatarLoadError ? (
                     <Image
+                      key={resolvedAvatar}
                       source={{ uri: resolvedAvatar }}
                       style={styles.largeAvatarImg}
+                      resizeMode="cover"
+                      onError={() => {
+                        console.warn(
+                          "Avatar image failed to load, falling back to initials:",
+                          resolvedAvatar,
+                        );
+                        setAvatarLoadError(true);
+                      }}
                     />
                   ) : (
                     <Text style={styles.largeAvatarText}>

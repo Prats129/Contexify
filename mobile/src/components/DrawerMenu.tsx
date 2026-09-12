@@ -63,6 +63,7 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
   const [isChatsExpanded, setIsChatsExpanded] = useState(true);
   const [isDocsExpanded, setIsDocsExpanded] = useState(true);
   const [resolvedAvatar, setResolvedAvatar] = useState<string | null>(null);
+  const [avatarLoadError, setAvatarLoadError] = useState(false);
 
   const translateX = useRef(new Animated.Value(-340)).current;
 
@@ -127,6 +128,7 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
   ).current;
 
   useEffect(() => {
+    setAvatarLoadError(false);
     if (currentUser?.avatar_url) {
       apiService
         .resolveAvatarUrl(currentUser.avatar_url)
@@ -134,7 +136,7 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
     } else {
       setResolvedAvatar(null);
     }
-  }, [currentUser?.avatar_url]);
+  }, [currentUser?.avatar_url, visible]);
 
   const handleSelect = (id: string) => {
     Haptics.selectionAsync();
@@ -416,10 +418,19 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
                     },
                   ]}
                 >
-                  {resolvedAvatar ? (
+                  {resolvedAvatar && !avatarLoadError ? (
                     <Image
+                      key={resolvedAvatar}
                       source={{ uri: resolvedAvatar }}
                       style={styles.userAvatarImage}
+                      resizeMode="cover"
+                      onError={() => {
+                        console.warn(
+                          "Drawer avatar image failed to load:",
+                          resolvedAvatar,
+                        );
+                        setAvatarLoadError(true);
+                      }}
                     />
                   ) : (
                     <Text style={styles.userAvatarText}>

@@ -99,17 +99,28 @@ async def upload_avatar(
     Upload and update a custom user profile picture.
     Maximum file size: 2MB. Allowed formats: PNG, JPG, JPEG, WEBP, GIF.
     """
+    filename = file.filename or "avatar.png"
+    if "." not in filename and file.content_type:
+        ext_map = {
+            "image/jpeg": ".jpg",
+            "image/jpg": ".jpg",
+            "image/png": ".png",
+            "image/webp": ".webp",
+            "image/gif": ".gif"
+        }
+        filename = f"{filename}{ext_map.get(file.content_type, '.jpg')}"
+
     file_bytes = await file.read()
     return user_service.save_user_avatar(
         user_id=user_id,
         file_bytes=file_bytes,
-        filename=file.filename or "avatar.png"
+        filename=filename
     )
 
 @router.get("/avatar/{user_id}")
 async def get_avatar(user_id: str):
     """
-    Serve the user's custom avatar image file.
+    Serve the user's custom avatar image file with explicit image Content-Type header.
     """
     path = user_service.get_user_avatar_path(user_id)
     if not path or not path.exists():
@@ -117,8 +128,20 @@ async def get_avatar(user_id: str):
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Avatar image not found for this user."
         )
+
+    ext = path.suffix.lower()
+    media_map = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+        ".gif": "image/gif"
+    }
+    media_type = media_map.get(ext, "image/jpeg")
+
     return FileResponse(
         path=path,
+        media_type=media_type,
         headers={"Cache-Control": "no-cache, must-revalidate"}
     )
 

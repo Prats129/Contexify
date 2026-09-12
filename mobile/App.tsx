@@ -131,6 +131,20 @@ export default function App() {
         const user: User = JSON.parse(savedUserStr);
         setCurrentUser(user);
         await loadUserSessions(user.id);
+
+        // Refresh profile in background to fetch latest avatar / settings from server
+        apiService
+          .getCurrentUser(user.id)
+          .then((fresh) => {
+            if (fresh) {
+              setCurrentUser(fresh);
+              AsyncStorage.setItem(
+                "contexify_mobile_user",
+                JSON.stringify(fresh),
+              );
+            }
+          })
+          .catch(() => {});
       } else {
         // Guest mode default session
         setActiveSessionId(generateGuestSessionId());
