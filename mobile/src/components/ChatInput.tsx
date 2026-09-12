@@ -53,6 +53,23 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const canSend = query.trim().length > 0 && !isSending;
   const insets = useSafeAreaInsets();
   const [isKeyboardOpen, setIsKeyboardOpen] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  const handleContentSizeChange = (e: {
+    nativeEvent: { contentSize: { height: number } };
+  }) => {
+    const height = e.nativeEvent.contentSize.height;
+    if (height > 36 || query.includes("\n")) {
+      if (!isExpanded) setIsExpanded(true);
+    }
+  };
+
+  const handleTextChange = (text: string) => {
+    onChangeQuery(text);
+    if (!text.trim() || (!text.includes("\n") && text.trim().length < 15)) {
+      if (isExpanded) setIsExpanded(false);
+    }
+  };
 
   useEffect(() => {
     const showEvent =
@@ -102,6 +119,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const handleSendPress = () => {
     if (canSend) {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      setIsExpanded(false);
       onSend();
     }
   };
@@ -110,6 +128,86 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     onStop();
   };
+
+  const renderAttachButton = () => (
+    <TouchableOpacity
+      style={[styles.attachButton, { backgroundColor: theme.borderSubtle }]}
+      onPress={handlePickDocument}
+      disabled={isUploading}
+      activeOpacity={0.7}
+    >
+      {isUploading ? (
+        <ActivityIndicator size={14} color={theme.primary} />
+      ) : (
+        <Feather name="plus" size={18} color={theme.textMain} />
+      )}
+    </TouchableOpacity>
+  );
+
+  const renderRightActions = () => (
+    <View style={styles.rightActions}>
+      {onToggleMode && (
+        <TouchableOpacity
+          style={[
+            styles.modeChip,
+            {
+              backgroundColor: isWeb ? theme.emeraldLight : theme.primaryLight,
+              borderColor: isWeb ? theme.emeraldBorder : theme.primaryBorder,
+            },
+          ]}
+          onPress={() => {
+            Haptics.selectionAsync();
+            onToggleMode();
+          }}
+          activeOpacity={0.7}
+        >
+          <Ionicons
+            name={isWeb ? "globe-outline" : "document-text-outline"}
+            size={12}
+            color={isWeb ? theme.emerald : theme.primary}
+          />
+          <Text
+            style={[
+              styles.modeChipText,
+              { color: isWeb ? theme.emerald : theme.primary },
+            ]}
+          >
+            {isWeb ? "Web" : "Doc"}
+          </Text>
+        </TouchableOpacity>
+      )}
+
+      {/* Action: Send or Stop Button */}
+      {isSending ? (
+        <TouchableOpacity
+          style={[styles.stopButton, { backgroundColor: theme.danger }]}
+          onPress={handleStopPress}
+          activeOpacity={0.8}
+        >
+          <View style={styles.stopSquare} />
+        </TouchableOpacity>
+      ) : (
+        <TouchableOpacity
+          style={[
+            styles.sendButton,
+            {
+              backgroundColor: canSend ? theme.primary : theme.borderSubtle,
+              opacity: canSend ? 1 : 0.4,
+            },
+          ]}
+          onPress={handleSendPress}
+          disabled={!canSend}
+          activeOpacity={0.8}
+        >
+          <Feather
+            name="arrow-up"
+            size={18}
+            color={canSend ? "#ffffff" : theme.textMuted}
+          />
+        </TouchableOpacity>
+      )}
+    </View>
+  );
 
   return (
     <View
@@ -178,68 +276,23 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         </ScrollView>
       )}
 
-      {/* Main Input Pill Bar */}
+      {/* Main Input Container (Pill when closed, Card when open) */}
       <View
         style={[
-          styles.inputContainer,
+          isExpanded ? styles.cardContainer : styles.pillContainer,
           {
             backgroundColor: theme.bgInput,
             borderColor: theme.borderSubtle,
           },
         ]}
       >
-        {/* Plus Attach File Button */}
-        <TouchableOpacity
-          style={[styles.attachButton, { backgroundColor: theme.borderSubtle }]}
-          onPress={handlePickDocument}
-          disabled={isUploading}
-          activeOpacity={0.7}
-        >
-          {isUploading ? (
-            <ActivityIndicator size={14} color={theme.primary} />
-          ) : (
-            <Feather name="plus" size={18} color={theme.textMain} />
-          )}
-        </TouchableOpacity>
-
-        {/* Mode Switcher Pill */}
-        {onToggleMode && (
-          <TouchableOpacity
-            style={[
-              styles.modeChip,
-              {
-                backgroundColor: isWeb
-                  ? theme.emeraldLight
-                  : theme.primaryLight,
-                borderColor: isWeb ? theme.emeraldBorder : theme.primaryBorder,
-              },
-            ]}
-            onPress={() => {
-              Haptics.selectionAsync();
-              onToggleMode();
-            }}
-            activeOpacity={0.7}
-          >
-            <Ionicons
-              name={isWeb ? "globe-outline" : "document-text-outline"}
-              size={12}
-              color={isWeb ? theme.emerald : theme.primary}
-            />
-            <Text
-              style={[
-                styles.modeChipText,
-                { color: isWeb ? theme.emerald : theme.primary },
-              ]}
-            >
-              {isWeb ? "Web" : "Doc"}
-            </Text>
-          </TouchableOpacity>
-        )}
+        {/* If Collapsed: Attach Button on Left */}
+        {!isExpanded && renderAttachButton()}
 
         {/* Text Input */}
         <TextInput
           style={[
-            styles.textInput,
+            isExpanded ? styles.textInputExpanded : styles.textInputCollapsed,
             {
               color: theme.textMain,
             },
@@ -252,38 +305,20 @@ export const ChatInput: React.FC<ChatInputProps> = ({
           placeholderTextColor={theme.textMuted}
           multiline
           value={query}
-          onChangeText={onChangeQuery}
+          onChangeText={handleTextChange}
+          onContentSizeChange={handleContentSizeChange}
           maxLength={4000}
         />
 
-        {/* Action: Send or Stop Button */}
-        {isSending ? (
-          <TouchableOpacity
-            style={[styles.stopButton, { backgroundColor: theme.danger }]}
-            onPress={handleStopPress}
-            activeOpacity={0.8}
-          >
-            <View style={styles.stopSquare} />
-          </TouchableOpacity>
-        ) : (
-          <TouchableOpacity
-            style={[
-              styles.sendButton,
-              {
-                backgroundColor: canSend ? theme.primary : theme.borderSubtle,
-                opacity: canSend ? 1 : 0.4,
-              },
-            ]}
-            onPress={handleSendPress}
-            disabled={!canSend}
-            activeOpacity={0.8}
-          >
-            <Feather
-              name="arrow-up"
-              size={18}
-              color={canSend ? "#ffffff" : theme.textMuted}
-            />
-          </TouchableOpacity>
+        {/* If Collapsed: Right Actions */}
+        {!isExpanded && renderRightActions()}
+
+        {/* If Expanded: Bottom Actions Row */}
+        {isExpanded && (
+          <View style={styles.bottomBar}>
+            {renderAttachButton()}
+            {renderRightActions()}
+          </View>
         )}
       </View>
     </View>
@@ -324,7 +359,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "600",
   },
-  inputContainer: {
+  pillContainer: {
     flexDirection: "row",
     alignItems: "center",
     borderRadius: 24,
@@ -332,6 +367,43 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 4,
     minHeight: 50,
+    gap: 6,
+  },
+  cardContainer: {
+    borderRadius: 24,
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingTop: 8,
+    paddingBottom: 6,
+  },
+  textInputCollapsed: {
+    flex: 1,
+    fontSize: 16,
+    lineHeight: 22,
+    maxHeight: 40,
+    paddingVertical: 4,
+    paddingHorizontal: 4,
+  },
+  textInputExpanded: {
+    width: "100%",
+    fontSize: 16,
+    lineHeight: 22,
+    minHeight: 38,
+    maxHeight: 120,
+    paddingHorizontal: 8,
+    paddingTop: 2,
+    paddingBottom: 4,
+    textAlignVertical: "top",
+  },
+  bottomBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingTop: 4,
+  },
+  rightActions: {
+    flexDirection: "row",
+    alignItems: "center",
     gap: 6,
   },
   attachButton: {
@@ -353,14 +425,6 @@ const styles = StyleSheet.create({
   modeChipText: {
     fontSize: 12,
     fontWeight: "700",
-  },
-  textInput: {
-    flex: 1,
-    fontSize: 16,
-    lineHeight: 22,
-    maxHeight: 110,
-    paddingVertical: 6,
-    paddingHorizontal: 4,
   },
   sendButton: {
     width: 34,
