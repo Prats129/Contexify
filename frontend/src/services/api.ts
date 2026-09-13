@@ -23,6 +23,24 @@ const formatUser = (user: User): User => {
   return user;
 };
 
+export function extractErrorMessage(errData: any, fallback = 'Operation failed'): string {
+  if (!errData) return fallback;
+  if (typeof errData === 'string') return errData;
+  if (typeof errData.detail === 'string') return errData.detail;
+  if (Array.isArray(errData.detail) && errData.detail.length > 0) {
+    const messages = errData.detail.map((d: any) => {
+      if (typeof d === 'string') return d;
+      if (d && typeof d.msg === 'string') {
+        return d.msg.replace(/^Value error,\s*/i, '');
+      }
+      return JSON.stringify(d);
+    });
+    return messages.join('. ');
+  }
+  if (typeof errData.message === 'string') return errData.message;
+  return fallback;
+}
+
 export const apiService = {
   // --- User Authentication Endpoints ---
   async register(
@@ -42,8 +60,8 @@ export const apiService = {
       }),
     });
     if (!response.ok) {
-      const err = await response.json().catch(() => ({ detail: 'Registration failed' }));
-      throw new Error(err.detail || 'Registration failed');
+      const err = await response.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Registration failed'));
     }
     return formatUser(await response.json());
   },
@@ -61,8 +79,8 @@ export const apiService = {
       }),
     });
     if (!response.ok) {
-      const err = await response.json().catch(() => ({ detail: 'Authentication failed' }));
-      throw new Error(err.detail || 'Invalid username/email or password');
+      const err = await response.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Invalid username/email or password'));
     }
     return formatUser(await response.json());
   },
@@ -74,8 +92,8 @@ export const apiService = {
       body: JSON.stringify(data),
     });
     if (!response.ok) {
-      const err = await response.json().catch(() => ({ detail: 'Google authentication failed' }));
-      throw new Error(err.detail || 'Google authentication failed');
+      const err = await response.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Google authentication failed'));
     }
     return formatUser(await response.json());
   },
@@ -89,8 +107,8 @@ export const apiService = {
       }),
     });
     if (!response.ok) {
-      const err = await response.json().catch(() => ({ detail: 'Failed to send verification code' }));
-      throw new Error(err.detail || 'Failed to send verification code');
+      const err = await response.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Failed to send verification code'));
     }
     return await response.json();
   },
@@ -108,8 +126,8 @@ export const apiService = {
       }),
     });
     if (!response.ok) {
-      const err = await response.json().catch(() => ({ detail: 'Invalid verification code' }));
-      throw new Error(err.detail || 'Invalid verification code');
+      const err = await response.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Invalid verification code'));
     }
     return formatUser(await response.json());
   },
@@ -123,8 +141,8 @@ export const apiService = {
       }),
     });
     if (!response.ok) {
-      const err = await response.json().catch(() => ({ detail: 'Failed to send password reset code' }));
-      throw new Error(err.detail || 'Failed to send password reset code');
+      const err = await response.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Failed to send password reset code'));
     }
     return await response.json();
   },
@@ -144,8 +162,8 @@ export const apiService = {
       }),
     });
     if (!response.ok) {
-      const err = await response.json().catch(() => ({ detail: 'Failed to reset password' }));
-      throw new Error(err.detail || 'Failed to reset password');
+      const err = await response.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Failed to reset password'));
     }
     return await response.json();
   },
@@ -173,8 +191,8 @@ export const apiService = {
       }),
     });
     if (!response.ok) {
-      const err = await response.json().catch(() => ({ detail: 'Profile update failed' }));
-      throw new Error(err.detail || 'Profile update failed');
+      const err = await response.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Profile update failed'));
     }
     return formatUser(await response.json());
   },
@@ -194,8 +212,8 @@ export const apiService = {
       }),
     });
     if (!response.ok) {
-      const err = await response.json().catch(() => ({ detail: 'Password change failed' }));
-      throw new Error(err.detail || 'Password change failed');
+      const err = await response.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Password change failed'));
     }
     return await response.json();
   },

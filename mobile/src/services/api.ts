@@ -113,6 +113,24 @@ export interface StreamHandlers {
   onError: (err: string) => void;
 }
 
+export function extractErrorMessage(errData: any, fallback = 'Operation failed'): string {
+  if (!errData) return fallback;
+  if (typeof errData === 'string') return errData;
+  if (typeof errData.detail === 'string') return errData.detail;
+  if (Array.isArray(errData.detail) && errData.detail.length > 0) {
+    const messages = errData.detail.map((d: any) => {
+      if (typeof d === 'string') return d;
+      if (d && typeof d.msg === 'string') {
+        return d.msg.replace(/^Value error,\s*/i, '');
+      }
+      return JSON.stringify(d);
+    });
+    return messages.join('. ');
+  }
+  if (typeof errData.message === 'string') return errData.message;
+  return fallback;
+}
+
 export const apiService = {
   // --- Health Check ---
   async pingHealth(): Promise<boolean> {
@@ -144,8 +162,8 @@ export const apiService = {
       }),
     });
     if (!res.ok) {
-      const err = await res.json().catch(() => ({ detail: 'Registration failed' }));
-      throw new Error(err.detail || 'Registration failed');
+      const err = await res.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Registration failed'));
     }
     return res.json();
   },
@@ -161,8 +179,8 @@ export const apiService = {
       }),
     });
     if (!res.ok) {
-      const err = await res.json().catch(() => ({ detail: 'Invalid credentials' }));
-      throw new Error(err.detail || 'Invalid credentials');
+      const err = await res.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Invalid credentials'));
     }
     return res.json();
   },
@@ -175,8 +193,8 @@ export const apiService = {
       body: JSON.stringify({ email_or_username: emailOrUsername }),
     });
     if (!res.ok) {
-      const err = await res.json().catch(() => ({ detail: 'Failed to send OTP' }));
-      throw new Error(err.detail || 'Failed to send OTP');
+      const err = await res.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Failed to send OTP'));
     }
     return res.json();
   },
@@ -192,8 +210,8 @@ export const apiService = {
       }),
     });
     if (!res.ok) {
-      const err = await res.json().catch(() => ({ detail: 'Invalid or expired OTP' }));
-      throw new Error(err.detail || 'Invalid or expired OTP');
+      const err = await res.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Invalid or expired OTP'));
     }
     return res.json();
   },
@@ -214,8 +232,8 @@ export const apiService = {
       }),
     });
     if (!res.ok) {
-      const err = await res.json().catch(() => ({ detail: 'Failed to update profile' }));
-      throw new Error(err.detail || 'Failed to update profile');
+      const err = await res.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Failed to update profile'));
     }
     return res.json();
   },
@@ -236,8 +254,8 @@ export const apiService = {
       }),
     });
     if (!res.ok) {
-      const err = await res.json().catch(() => ({ detail: 'Failed to change password' }));
-      throw new Error(err.detail || 'Failed to change password');
+      const err = await res.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Failed to change password'));
     }
     return res.json();
   },

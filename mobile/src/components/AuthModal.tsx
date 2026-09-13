@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
 import {
   View,
   Text,
@@ -18,6 +18,10 @@ import { Feather, Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { getAppTheme, type AppTheme } from "../theme/colors";
 import { apiService } from "../services/api";
+import {
+  PasswordStrengthMeter,
+  checkPasswordStrength,
+} from "./PasswordStrengthMeter";
 import type { User } from "../types";
 
 interface AuthModalProps {
@@ -59,6 +63,26 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   // Status
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const regStrength = useMemo(
+    () =>
+      checkPasswordStrength(regPassword, {
+        username: regUsername,
+        email: regEmail,
+        displayName: regName,
+      }),
+    [regPassword, regUsername, regEmail, regName],
+  );
+
+  const isRegisterValid = useMemo(
+    () =>
+      Boolean(regName.trim()) &&
+      regUsername.trim().length >= 3 &&
+      Boolean(regEmail.trim()) &&
+      regPassword.length >= 8 &&
+      regStrength.isValid,
+    [regName, regUsername, regEmail, regPassword, regStrength],
+  );
 
   const translateY = useRef(new Animated.Value(700)).current;
 
@@ -119,9 +143,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const resetForm = () => {
     setIdentifier("");
     setPassword("");
+    setShowPassword(false);
     setOtpEmail("");
-    setOtpCode("");
     setOtpSent(false);
+    setOtpCode("");
     setRegName("");
     setRegUsername("");
     setRegEmail("");
@@ -154,13 +179,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
   const handleSendOtp = async () => {
     if (!otpEmail.trim()) {
-      setErrorMessage("Please enter your email address.");
+      setErrorMessage("Please enter your registered email address.");
       return;
     }
     setErrorMessage(null);
     setLoading(true);
     try {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       await apiService.sendOtp(otpEmail.trim());
       setOtpSent(true);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -174,8 +199,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   };
 
   const handleVerifyOtp = async () => {
-    if (!otpEmail.trim() || !otpCode.trim()) {
-      setErrorMessage("Please enter the 6-digit OTP.");
+    if (!otpCode.trim() || otpCode.length < 6) {
+      setErrorMessage("Please enter the complete 6-digit OTP.");
       return;
     }
     setErrorMessage(null);
@@ -209,8 +234,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       setErrorMessage("Please fill in all required fields.");
       return;
     }
-    if (regPassword.length < 6) {
-      setErrorMessage("Password must be at least 6 characters.");
+    if (regPassword.length < 8) {
+      setErrorMessage("Password must be at least 8 characters.");
+      return;
+    }
+    if (!regStrength.isValid) {
+      setErrorMessage(
+        regStrength.feedback || "Please choose a stronger password.",
+      );
       return;
     }
     setErrorMessage(null);
@@ -686,7 +717,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
                   <View style={styles.inputGroup}>
                     <Text style={[styles.label, { color: theme.textMuted }]}>
-                      Password (min 6 characters)
+                      Password (min 8 characters)
                     </Text>
                     <View
                       style={[
@@ -700,7 +731,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       <Feather name="lock" size={15} color={theme.textMuted} />
                       <TextInput
                         style={[styles.input, { color: theme.textMain }]}
-                        placeholder="Create strong password"
+                        placeholder="Create strong, secure password"
                         placeholderTextColor={theme.textMuted}
                         secureTextEntry={!showPassword}
                         value={regPassword}
@@ -716,21 +747,43 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                         />
                       </TouchableOpacity>
                     </View>
+                    {regPassword.length > 0 && (
+                      <PasswordStrengthMeter
+                        result={regStrength}
+                        theme={theme}
+                      />
+                    )}
                   </View>
 
                   <TouchableOpacity
                     style={[
                       styles.submitBtn,
-                      { backgroundColor: theme.primary },
+                      {
+                        backgroundColor: isRegisterValid
+                          ? theme.primary
+                          : theme.borderSubtle || "rgba(255,255,255,0.1)",
+                        opacity: isRegisterValid && !loading ? 1 : 0.5,
+                      },
                     ]}
                     onPress={handleRegister}
-                    disabled={loading}
-                    activeOpacity={0.8}
+                    disabled={loading || !isRegisterValid}
+                    activeOpacity={isRegisterValid ? 0.8 : 1}
                   >
                     {loading ? (
                       <ActivityIndicator color="#ffffff" size="small" />
                     ) : (
-                      <Text style={styles.submitBtnText}>Create Account</Text>
+                      <Text
+                        style={[
+                          styles.submitBtnText,
+                          {
+                            color: isRegisterValid
+                              ? "#ffffff"
+                              : theme.textMuted,
+                          },
+                        ]}
+                      >
+                        Create Account
+                      </Text>
                     )}
                   </TouchableOpacity>
                 </View>

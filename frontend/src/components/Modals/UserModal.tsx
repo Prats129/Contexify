@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import {
   LuShieldCheck,
   LuX,
@@ -25,10 +25,227 @@ import {
   LuArrowLeft,
   LuRefreshCw,
   LuKeyRound,
-} from 'react-icons/lu';
-import { useTheme, ACCENT_PALETTES, type AccentColor } from '../../context/ThemeContext';
-import { useConfirm } from '../../context/ConfirmContext';
-import type { User, SendOtpResponse, GoogleAuthRequest } from '../../types';
+} from "react-icons/lu";
+import {
+  useTheme,
+  ACCENT_PALETTES,
+  type AccentColor,
+} from "../../context/ThemeContext";
+import { useConfirm } from "../../context/ConfirmContext";
+import type { User, SendOtpResponse, GoogleAuthRequest } from "../../types";
+
+interface PasswordChecks {
+  minLength: boolean;
+  hasLower: boolean;
+  hasUpper: boolean;
+  hasNumber: boolean;
+  hasSpecial: boolean;
+  notIdentity: boolean;
+}
+
+interface PasswordStrengthResult {
+  score: number;
+  label: "Weak" | "Fair" | "Good" | "Strong";
+  color: string;
+  checks: PasswordChecks;
+  isValid: boolean;
+  feedback: string | null;
+}
+
+function checkPasswordStrength(
+  password: string,
+  userContext?: { username?: string; email?: string; displayName?: string },
+): PasswordStrengthResult {
+  if (!password) {
+    return {
+      score: 0,
+      label: "Weak",
+      color: "#EF4444",
+      checks: {
+        minLength: false,
+        hasLower: false,
+        hasUpper: false,
+        hasNumber: false,
+        hasSpecial: false,
+        notIdentity: true,
+      },
+      isValid: false,
+      feedback: "Password is required.",
+    };
+  }
+
+  const minLength = password.length >= 8;
+  const hasLower = /[a-z]/.test(password);
+  const hasUpper = /[A-Z]/.test(password);
+  const hasNumber = /[0-9]/.test(password);
+  const hasSpecial = /[!@#$%^&*()_+\-=[\]{}|;:,.<>?~`'"/\\]/.test(password);
+
+  let notIdentity = true;
+  const lowered = password.toLowerCase();
+  if (userContext) {
+    const { username, email, displayName } = userContext;
+    if (
+      username &&
+      username.trim().length >= 3 &&
+      lowered.includes(username.trim().toLowerCase())
+    ) {
+      notIdentity = false;
+    }
+    if (email && email.includes("@")) {
+      const prefix = email.split("@")[0].trim().toLowerCase();
+      if (prefix.length >= 3 && lowered.includes(prefix)) {
+        notIdentity = false;
+      }
+    }
+    if (displayName && displayName.trim().length >= 3) {
+      for (const part of displayName.trim().toLowerCase().split(/\s+/)) {
+        if (part.length >= 3 && lowered.includes(part)) {
+          notIdentity = false;
+          break;
+        }
+      }
+    }
+  }
+
+  let score = 0;
+  if (minLength) score++;
+  if (hasLower && hasUpper) score++;
+  if (hasNumber && hasSpecial) score++;
+  if (score === 3 && password.length >= 10 && notIdentity) score++;
+
+  let label: "Weak" | "Fair" | "Good" | "Strong" = "Weak";
+  let color = "#EF4444";
+  if (score === 2) {
+    label = "Fair";
+    color = "#F59E0B";
+  } else if (score === 3) {
+    label = "Good";
+    color = "#3B82F6";
+  } else if (score >= 4) {
+    label = "Strong";
+    color = "#10B981";
+  }
+
+  let feedback: string | null = null;
+  if (!minLength) {
+    feedback = "Password must be at least 8 characters long.";
+  } else if (!hasLower || !hasUpper) {
+    feedback = "Password must contain both uppercase and lowercase letters.";
+  } else if (!hasNumber) {
+    feedback = "Password must contain at least one number.";
+  } else if (!hasSpecial) {
+    feedback = "Password must contain at least one special symbol (!@#$%...).";
+  } else if (!notIdentity) {
+    feedback = "Password cannot contain your name, username, or email.";
+  }
+
+  const isValid =
+    minLength && hasLower && hasUpper && hasNumber && hasSpecial && notIdentity;
+
+  return {
+    score,
+    label,
+    color,
+    checks: {
+      minLength,
+      hasLower,
+      hasUpper,
+      hasNumber,
+      hasSpecial,
+      notIdentity,
+    },
+    isValid,
+    feedback,
+  };
+}
+
+const PasswordStrengthMeter: React.FC<{
+  result: PasswordStrengthResult;
+  showDetails?: boolean;
+}> = ({ result, showDetails = true }) => {
+  if (!result) return null;
+
+  return (
+    <div className="flex flex-col gap-1.5 mt-1 text-left">
+      {/* 4-bar strength indicator */}
+      <div className="flex items-center gap-2">
+        <div className="flex-1 flex gap-1 h-1.5">
+          {[1, 2, 3, 4].map((step) => (
+            <div
+              key={step}
+              className="flex-1 rounded-full transition-all duration-300"
+              style={{
+                backgroundColor:
+                  result.score >= step
+                    ? result.color
+                    : "var(--border-subtle, rgba(255,255,255,0.12))",
+              }}
+            />
+          ))}
+        </div>
+        <span
+          className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
+          style={{ color: result.color, backgroundColor: `${result.color}15` }}
+        >
+          {result.label}
+        </span>
+      </div>
+
+      {showDetails && (
+        <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-[10.5px] pt-1">
+          <div
+            className={`flex items-center gap-1 ${result.checks.minLength ? "text-emerald-500 font-medium" : "text-(--text-muted)"}`}
+          >
+            <LuCheck
+              size={11}
+              className={result.checks.minLength ? "opacity-100" : "opacity-30"}
+            />
+            <span>8+ characters</span>
+          </div>
+          <div
+            className={`flex items-center gap-1 ${result.checks.hasLower && result.checks.hasUpper ? "text-emerald-500 font-medium" : "text-(--text-muted)"}`}
+          >
+            <LuCheck
+              size={11}
+              className={
+                result.checks.hasLower && result.checks.hasUpper
+                  ? "opacity-100"
+                  : "opacity-30"
+              }
+            />
+            <span>Upper & lowercase</span>
+          </div>
+          <div
+            className={`flex items-center gap-1 ${result.checks.hasNumber ? "text-emerald-500 font-medium" : "text-(--text-muted)"}`}
+          >
+            <LuCheck
+              size={11}
+              className={result.checks.hasNumber ? "opacity-100" : "opacity-30"}
+            />
+            <span>At least 1 number</span>
+          </div>
+          <div
+            className={`flex items-center gap-1 ${result.checks.hasSpecial ? "text-emerald-500 font-medium" : "text-(--text-muted)"}`}
+          >
+            <LuCheck
+              size={11}
+              className={
+                result.checks.hasSpecial ? "opacity-100" : "opacity-30"
+              }
+            />
+            <span>At least 1 symbol</span>
+          </div>
+        </div>
+      )}
+
+      {result.feedback && (
+        <p className="text-[10.5px] text-amber-500/95 font-medium leading-tight">
+          {result.feedback}
+        </p>
+      )}
+    </div>
+  );
+};
 
 const GoogleIcon: React.FC = () => (
   <svg width="15" height="15" viewBox="0 0 24 24" className="shrink-0">
@@ -55,27 +272,32 @@ interface UserModalProps {
   isOpen: boolean;
   onClose: () => void;
   currentUser: User | null;
-  initialTab?: 'login' | 'register';
+  initialTab?: "login" | "register";
   onLogin?: (usernameOrEmail: string, password: string) => Promise<void>;
   onLoginWithOtp: (usernameOrEmail: string, otp: string) => Promise<void>;
   onGoogleAuth?: (data: GoogleAuthRequest) => Promise<void>;
   onSendOtp: (usernameOrEmail: string) => Promise<SendOtpResponse>;
-  onSendPasswordResetOtp?: (usernameOrEmail: string) => Promise<SendOtpResponse>;
+  onSendPasswordResetOtp?: (
+    usernameOrEmail: string,
+  ) => Promise<SendOtpResponse>;
   onResetPasswordWithOtp?: (
     usernameOrEmail: string,
     otp: string,
-    newPassword: string
+    newPassword: string,
   ) => Promise<{ message: string }>;
   onRegister: (
     displayName: string,
     username: string,
     email: string,
-    password: string
+    password: string,
   ) => Promise<void>;
   onLogout: () => void;
   onContinueAsGuest: () => void;
   onUpdateProfile?: (displayName: string, avatarColor: string) => Promise<void>;
-  onChangePassword?: (oldPassword: string, newPassword: string) => Promise<void>;
+  onChangePassword?: (
+    oldPassword: string,
+    newPassword: string,
+  ) => Promise<void>;
   onUploadAvatar?: (file: File) => Promise<void>;
   onDeleteAvatar?: () => Promise<void>;
 }
@@ -84,7 +306,7 @@ export const UserModal: React.FC<UserModalProps> = ({
   isOpen,
   onClose,
   currentUser,
-  initialTab = 'login',
+  initialTab = "login",
   onLogin,
   onLoginWithOtp,
   onGoogleAuth,
@@ -101,15 +323,17 @@ export const UserModal: React.FC<UserModalProps> = ({
 }) => {
   const { mode, setMode, accent, setAccent, currentAccent } = useTheme();
   const { confirm } = useConfirm();
-  const [activeTab, setActiveTab] = useState<'login' | 'register'>('login');
+  const [activeTab, setActiveTab] = useState<"login" | "register">("login");
   const avatarFileInputRef = useRef<HTMLInputElement>(null);
   const otpInputRef = useRef<HTMLInputElement>(null);
   const resetOtpInputRef = useRef<HTMLInputElement>(null);
 
   // Edit Profile State
-  const [editDisplayName, setEditDisplayName] = useState('');
+  const [editDisplayName, setEditDisplayName] = useState("");
   const [isEditingProfile, setIsEditingProfile] = useState(false);
-  const [profileSuccessMsg, setProfileSuccessMsg] = useState<string | null>(null);
+  const [profileSuccessMsg, setProfileSuccessMsg] = useState<string | null>(
+    null,
+  );
 
   // Pending Avatar Staging State (Preview only until Save)
   const [pendingAvatarFile, setPendingAvatarFile] = useState<File | null>(null);
@@ -118,45 +342,91 @@ export const UserModal: React.FC<UserModalProps> = ({
 
   // Change Password State (Logged in)
   const [isChangingPassword, setIsChangingPassword] = useState(false);
-  const [oldPassword, setOldPassword] = useState('');
-  const [newPassword, setNewPassword] = useState('');
+  const [oldPassword, setOldPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
   const [showOldPassword, setShowOldPassword] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
-  const [passwordSuccessMsg, setPasswordSuccessMsg] = useState<string | null>(null);
+  const [passwordSuccessMsg, setPasswordSuccessMsg] = useState<string | null>(
+    null,
+  );
+  const [passwordErrorMsg, setPasswordErrorMsg] = useState<string | null>(null);
 
   // Login & OTP State
-  const [loginMethod, setLoginMethod] = useState<'password' | 'otp' | 'forgot_password'>('password');
-  const [otpStep, setOtpStep] = useState<'request' | 'verify'>('request');
-  const [otpCode, setOtpCode] = useState('');
-  const [otpMaskedEmail, setOtpMaskedEmail] = useState('');
+  const [loginMethod, setLoginMethod] = useState<
+    "password" | "otp" | "forgot_password"
+  >("password");
+  const [otpStep, setOtpStep] = useState<"request" | "verify">("request");
+  const [otpCode, setOtpCode] = useState("");
+  const [otpMaskedEmail, setOtpMaskedEmail] = useState("");
   const [resendCountdown, setResendCountdown] = useState(0);
 
   // Forgot & Reset Password State (Logged out)
-  const [resetStep, setResetStep] = useState<'request' | 'verify_and_set'>('request');
-  const [resetIdentifier, setResetIdentifier] = useState('');
-  const [resetOtp, setResetOtp] = useState('');
-  const [resetNewPassword, setResetNewPassword] = useState('');
-  const [resetConfirmPassword, setResetConfirmPassword] = useState('');
+  const [resetStep, setResetStep] = useState<"request" | "verify_and_set">(
+    "request",
+  );
+  const [resetIdentifier, setResetIdentifier] = useState("");
+  const [resetOtp, setResetOtp] = useState("");
+  const [resetNewPassword, setResetNewPassword] = useState("");
+  const [resetConfirmPassword, setResetConfirmPassword] = useState("");
   const [showResetNewPassword, setShowResetNewPassword] = useState(false);
-  const [showResetConfirmPassword, setShowResetConfirmPassword] = useState(false);
-  const [resetMaskedEmail, setResetMaskedEmail] = useState('');
+  const [showResetConfirmPassword, setShowResetConfirmPassword] =
+    useState(false);
+  const [resetMaskedEmail, setResetMaskedEmail] = useState("");
   const [authSuccessMsg, setAuthSuccessMsg] = useState<string | null>(null);
 
   // Password Login State
-  const [loginIdentifier, setLoginIdentifier] = useState('');
-  const [loginPassword, setLoginPassword] = useState('');
+  const [loginIdentifier, setLoginIdentifier] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
   const [showLoginPassword, setShowLoginPassword] = useState(false);
 
   // Register Form State
-  const [regDisplayName, setRegDisplayName] = useState('');
-  const [regUsername, setRegUsername] = useState('');
-  const [regEmail, setRegEmail] = useState('');
-  const [regPassword, setRegPassword] = useState('');
+  const [regDisplayName, setRegDisplayName] = useState("");
+  const [regUsername, setRegUsername] = useState("");
+  const [regEmail, setRegEmail] = useState("");
+  const [regPassword, setRegPassword] = useState("");
   const [showRegPassword, setShowRegPassword] = useState(false);
 
   // Status & Error handling
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Real-time password strength calculations
+  const regStrength = useMemo(
+    () =>
+      checkPasswordStrength(regPassword, {
+        username: regUsername,
+        email: regEmail,
+        displayName: regDisplayName,
+      }),
+    [regPassword, regUsername, regEmail, regDisplayName],
+  );
+
+  const changeStrength = useMemo(
+    () =>
+      checkPasswordStrength(newPassword, {
+        username: currentUser?.username,
+        email: currentUser?.email,
+        displayName: currentUser?.display_name,
+      }),
+    [newPassword, currentUser],
+  );
+
+  const isPasswordChangeValid = useMemo(
+    () =>
+      Boolean(oldPassword.trim()) &&
+      newPassword.length >= 8 &&
+      changeStrength.isValid &&
+      oldPassword !== newPassword,
+    [oldPassword, newPassword, changeStrength],
+  );
+
+  const resetStrength = useMemo(
+    () =>
+      checkPasswordStrength(resetNewPassword, {
+        username: resetIdentifier,
+      }),
+    [resetNewPassword, resetIdentifier],
+  );
 
   // Resend Countdown Timer
   useEffect(() => {
@@ -173,27 +443,27 @@ export const UserModal: React.FC<UserModalProps> = ({
       setProfileSuccessMsg(null);
       setPasswordSuccessMsg(null);
       setAuthSuccessMsg(null);
-      setLoginIdentifier('');
-      setLoginPassword('');
-      setLoginMethod('password');
-      setOtpStep('request');
-      setOtpCode('');
-      setOtpMaskedEmail('');
-      setResetStep('request');
-      setResetIdentifier('');
-      setResetOtp('');
-      setResetNewPassword('');
-      setResetConfirmPassword('');
+      setLoginIdentifier("");
+      setLoginPassword("");
+      setLoginMethod("password");
+      setOtpStep("request");
+      setOtpCode("");
+      setOtpMaskedEmail("");
+      setResetStep("request");
+      setResetIdentifier("");
+      setResetOtp("");
+      setResetNewPassword("");
+      setResetConfirmPassword("");
       setShowResetNewPassword(false);
       setShowResetConfirmPassword(false);
-      setResetMaskedEmail('');
+      setResetMaskedEmail("");
       setResendCountdown(0);
-      setRegDisplayName('');
-      setRegUsername('');
-      setRegEmail('');
-      setRegPassword('');
-      setOldPassword('');
-      setNewPassword('');
+      setRegDisplayName("");
+      setRegUsername("");
+      setRegEmail("");
+      setRegPassword("");
+      setOldPassword("");
+      setNewPassword("");
       setIsSubmitting(false);
       setIsEditingProfile(false);
       setIsChangingPassword(false);
@@ -211,19 +481,32 @@ export const UserModal: React.FC<UserModalProps> = ({
   const handleAvatarFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
     const file = e.target.files[0];
-    e.target.value = '';
+    e.target.value = "";
     setErrorMessage(null);
     setProfileSuccessMsg(null);
 
     const MAX_SIZE = 2 * 1024 * 1024; // 2MB
     if (file.size > MAX_SIZE) {
-      setErrorMessage(`Selected image (${(file.size / (1024 * 1024)).toFixed(1)} MB) exceeds the 2MB limit.`);
+      setErrorMessage(
+        `Selected image (${(file.size / (1024 * 1024)).toFixed(1)} MB) exceeds the 2MB limit.`,
+      );
       return;
     }
 
-    const allowedTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif'];
-    if (!allowedTypes.includes(file.type.toLowerCase()) && !/\.(png|jpg|jpeg|webp|gif)$/i.test(file.name)) {
-      setErrorMessage('Invalid image format. Allowed formats: PNG, JPG, JPEG, WEBP, GIF.');
+    const allowedTypes = [
+      "image/png",
+      "image/jpeg",
+      "image/jpg",
+      "image/webp",
+      "image/gif",
+    ];
+    if (
+      !allowedTypes.includes(file.type.toLowerCase()) &&
+      !/\.(png|jpg|jpeg|webp|gif)$/i.test(file.name)
+    ) {
+      setErrorMessage(
+        "Invalid image format. Allowed formats: PNG, JPG, JPEG, WEBP, GIF.",
+      );
       return;
     }
 
@@ -261,7 +544,7 @@ export const UserModal: React.FC<UserModalProps> = ({
 
     const trimmedName = editDisplayName.trim();
     if (!trimmedName || trimmedName.length < 2) {
-      setErrorMessage('Display Name must be at least 2 characters.');
+      setErrorMessage("Display Name must be at least 2 characters.");
       return;
     }
 
@@ -277,10 +560,13 @@ export const UserModal: React.FC<UserModalProps> = ({
 
       // 2. Commit display name & fallback color
       if (onUpdateProfile) {
-        await onUpdateProfile(trimmedName, currentUser.avatar_color || currentAccent.primary);
+        await onUpdateProfile(
+          trimmedName,
+          currentUser.avatar_color || currentAccent.primary,
+        );
       }
 
-      setProfileSuccessMsg('Profile updated successfully!');
+      setProfileSuccessMsg("Profile updated successfully!");
       setPendingAvatarFile(null);
       setAvatarPreviewUrl(null);
       setIsAvatarRemoved(false);
@@ -296,28 +582,41 @@ export const UserModal: React.FC<UserModalProps> = ({
   const handlePasswordChangeSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
+    setPasswordErrorMsg(null);
     setPasswordSuccessMsg(null);
     if (!currentUser || !onChangePassword) return;
 
-    if (!oldPassword) {
-      setErrorMessage('Please enter your current password.');
+    if (!oldPassword.trim()) {
+      setPasswordErrorMsg("Please enter your current password.");
       return;
     }
-    if (!newPassword || newPassword.length < 6) {
-      setErrorMessage('New password must be at least 6 characters.');
+    if (oldPassword === newPassword) {
+      setPasswordErrorMsg(
+        "New password cannot be the same as your current password.",
+      );
+      return;
+    }
+    if (!changeStrength.isValid) {
+      setPasswordErrorMsg(
+        changeStrength.feedback ||
+          "New password does not meet security requirements.",
+      );
       return;
     }
 
     try {
       setIsSubmitting(true);
       await onChangePassword(oldPassword, newPassword);
-      setPasswordSuccessMsg('Password changed successfully!');
-      setOldPassword('');
-      setNewPassword('');
-      setIsChangingPassword(false);
+      setPasswordSuccessMsg("Password changed successfully!");
+      setOldPassword("");
+      setNewPassword("");
+      setTimeout(() => {
+        setIsChangingPassword(false);
+        setPasswordSuccessMsg(null);
+      }, 2500);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      setErrorMessage(msg);
+      setPasswordErrorMsg(msg);
     } finally {
       setIsSubmitting(false);
     }
@@ -329,7 +628,7 @@ export const UserModal: React.FC<UserModalProps> = ({
 
     const identifier = loginIdentifier.trim();
     if (!identifier) {
-      setErrorMessage('Please enter your email or username.');
+      setErrorMessage("Please enter your email or username.");
       return;
     }
 
@@ -338,8 +637,8 @@ export const UserModal: React.FC<UserModalProps> = ({
       const res = await onSendOtp(identifier);
       setOtpMaskedEmail(res.masked_email || res.email);
       setResendCountdown(res.cooldown_seconds || 60);
-      setOtpStep('verify');
-      setOtpCode('');
+      setOtpStep("verify");
+      setOtpCode("");
       setTimeout(() => otpInputRef.current?.focus(), 100);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -357,13 +656,15 @@ export const UserModal: React.FC<UserModalProps> = ({
     const code = otpCode.trim();
 
     if (!identifier) {
-      setErrorMessage('Account identifier is missing. Please enter your email or username.');
-      setOtpStep('request');
+      setErrorMessage(
+        "Account identifier is missing. Please enter your email or username.",
+      );
+      setOtpStep("request");
       return;
     }
 
     if (!code || code.length !== 6) {
-      setErrorMessage('Please enter the complete 6-digit verification code.');
+      setErrorMessage("Please enter the complete 6-digit verification code.");
       return;
     }
 
@@ -385,12 +686,12 @@ export const UserModal: React.FC<UserModalProps> = ({
 
     const identifier = resetIdentifier.trim();
     if (!identifier) {
-      setErrorMessage('Please enter your registered email or username.');
+      setErrorMessage("Please enter your registered email or username.");
       return;
     }
 
     if (!onSendPasswordResetOtp) {
-      setErrorMessage('Password reset service is not available.');
+      setErrorMessage("Password reset service is not available.");
       return;
     }
 
@@ -399,10 +700,10 @@ export const UserModal: React.FC<UserModalProps> = ({
       const res = await onSendPasswordResetOtp(identifier);
       setResetMaskedEmail(res.masked_email || res.email);
       setResendCountdown(res.cooldown_seconds || 30);
-      setResetStep('verify_and_set');
-      setResetOtp('');
-      setResetNewPassword('');
-      setResetConfirmPassword('');
+      setResetStep("verify_and_set");
+      setResetOtp("");
+      setResetNewPassword("");
+      setResetConfirmPassword("");
       setTimeout(() => resetOtpInputRef.current?.focus(), 100);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -423,42 +724,48 @@ export const UserModal: React.FC<UserModalProps> = ({
     const confirmPwd = resetConfirmPassword;
 
     if (!identifier) {
-      setErrorMessage('Account identifier is missing. Please start over.');
-      setResetStep('request');
+      setErrorMessage("Account identifier is missing. Please start over.");
+      setResetStep("request");
       return;
     }
 
     if (!otp || otp.length !== 6) {
-      setErrorMessage('Please enter the complete 6-digit verification code.');
+      setErrorMessage("Please enter the complete 6-digit verification code.");
       return;
     }
 
-    if (!newPwd || newPwd.length < 6) {
-      setErrorMessage('New password must be at least 6 characters long.');
+    if (!resetStrength.isValid) {
+      setErrorMessage(
+        resetStrength.feedback ||
+          "New password does not meet security requirements.",
+      );
       return;
     }
 
     if (newPwd !== confirmPwd) {
-      setErrorMessage('New passwords do not match. Please re-enter.');
+      setErrorMessage("New passwords do not match. Please re-enter.");
       return;
     }
 
     if (!onResetPasswordWithOtp) {
-      setErrorMessage('Password reset service is not available.');
+      setErrorMessage("Password reset service is not available.");
       return;
     }
 
     try {
       setIsSubmitting(true);
       const res = await onResetPasswordWithOtp(identifier, otp, newPwd);
-      setAuthSuccessMsg(res.message || 'Password reset successfully! Please sign in with your new password.');
+      setAuthSuccessMsg(
+        res.message ||
+          "Password reset successfully! Please sign in with your new password.",
+      );
       setLoginIdentifier(identifier);
-      setLoginPassword('');
-      setLoginMethod('password');
-      setResetStep('request');
-      setResetOtp('');
-      setResetNewPassword('');
-      setResetConfirmPassword('');
+      setLoginPassword("");
+      setLoginMethod("password");
+      setResetStep("request");
+      setResetOtp("");
+      setResetNewPassword("");
+      setResetConfirmPassword("");
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       setErrorMessage(msg);
@@ -472,27 +779,34 @@ export const UserModal: React.FC<UserModalProps> = ({
     setAuthSuccessMsg(null);
 
     if (!onGoogleAuth) {
-      setErrorMessage('Google Sign-In is not configured.');
+      setErrorMessage("Google Sign-In is not configured.");
       return;
     }
 
     const clientId =
-      (import.meta as unknown as { env?: { VITE_GOOGLE_CLIENT_ID?: string } }).env?.VITE_GOOGLE_CLIENT_ID || '';
+      (import.meta as unknown as { env?: { VITE_GOOGLE_CLIENT_ID?: string } })
+        .env?.VITE_GOOGLE_CLIENT_ID || "";
 
     // Direct Centered Popup Window with explicit width & height
     if (clientId) {
       try {
         setIsSubmitting(true);
         const redirectUri = window.location.origin;
-        const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=token&scope=${encodeURIComponent('openid email profile')}&prompt=select_account`;
+        const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=token&scope=${encodeURIComponent("openid email profile")}&prompt=select_account`;
         const width = 460;
         const height = 520;
-        const left = Math.max(0, Math.round(window.screenX + (window.outerWidth - width) / 2));
-        const top = Math.max(0, Math.round(window.screenY + (window.outerHeight - height) / 2));
+        const left = Math.max(
+          0,
+          Math.round(window.screenX + (window.outerWidth - width) / 2),
+        );
+        const top = Math.max(
+          0,
+          Math.round(window.screenY + (window.outerHeight - height) / 2),
+        );
         const popup = window.open(
           authUrl,
-          'google_oauth_popup',
-          `popup=1,width=${width},height=${height},left=${left},top=${top},toolbar=0,menubar=0,location=0,status=0,scrollbars=1,resizable=1`
+          "google_oauth_popup",
+          `popup=1,width=${width},height=${height},left=${left},top=${top},toolbar=0,menubar=0,location=0,status=0,scrollbars=1,resizable=1`,
         );
 
         if (popup) {
@@ -505,15 +819,18 @@ export const UserModal: React.FC<UserModalProps> = ({
               }
               if (popup.location.href.includes(window.location.origin)) {
                 const hash = popup.location.hash;
-                if (hash.includes('access_token=')) {
+                if (hash.includes("access_token=")) {
                   clearInterval(interval);
                   popup.close();
-                  const params = new URLSearchParams(hash.replace('#', ''));
-                  const accessToken = params.get('access_token');
+                  const params = new URLSearchParams(hash.replace("#", ""));
+                  const accessToken = params.get("access_token");
                   if (accessToken) {
-                    const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-                      headers: { Authorization: `Bearer ${accessToken}` },
-                    });
+                    const res = await fetch(
+                      "https://www.googleapis.com/oauth2/v3/userinfo",
+                      {
+                        headers: { Authorization: `Bearer ${accessToken}` },
+                      },
+                    );
                     if (res.ok) {
                       const info = await res.json();
                       await onGoogleAuth({
@@ -534,7 +851,7 @@ export const UserModal: React.FC<UserModalProps> = ({
           return;
         }
       } catch (err) {
-        console.warn('Popup window error:', err);
+        console.warn("Popup window error:", err);
       } finally {
         setIsSubmitting(false);
       }
@@ -548,7 +865,9 @@ export const UserModal: React.FC<UserModalProps> = ({
     setErrorMessage(null);
 
     if (!onLogin) {
-      setErrorMessage('Password login is not configured. Please use Email OTP.');
+      setErrorMessage(
+        "Password login is not configured. Please use Email OTP.",
+      );
       return;
     }
 
@@ -556,7 +875,7 @@ export const UserModal: React.FC<UserModalProps> = ({
     const pwd = loginPassword;
 
     if (!identifier || !pwd) {
-      setErrorMessage('Please enter your username/email and password.');
+      setErrorMessage("Please enter your username/email and password.");
       return;
     }
 
@@ -581,27 +900,36 @@ export const UserModal: React.FC<UserModalProps> = ({
     const password = regPassword;
 
     if (!displayName || displayName.length < 2) {
-      setErrorMessage('Display Name must be at least 2 characters.');
+      setErrorMessage("Display Name must be at least 2 characters.");
       return;
     }
 
     if (!username || username.length < 3) {
-      setErrorMessage('Username must be at least 3 characters.');
+      setErrorMessage("Username must be at least 3 characters.");
       return;
     }
 
     if (!/^[a-zA-Z0-9_]+$/.test(username)) {
-      setErrorMessage('Username may only contain letters, numbers, and underscores.');
+      setErrorMessage(
+        "Username may only contain letters, numbers, and underscores.",
+      );
       return;
     }
 
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      setErrorMessage('Please enter a valid email address.');
+      setErrorMessage("Please enter a valid email address.");
       return;
     }
 
-    if (!password || password.length < 6) {
-      setErrorMessage('Password must be at least 6 characters.');
+    if (!password || password.length < 8) {
+      setErrorMessage("Password must be at least 8 characters.");
+      return;
+    }
+
+    if (!regStrength.isValid) {
+      setErrorMessage(
+        regStrength.feedback || "Please choose a stronger password.",
+      );
       return;
     }
 
@@ -630,9 +958,15 @@ export const UserModal: React.FC<UserModalProps> = ({
         {/* Header */}
         <div className="flex items-center justify-between p-3.5 sm:p-4 border-b border-(--border-subtle) sticky top-0 bg-(--bg-card)/90 backdrop-blur-md z-10">
           <div className="flex items-center gap-2.5 font-bold text-base min-w-0">
-            <img src="/logo.png" alt="Contexify" className="w-12 sm:w-14 h-9 sm:h-10 object-contain shrink-0" />
+            <img
+              src="/logo.png"
+              alt="Contexify"
+              className="w-12 sm:w-14 h-9 sm:h-10 object-contain shrink-0"
+            />
             <h3 className="text-(--text-main) text-xs sm:text-sm font-semibold truncate">
-              {currentUser ? 'Account & Preferences' : 'Contexify AI Authentication'}
+              {currentUser
+                ? "Account & Preferences"
+                : "Contexify AI Authentication"}
             </h3>
           </div>
           <button
@@ -681,7 +1015,10 @@ export const UserModal: React.FC<UserModalProps> = ({
                   ) : (
                     <div
                       className="w-12 h-12 rounded-full flex items-center justify-center font-bold text-white text-lg shrink-0"
-                      style={{ backgroundColor: currentUser.avatar_color || currentAccent.primary }}
+                      style={{
+                        backgroundColor:
+                          currentUser.avatar_color || currentAccent.primary,
+                      }}
                     >
                       {currentUser.display_name.charAt(0).toUpperCase()}
                     </div>
@@ -690,7 +1027,9 @@ export const UserModal: React.FC<UserModalProps> = ({
                     <h4 className="text-sm font-bold text-(--text-main) truncate">
                       {currentUser.display_name}
                     </h4>
-                    <span className="text-xs text-(--text-muted)">@{currentUser.username}</span>
+                    <span className="text-xs text-(--text-muted)">
+                      @{currentUser.username}
+                    </span>
                     <span className="text-xs text-(--text-muted) flex items-center gap-1 mt-0.5">
                       <LuMail size={12} /> {currentUser.email}
                     </span>
@@ -699,43 +1038,63 @@ export const UserModal: React.FC<UserModalProps> = ({
                 <button
                   type="button"
                   className="px-2.5 py-1 text-xs font-medium text-primary-theme bg-primary-light-theme hover:opacity-80 rounded-lg border border-primary-theme/30 cursor-pointer shrink-0"
-                  onClick={isEditingProfile ? handleCancelEditing : () => {
-                    setIsEditingProfile(true);
-                    setIsChangingPassword(false);
-                    setErrorMessage(null);
-                  }}
+                  onClick={
+                    isEditingProfile
+                      ? handleCancelEditing
+                      : () => {
+                          setIsEditingProfile(true);
+                          setIsChangingPassword(false);
+                          setErrorMessage(null);
+                        }
+                  }
                 >
-                  {isEditingProfile ? 'Cancel' : 'Edit'}
+                  {isEditingProfile ? "Cancel" : "Edit"}
                 </button>
               </div>
 
               {/* Edit Profile Form Sub-panel */}
               {isEditingProfile && (
-                <form onSubmit={handleProfileUpdateSubmit} className="flex flex-col gap-3.5 p-3.5 bg-(--border-subtle)/50 border border-primary-theme/30 rounded-xl">
-                  <span className="text-xs font-semibold text-(--text-main)">Edit Profile Details</span>
+                <form
+                  onSubmit={handleProfileUpdateSubmit}
+                  className="flex flex-col gap-3.5 p-3.5 bg-(--border-subtle)/50 border border-primary-theme/30 rounded-xl"
+                >
+                  <span className="text-xs font-semibold text-(--text-main)">
+                    Edit Profile Details
+                  </span>
 
                   {/* Profile Picture Upload & Live Preview */}
                   <div className="flex flex-col gap-2 p-2.5 bg-(--bg-card) border border-(--border-subtle) rounded-xl">
                     <div className="flex items-center justify-between">
-                      <label className="text-[11px] font-semibold text-(--text-muted)">Profile Photo</label>
-                      <span className="text-[10px] text-(--text-muted)">Max 2MB</span>
+                      <label className="text-[11px] font-semibold text-(--text-muted)">
+                        Profile Photo
+                      </label>
+                      <span className="text-[10px] text-(--text-muted)">
+                        Max 2MB
+                      </span>
                     </div>
 
                     <div className="flex items-center gap-3">
                       {/* Live Circular Preview */}
                       <div className="relative shrink-0">
-                        {(!isAvatarRemoved && (avatarPreviewUrl || currentUser.avatar_url)) ? (
+                        {!isAvatarRemoved &&
+                        (avatarPreviewUrl || currentUser.avatar_url) ? (
                           <img
-                            src={avatarPreviewUrl || currentUser.avatar_url || ''}
+                            src={
+                              avatarPreviewUrl || currentUser.avatar_url || ""
+                            }
                             alt="Avatar Preview"
                             className="w-12 h-12 rounded-full object-cover border border-(--border-subtle) shadow-sm"
                           />
                         ) : (
                           <div
                             className="w-12 h-12 rounded-full flex items-center justify-center font-bold text-white text-base shadow-sm shrink-0"
-                            style={{ backgroundColor: currentUser.avatar_color || currentAccent.primary }}
+                            style={{
+                              backgroundColor:
+                                currentUser.avatar_color ||
+                                currentAccent.primary,
+                            }}
                           >
-                            {editDisplayName.charAt(0).toUpperCase() || 'U'}
+                            {editDisplayName.charAt(0).toUpperCase() || "U"}
                           </div>
                         )}
                         {pendingAvatarFile && (
@@ -761,10 +1120,16 @@ export const UserModal: React.FC<UserModalProps> = ({
                             className="flex items-center gap-1 px-2.5 py-1 bg-(--border-subtle) hover:bg-(--border-hover) border border-(--border-subtle) text-(--text-main) text-xs rounded-lg cursor-pointer transition-colors"
                           >
                             <LuCamera size={13} />
-                            <span>{(avatarPreviewUrl || (currentUser.avatar_url && !isAvatarRemoved)) ? 'Change Photo' : 'Upload Photo'}</span>
+                            <span>
+                              {avatarPreviewUrl ||
+                              (currentUser.avatar_url && !isAvatarRemoved)
+                                ? "Change Photo"
+                                : "Upload Photo"}
+                            </span>
                           </button>
 
-                          {(avatarPreviewUrl || (currentUser.avatar_url && !isAvatarRemoved)) && (
+                          {(avatarPreviewUrl ||
+                            (currentUser.avatar_url && !isAvatarRemoved)) && (
                             <button
                               type="button"
                               onClick={handleRemovePhotoClick}
@@ -777,14 +1142,18 @@ export const UserModal: React.FC<UserModalProps> = ({
                           )}
                         </div>
                         <span className="text-[10px] text-(--text-muted)">
-                          {pendingAvatarFile ? `Selected: ${pendingAvatarFile.name}` : 'PNG, JPG, WEBP or GIF'}
+                          {pendingAvatarFile
+                            ? `Selected: ${pendingAvatarFile.name}`
+                            : "PNG, JPG, WEBP or GIF"}
                         </span>
                       </div>
                     </div>
                   </div>
 
                   <div className="flex flex-col gap-1">
-                    <label className="text-[11px] text-(--text-muted)">Display Name</label>
+                    <label className="text-[11px] text-(--text-muted)">
+                      Display Name
+                    </label>
                     <input
                       type="text"
                       value={editDisplayName}
@@ -799,8 +1168,14 @@ export const UserModal: React.FC<UserModalProps> = ({
                     disabled={isSubmitting}
                     className="mt-1 py-1.5 px-3 bg-primary-theme text-white text-xs font-semibold rounded-lg hover:opacity-90 cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5"
                   >
-                    {isSubmitting && <LuLoader className="icon-spin" size={13} />}
-                    <span>{isSubmitting ? 'Saving Profile...' : 'Save Profile Changes'}</span>
+                    {isSubmitting && (
+                      <LuLoader className="icon-spin" size={13} />
+                    )}
+                    <span>
+                      {isSubmitting
+                        ? "Saving Profile..."
+                        : "Save Profile Changes"}
+                    </span>
                   </button>
                 </form>
               )}
@@ -819,19 +1194,42 @@ export const UserModal: React.FC<UserModalProps> = ({
                       setIsChangingPassword((prev) => !prev);
                       setIsEditingProfile(false);
                       setErrorMessage(null);
+                      setPasswordErrorMsg(null);
+                      setPasswordSuccessMsg(null);
                     }}
                   >
-                    {isChangingPassword ? 'Cancel' : 'Change Password'}
+                    {isChangingPassword ? "Cancel" : "Change Password"}
                   </button>
                 </div>
 
                 {isChangingPassword && (
-                  <form onSubmit={handlePasswordChangeSubmit} className="flex flex-col gap-2.5 pt-2">
+                  <form
+                    onSubmit={handlePasswordChangeSubmit}
+                    className="flex flex-col gap-2.5 pt-2"
+                  >
+                    {passwordErrorMsg && (
+                      <div className="flex items-center gap-2 p-2.5 bg-red-500/10 border border-red-500/30 rounded-xl text-xs text-red-500 animate-[fadeIn_0.2s_ease-out]">
+                        <LuCircleAlert size={15} className="shrink-0" />
+                        <span className="font-medium">{passwordErrorMsg}</span>
+                      </div>
+                    )}
+                    {passwordSuccessMsg && (
+                      <div className="flex items-center gap-2 p-2.5 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-xs text-emerald-500 animate-[fadeIn_0.2s_ease-out]">
+                        <LuCheck size={15} className="shrink-0" />
+                        <span className="font-medium">
+                          {passwordSuccessMsg}
+                        </span>
+                      </div>
+                    )}
+
                     <div className="relative flex items-center">
                       <input
-                        type={showOldPassword ? 'text' : 'password'}
+                        type={showOldPassword ? "text" : "password"}
                         value={oldPassword}
-                        onChange={(e) => setOldPassword(e.target.value)}
+                        onChange={(e) => {
+                          setOldPassword(e.target.value);
+                          if (passwordErrorMsg) setPasswordErrorMsg(null);
+                        }}
                         placeholder="Current password"
                         required
                         className="w-full bg-(--bg-card) border border-(--border-subtle) focus:border-primary-theme rounded-lg py-1.5 px-3 pr-8 text-xs outline-none"
@@ -841,35 +1239,71 @@ export const UserModal: React.FC<UserModalProps> = ({
                         className="absolute right-2.5 text-(--text-muted)"
                         onClick={() => setShowOldPassword((prev) => !prev)}
                       >
-                        {showOldPassword ? <LuEyeOff size={13} /> : <LuEye size={13} />}
+                        {showOldPassword ? (
+                          <LuEyeOff size={13} />
+                        ) : (
+                          <LuEye size={13} />
+                        )}
                       </button>
                     </div>
 
-                    <div className="relative flex items-center">
-                      <input
-                        type={showNewPassword ? 'text' : 'password'}
-                        value={newPassword}
-                        onChange={(e) => setNewPassword(e.target.value)}
-                        placeholder="New password (min 6 chars)"
-                        required
-                        minLength={6}
-                        className="w-full bg-(--bg-card) border border-(--border-subtle) focus:border-primary-theme rounded-lg py-1.5 px-3 pr-8 text-xs outline-none"
-                      />
-                      <button
-                        type="button"
-                        className="absolute right-2.5 text-(--text-muted)"
-                        onClick={() => setShowNewPassword((prev) => !prev)}
-                      >
-                        {showNewPassword ? <LuEyeOff size={13} /> : <LuEye size={13} />}
-                      </button>
+                    <div className="flex flex-col gap-1">
+                      <div className="relative flex items-center">
+                        <input
+                          type={showNewPassword ? "text" : "password"}
+                          value={newPassword}
+                          onChange={(e) => {
+                            setNewPassword(e.target.value);
+                            if (passwordErrorMsg) setPasswordErrorMsg(null);
+                          }}
+                          placeholder="New secure password (min 8 chars)"
+                          required
+                          minLength={8}
+                          className="w-full bg-(--bg-card) border border-(--border-subtle) focus:border-primary-theme rounded-lg py-1.5 px-3 pr-8 text-xs outline-none"
+                        />
+                        <button
+                          type="button"
+                          className="absolute right-2.5 text-(--text-muted)"
+                          onClick={() => setShowNewPassword((prev) => !prev)}
+                        >
+                          {showNewPassword ? (
+                            <LuEyeOff size={13} />
+                          ) : (
+                            <LuEye size={13} />
+                          )}
+                        </button>
+                      </div>
+                      {newPassword.length > 0 && (
+                        <PasswordStrengthMeter result={changeStrength} />
+                      )}
                     </div>
+
+                    {oldPassword &&
+                      newPassword &&
+                      oldPassword === newPassword && (
+                        <p className="text-[11px] text-amber-500 font-medium">
+                          New password cannot be the same as your current
+                          password.
+                        </p>
+                      )}
 
                     <button
                       type="submit"
-                      disabled={isSubmitting}
-                      className="py-1.5 px-3 bg-primary-theme text-white text-xs font-semibold rounded-lg hover:opacity-90 cursor-pointer disabled:opacity-50"
+                      disabled={isSubmitting || !isPasswordChangeValid}
+                      className={`py-2 px-3 text-xs font-semibold rounded-lg transition-all flex items-center justify-center gap-1.5 ${
+                        isPasswordChangeValid && !isSubmitting
+                          ? "bg-primary-theme text-white hover:opacity-90 cursor-pointer shadow-xs active:scale-[0.99]"
+                          : "bg-(--border-subtle) text-(--text-muted) cursor-not-allowed opacity-60"
+                      }`}
+                      title={
+                        !isPasswordChangeValid
+                          ? "Fulfill all password requirements above to update password"
+                          : "Click to update password"
+                      }
                     >
-                      {isSubmitting ? 'Updating Password...' : 'Update Password'}
+                      {isSubmitting
+                        ? "Updating Password..."
+                        : "Update Password"}
                     </button>
                   </form>
                 )}
@@ -884,25 +1318,29 @@ export const UserModal: React.FC<UserModalProps> = ({
 
                 {/* Theme Mode Toggle (Light vs Dark) */}
                 <div className="flex flex-col gap-1.5">
-                  <label className="text-[11px] font-medium text-(--text-muted)">Theme Mode</label>
+                  <label className="text-[11px] font-medium text-(--text-muted)">
+                    Theme Mode
+                  </label>
                   <div className="grid grid-cols-2 gap-2">
                     <button
                       type="button"
-                      className={`flex items-center justify-center gap-2 py-2 px-3 rounded-lg border text-xs font-medium cursor-pointer ${mode === 'dark'
-                        ? 'bg-primary-light-theme border-primary-theme text-primary-theme font-semibold'
-                        : 'bg-(--border-subtle) border-(--border-subtle) text-(--text-main) hover:bg-(--border-hover)'
-                        }`}
-                      onClick={() => setMode('dark')}
+                      className={`flex items-center justify-center gap-2 py-2 px-3 rounded-lg border text-xs font-medium cursor-pointer ${
+                        mode === "dark"
+                          ? "bg-primary-light-theme border-primary-theme text-primary-theme font-semibold"
+                          : "bg-(--border-subtle) border-(--border-subtle) text-(--text-main) hover:bg-(--border-hover)"
+                      }`}
+                      onClick={() => setMode("dark")}
                     >
                       <LuMoon size={14} /> Dark Mode
                     </button>
                     <button
                       type="button"
-                      className={`flex items-center justify-center gap-2 py-2 px-3 rounded-lg border text-xs font-medium cursor-pointer ${mode === 'light'
-                        ? 'bg-primary-light-theme border-primary-theme text-primary-theme font-semibold'
-                        : 'bg-(--border-subtle) border-(--border-subtle) text-(--text-main) hover:bg-(--border-hover)'
-                        }`}
-                      onClick={() => setMode('light')}
+                      className={`flex items-center justify-center gap-2 py-2 px-3 rounded-lg border text-xs font-medium cursor-pointer ${
+                        mode === "light"
+                          ? "bg-primary-light-theme border-primary-theme text-primary-theme font-semibold"
+                          : "bg-(--border-subtle) border-(--border-subtle) text-(--text-main) hover:bg-(--border-hover)"
+                      }`}
+                      onClick={() => setMode("light")}
                     >
                       <LuSun size={14} /> Light Mode
                     </button>
@@ -915,32 +1353,35 @@ export const UserModal: React.FC<UserModalProps> = ({
                     Accent Color ({currentAccent.label})
                   </label>
                   <div className="grid grid-cols-4 sm:grid-cols-7 gap-2">
-                    {(Object.keys(ACCENT_PALETTES) as AccentColor[]).map((key) => {
-                      const pal = ACCENT_PALETTES[key];
-                      const isSelected = accent === key;
-                      return (
-                        <button
-                          key={key}
-                          type="button"
-                          className={`group relative flex flex-col items-center justify-center p-2 rounded-xl border cursor-pointer ${isSelected
-                            ? 'border-primary-theme bg-primary-light-theme scale-105'
-                            : 'border-(--border-subtle) bg-(--border-subtle) hover:border-(--border-hover)'
+                    {(Object.keys(ACCENT_PALETTES) as AccentColor[]).map(
+                      (key) => {
+                        const pal = ACCENT_PALETTES[key];
+                        const isSelected = accent === key;
+                        return (
+                          <button
+                            key={key}
+                            type="button"
+                            className={`group relative flex flex-col items-center justify-center p-2 rounded-xl border cursor-pointer ${
+                              isSelected
+                                ? "border-primary-theme bg-primary-light-theme scale-105"
+                                : "border-(--border-subtle) bg-(--border-subtle) hover:border-(--border-hover)"
                             }`}
-                          onClick={() => setAccent(key)}
-                          title={pal.label}
-                        >
-                          <div
-                            className="w-5 h-5 rounded-full flex items-center justify-center text-white shadow-sm"
-                            style={{ backgroundColor: pal.primary }}
+                            onClick={() => setAccent(key)}
+                            title={pal.label}
                           >
-                            {isSelected && <LuCheck size={11} />}
-                          </div>
-                          <span className="text-[10px] text-(--text-muted) mt-1 truncate max-w-10">
-                            {pal.label.split(' ')[0]}
-                          </span>
-                        </button>
-                      );
-                    })}
+                            <div
+                              className="w-5 h-5 rounded-full flex items-center justify-center text-white shadow-sm"
+                              style={{ backgroundColor: pal.primary }}
+                            >
+                              {isSelected && <LuCheck size={11} />}
+                            </div>
+                            <span className="text-[10px] text-(--text-muted) mt-1 truncate max-w-10">
+                              {pal.label.split(" ")[0]}
+                            </span>
+                          </button>
+                        );
+                      },
+                    )}
                   </div>
                 </div>
               </div>
@@ -952,14 +1393,20 @@ export const UserModal: React.FC<UserModalProps> = ({
                   className="w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-red-500/15 hover:bg-red-500/25 border border-red-500/30 text-red-500 rounded-xl text-xs font-semibold cursor-pointer"
                   onClick={async () => {
                     const confirmed = await confirm({
-                      type: 'logout',
-                      confirmText: 'Log out',
-                      cancelText: 'Cancel',
+                      type: "logout",
+                      confirmText: "Log out",
+                      cancelText: "Cancel",
                       user: {
                         displayName: currentUser.display_name,
                         email: currentUser.email,
-                        avatarColor: currentUser.avatar_color || '#3B82F6',
-                        initial: (currentUser.display_name || currentUser.username || 'U').slice(0, 2).toUpperCase(),
+                        avatarColor: currentUser.avatar_color || "#3B82F6",
+                        initial: (
+                          currentUser.display_name ||
+                          currentUser.username ||
+                          "U"
+                        )
+                          .slice(0, 2)
+                          .toUpperCase(),
                       },
                     });
                     if (confirmed) {
@@ -980,19 +1427,19 @@ export const UserModal: React.FC<UserModalProps> = ({
               </div>
             </div>
           ) : (
-
             /* CASE B: GUEST / NOT LOGGED IN */
             <>
               {/* Tab Switcher */}
               <div className="grid grid-cols-2 p-1 bg-(--border-subtle) border border-(--border-subtle) rounded-xl gap-1">
                 <button
                   type="button"
-                  className={`flex items-center justify-center gap-1.5 py-1.5 text-xs font-semibold rounded-lg cursor-pointer ${activeTab === 'login'
-                    ? 'bg-primary-theme text-white'
-                    : 'text-(--text-muted) hover:text-(--text-main)'
-                    }`}
+                  className={`flex items-center justify-center gap-1.5 py-1.5 text-xs font-semibold rounded-lg cursor-pointer ${
+                    activeTab === "login"
+                      ? "bg-primary-theme text-white"
+                      : "text-(--text-muted) hover:text-(--text-main)"
+                  }`}
                   onClick={() => {
-                    setActiveTab('login');
+                    setActiveTab("login");
                     setErrorMessage(null);
                   }}
                 >
@@ -1000,12 +1447,13 @@ export const UserModal: React.FC<UserModalProps> = ({
                 </button>
                 <button
                   type="button"
-                  className={`flex items-center justify-center gap-1.5 py-1.5 text-xs font-semibold rounded-lg cursor-pointer ${activeTab === 'register'
-                    ? 'bg-primary-theme text-white'
-                    : 'text-(--text-muted) hover:text-(--text-main)'
-                    }`}
+                  className={`flex items-center justify-center gap-1.5 py-1.5 text-xs font-semibold rounded-lg cursor-pointer ${
+                    activeTab === "register"
+                      ? "bg-primary-theme text-white"
+                      : "text-(--text-muted) hover:text-(--text-main)"
+                  }`}
                   onClick={() => {
-                    setActiveTab('register');
+                    setActiveTab("register");
                     setErrorMessage(null);
                   }}
                 >
@@ -1028,7 +1476,7 @@ export const UserModal: React.FC<UserModalProps> = ({
               )}
 
               {/* TAB 1: LOGIN */}
-              {activeTab === 'login' && (
+              {activeTab === "login" && (
                 <div className="flex flex-col gap-3">
                   {/* Google One-Click Sign In (Top Primary Action) */}
                   <button
@@ -1043,52 +1491,76 @@ export const UserModal: React.FC<UserModalProps> = ({
 
                   <div className="flex items-center gap-2 my-0.5">
                     <div className="h-px bg-(--border-subtle) flex-1" />
-                    <span className="text-[10px] uppercase font-semibold text-(--text-muted) tracking-wider">or continue with</span>
+                    <span className="text-[10px] uppercase font-semibold text-(--text-muted) tracking-wider">
+                      or continue with
+                    </span>
                     <div className="h-px bg-(--border-subtle) flex-1" />
                   </div>
 
-                  {loginMethod !== 'forgot_password' && (
+                  {loginMethod !== "forgot_password" && (
                     /* Method Switcher Pills */
                     <div className="grid grid-cols-2 p-1 bg-(--border-subtle) rounded-xl gap-1">
                       <button
                         type="button"
-                        className={`flex items-center justify-center gap-1.5 py-1.5 text-xs font-semibold rounded-lg cursor-pointer transition-all ${loginMethod === 'password'
-                          ? 'bg-(--bg-card) text-(--text-main) shadow-xs'
-                          : 'text-(--text-muted) hover:text-(--text-main)'
-                          }`}
+                        className={`flex items-center justify-center gap-1.5 py-1.5 text-xs font-semibold rounded-lg cursor-pointer transition-all ${
+                          loginMethod === "password"
+                            ? "bg-(--bg-card) text-(--text-main) shadow-xs"
+                            : "text-(--text-muted) hover:text-(--text-main)"
+                        }`}
                         onClick={() => {
-                          setLoginMethod('password');
+                          setLoginMethod("password");
                           setErrorMessage(null);
                         }}
                       >
-                        <LuLock size={13} className={loginMethod === 'password' ? 'text-primary-theme' : ''} />
+                        <LuLock
+                          size={13}
+                          className={
+                            loginMethod === "password"
+                              ? "text-primary-theme"
+                              : ""
+                          }
+                        />
                         <span>Password</span>
                       </button>
                       <button
                         type="button"
-                        className={`flex items-center justify-center gap-1.5 py-1.5 text-xs font-semibold rounded-lg cursor-pointer transition-all ${loginMethod === 'otp'
-                          ? 'bg-(--bg-card) text-(--text-main) shadow-xs'
-                          : 'text-(--text-muted) hover:text-(--text-main)'
-                          }`}
+                        className={`flex items-center justify-center gap-1.5 py-1.5 text-xs font-semibold rounded-lg cursor-pointer transition-all ${
+                          loginMethod === "otp"
+                            ? "bg-(--bg-card) text-(--text-main) shadow-xs"
+                            : "text-(--text-muted) hover:text-(--text-main)"
+                        }`}
                         onClick={() => {
-                          setLoginMethod('otp');
-                          setOtpStep('request');
+                          setLoginMethod("otp");
+                          setOtpStep("request");
                           setErrorMessage(null);
                         }}
                       >
-                        <LuMail size={13} className={loginMethod === 'otp' ? 'text-primary-theme' : ''} />
+                        <LuMail
+                          size={13}
+                          className={
+                            loginMethod === "otp" ? "text-primary-theme" : ""
+                          }
+                        />
                         <span>Email OTP</span>
                       </button>
                     </div>
                   )}
 
-                  {loginMethod === 'password' ? (
+                  {loginMethod === "password" ? (
                     /* METHOD A: PASSWORD LOGIN */
-                    <form onSubmit={handleLoginSubmit} className="flex flex-col gap-3">
+                    <form
+                      onSubmit={handleLoginSubmit}
+                      className="flex flex-col gap-3"
+                    >
                       <div className="flex flex-col gap-1">
-                        <label className="text-xs text-(--text-main) font-medium">Username or Email *</label>
+                        <label className="text-xs text-(--text-main) font-medium">
+                          Username or Email *
+                        </label>
                         <div className="relative flex items-center">
-                          <LuUser size={15} className="absolute left-3 text-(--text-muted) pointer-events-none" />
+                          <LuUser
+                            size={15}
+                            className="absolute left-3 text-(--text-muted) pointer-events-none"
+                          />
                           <input
                             type="text"
                             value={loginIdentifier}
@@ -1103,13 +1575,15 @@ export const UserModal: React.FC<UserModalProps> = ({
 
                       <div className="flex flex-col gap-1">
                         <div className="flex items-center justify-between">
-                          <label className="text-xs text-(--text-main) font-medium">Password *</label>
+                          <label className="text-xs text-(--text-main) font-medium">
+                            Password *
+                          </label>
                           <button
                             type="button"
                             className="text-[11px] text-primary-theme hover:underline cursor-pointer"
                             onClick={() => {
-                              setLoginMethod('forgot_password');
-                              setResetStep('request');
+                              setLoginMethod("forgot_password");
+                              setResetStep("request");
                               setResetIdentifier(loginIdentifier);
                               setErrorMessage(null);
                               setAuthSuccessMsg(null);
@@ -1119,9 +1593,12 @@ export const UserModal: React.FC<UserModalProps> = ({
                           </button>
                         </div>
                         <div className="relative flex items-center">
-                          <LuLock size={15} className="absolute left-3 text-(--text-muted) pointer-events-none" />
+                          <LuLock
+                            size={15}
+                            className="absolute left-3 text-(--text-muted) pointer-events-none"
+                          />
                           <input
-                            type={showLoginPassword ? 'text' : 'password'}
+                            type={showLoginPassword ? "text" : "password"}
                             value={loginPassword}
                             onChange={(e) => setLoginPassword(e.target.value)}
                             placeholder="Enter password"
@@ -1132,10 +1609,20 @@ export const UserModal: React.FC<UserModalProps> = ({
                           <button
                             type="button"
                             className="absolute right-3 text-(--text-muted) hover:text-(--text-main) cursor-pointer"
-                            onClick={() => setShowLoginPassword((prev) => !prev)}
-                            title={showLoginPassword ? 'Hide password' : 'Show password'}
+                            onClick={() =>
+                              setShowLoginPassword((prev) => !prev)
+                            }
+                            title={
+                              showLoginPassword
+                                ? "Hide password"
+                                : "Show password"
+                            }
                           >
-                            {showLoginPassword ? <LuEyeOff size={14} /> : <LuEye size={14} />}
+                            {showLoginPassword ? (
+                              <LuEyeOff size={14} />
+                            ) : (
+                              <LuEye size={14} />
+                            )}
                           </button>
                         </div>
                       </div>
@@ -1147,7 +1634,8 @@ export const UserModal: React.FC<UserModalProps> = ({
                       >
                         {isSubmitting ? (
                           <>
-                            <LuLoader size={15} className="icon-spin" /> Signing In...
+                            <LuLoader size={15} className="icon-spin" /> Signing
+                            In...
                           </>
                         ) : (
                           <>
@@ -1156,19 +1644,29 @@ export const UserModal: React.FC<UserModalProps> = ({
                         )}
                       </button>
                     </form>
-                  ) : loginMethod === 'otp' ? (
+                  ) : loginMethod === "otp" ? (
                     /* METHOD B: EMAIL OTP */
-                    otpStep === 'request' ? (
+                    otpStep === "request" ? (
                       /* STEP 1: REQUEST OTP */
-                      <form onSubmit={handleSendOtpSubmit} className="flex flex-col gap-3">
+                      <form
+                        onSubmit={handleSendOtpSubmit}
+                        className="flex flex-col gap-3"
+                      >
                         <div className="flex flex-col gap-1">
-                          <label className="text-xs text-(--text-main) font-medium">Registered Username or Email *</label>
+                          <label className="text-xs text-(--text-main) font-medium">
+                            Registered Username or Email *
+                          </label>
                           <div className="relative flex items-center">
-                            <LuMail size={15} className="absolute left-3 text-(--text-muted) pointer-events-none" />
+                            <LuMail
+                              size={15}
+                              className="absolute left-3 text-(--text-muted) pointer-events-none"
+                            />
                             <input
                               type="text"
                               value={loginIdentifier}
-                              onChange={(e) => setLoginIdentifier(e.target.value)}
+                              onChange={(e) =>
+                                setLoginIdentifier(e.target.value)
+                              }
                               placeholder="Enter your email or username"
                               required
                               autoComplete="username email"
@@ -1185,7 +1683,8 @@ export const UserModal: React.FC<UserModalProps> = ({
                         >
                           {isSubmitting ? (
                             <>
-                              <LuLoader size={15} className="icon-spin" /> Sending Code...
+                              <LuLoader size={15} className="icon-spin" />{" "}
+                              Sending Code...
                             </>
                           ) : (
                             <>
@@ -1196,21 +1695,28 @@ export const UserModal: React.FC<UserModalProps> = ({
                       </form>
                     ) : (
                       /* STEP 2: VERIFY OTP */
-                      <form onSubmit={handleVerifyOtpSubmit} className="flex flex-col gap-3">
+                      <form
+                        onSubmit={handleVerifyOtpSubmit}
+                        className="flex flex-col gap-3"
+                      >
                         <div className="bg-(--border-subtle)/60 border border-(--border-subtle) rounded-xl p-3 flex items-center justify-between gap-2">
                           <div className="flex items-center gap-2.5 min-w-0">
                             <div className="w-8 h-8 rounded-lg bg-primary-theme/15 text-primary-theme flex items-center justify-center shrink-0">
                               <LuMailCheck size={16} />
                             </div>
                             <div className="min-w-0">
-                              <div className="text-[11px] text-(--text-muted)">Code sent to</div>
-                              <div className="text-xs font-semibold text-(--text-main) truncate">{otpMaskedEmail}</div>
+                              <div className="text-[11px] text-(--text-muted)">
+                                Code sent to
+                              </div>
+                              <div className="text-xs font-semibold text-(--text-main) truncate">
+                                {otpMaskedEmail}
+                              </div>
                             </div>
                           </div>
                           <button
                             type="button"
                             onClick={() => {
-                              setOtpStep('request');
+                              setOtpStep("request");
                               setErrorMessage(null);
                             }}
                             className="text-[11px] font-medium text-primary-theme hover:underline shrink-0 cursor-pointer flex items-center gap-1"
@@ -1232,7 +1738,9 @@ export const UserModal: React.FC<UserModalProps> = ({
                               maxLength={6}
                               value={otpCode}
                               onChange={(e) => {
-                                const val = e.target.value.replace(/\D/g, '').slice(0, 6);
+                                const val = e.target.value
+                                  .replace(/\D/g, "")
+                                  .slice(0, 6);
                                 setOtpCode(val);
                               }}
                               placeholder="000000"
@@ -1251,7 +1759,8 @@ export const UserModal: React.FC<UserModalProps> = ({
                         >
                           {isSubmitting ? (
                             <>
-                              <LuLoader size={15} className="icon-spin" /> Verifying...
+                              <LuLoader size={15} className="icon-spin" />{" "}
+                              Verifying...
                             </>
                           ) : (
                             <>
@@ -1278,7 +1787,7 @@ export const UserModal: React.FC<UserModalProps> = ({
                             type="button"
                             className="text-(--text-muted) hover:text-(--text-main) underline cursor-pointer"
                             onClick={() => {
-                              setLoginMethod('password');
+                              setLoginMethod("password");
                               setErrorMessage(null);
                             }}
                           >
@@ -1287,211 +1796,286 @@ export const UserModal: React.FC<UserModalProps> = ({
                         </div>
                       </form>
                     )
-                  ) : (
-                    /* TERTIARY METHOD: FORGOT & RESET PASSWORD */
-                    resetStep === 'request' ? (
-                      /* RESET STEP 1: REQUEST CODE */
-                      <form onSubmit={handleSendResetOtpSubmit} className="flex flex-col gap-3">
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-semibold text-(--text-main) flex items-center gap-1.5">
-                            <LuKeyRound size={14} className="text-primary-theme" /> Reset Password
-                          </span>
-                          <button
-                            type="button"
-                            className="text-[11px] text-primary-theme hover:underline cursor-pointer flex items-center gap-1"
-                            onClick={() => {
-                              setLoginMethod('password');
-                              setErrorMessage(null);
-                              setAuthSuccessMsg(null);
-                            }}
-                          >
-                            <LuLock size={12} /> Back to Sign In
-                          </button>
-                        </div>
-
-                        <div className="flex flex-col gap-1">
-                          <label className="text-xs text-(--text-main) font-medium">Registered Username or Email *</label>
-                          <div className="relative flex items-center">
-                            <LuMail size={15} className="absolute left-3 text-(--text-muted) pointer-events-none" />
-                            <input
-                              type="text"
-                              value={resetIdentifier}
-                              onChange={(e) => setResetIdentifier(e.target.value)}
-                              placeholder="Enter username or email"
-                              required
-                              autoComplete="username email"
-                              autoFocus
-                              className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-3 text-xs outline-none transition-colors"
-                            />
-                          </div>
-                          <p className="text-[11px] text-(--text-muted) mt-0.5">
-                            We'll send a 6-digit password reset code to your registered email.
-                          </p>
-                        </div>
-
+                  ) : /* TERTIARY METHOD: FORGOT & RESET PASSWORD */
+                  resetStep === "request" ? (
+                    /* RESET STEP 1: REQUEST CODE */
+                    <form
+                      onSubmit={handleSendResetOtpSubmit}
+                      className="flex flex-col gap-3"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-semibold text-(--text-main) flex items-center gap-1.5">
+                          <LuKeyRound
+                            size={14}
+                            className="text-primary-theme"
+                          />{" "}
+                          Reset Password
+                        </span>
                         <button
-                          type="submit"
-                          className="mt-1 w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-primary-theme hover:opacity-90 disabled:opacity-50 text-white rounded-xl text-xs font-semibold cursor-pointer transition-all shadow-sm"
-                          disabled={isSubmitting || !resetIdentifier.trim()}
+                          type="button"
+                          className="text-[11px] text-primary-theme hover:underline cursor-pointer flex items-center gap-1"
+                          onClick={() => {
+                            setLoginMethod("password");
+                            setErrorMessage(null);
+                            setAuthSuccessMsg(null);
+                          }}
                         >
-                          {isSubmitting ? (
-                            <>
-                              <LuLoader size={15} className="icon-spin" /> Sending Code...
-                            </>
-                          ) : (
-                            <>
-                              <LuKeyRound size={15} /> Send Reset Code
-                            </>
-                          )}
+                          <LuLock size={12} /> Back to Sign In
                         </button>
-                      </form>
-                    ) : (
-                      /* RESET STEP 2: VERIFY CODE & SET NEW PASSWORD */
-                      <form onSubmit={handleResetPasswordSubmit} className="flex flex-col gap-3">
-                        <div className="bg-(--border-subtle)/60 border border-(--border-subtle) rounded-xl p-3 flex items-center justify-between gap-2">
-                          <div className="flex items-center gap-2.5 min-w-0">
-                            <div className="w-8 h-8 rounded-lg bg-primary-theme/15 text-primary-theme flex items-center justify-center shrink-0">
-                              <LuMailCheck size={16} />
-                            </div>
-                            <div className="min-w-0">
-                              <div className="text-[11px] text-(--text-muted)">Reset code sent to</div>
-                              <div className="text-xs font-semibold text-(--text-main) truncate">{resetMaskedEmail}</div>
-                            </div>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setResetStep('request');
-                              setErrorMessage(null);
-                            }}
-                            className="text-[11px] font-medium text-primary-theme hover:underline shrink-0 cursor-pointer flex items-center gap-1"
-                          >
-                            <LuArrowLeft size={12} /> Change
-                          </button>
-                        </div>
+                      </div>
 
-                        <div className="flex flex-col gap-1">
-                          <label className="text-xs text-(--text-main) font-medium text-center">
-                            Enter 6-Digit Reset Code *
-                          </label>
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs text-(--text-main) font-medium">
+                          Registered Username or Email *
+                        </label>
+                        <div className="relative flex items-center">
+                          <LuMail
+                            size={15}
+                            className="absolute left-3 text-(--text-muted) pointer-events-none"
+                          />
                           <input
-                            ref={resetOtpInputRef}
                             type="text"
-                            inputMode="numeric"
-                            pattern="[0-9]*"
-                            maxLength={6}
-                            value={resetOtp}
-                            onChange={(e) => {
-                              const val = e.target.value.replace(/\D/g, '').slice(0, 6);
-                              setResetOtp(val);
-                            }}
-                            placeholder="000000"
+                            value={resetIdentifier}
+                            onChange={(e) => setResetIdentifier(e.target.value)}
+                            placeholder="Enter username or email"
                             required
-                            autoComplete="one-time-code"
+                            autoComplete="username email"
                             autoFocus
-                            className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 px-4 text-center font-mono text-lg tracking-[0.4em] outline-none font-bold text-(--text-main) transition-all"
+                            className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-3 text-xs outline-none transition-colors"
                           />
                         </div>
+                        <p className="text-[11px] text-(--text-muted) mt-0.5">
+                          We'll send a 6-digit password reset code to your
+                          registered email.
+                        </p>
+                      </div>
 
-                        <div className="flex flex-col gap-1">
-                          <label className="text-xs text-(--text-main) font-medium">New Password * (min 6 characters)</label>
-                          <div className="relative flex items-center">
-                            <LuLock size={15} className="absolute left-3 text-(--text-muted) pointer-events-none" />
-                            <input
-                              type={showResetNewPassword ? 'text' : 'password'}
-                              value={resetNewPassword}
-                              onChange={(e) => setResetNewPassword(e.target.value)}
-                              placeholder="Enter new password"
-                              required
-                              minLength={6}
-                              autoComplete="new-password"
-                              className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-9 text-xs outline-none transition-colors"
-                            />
-                            <button
-                              type="button"
-                              className="absolute right-3 text-(--text-muted) hover:text-(--text-main) cursor-pointer"
-                              onClick={() => setShowResetNewPassword((prev) => !prev)}
-                              title={showResetNewPassword ? 'Hide password' : 'Show password'}
-                            >
-                              {showResetNewPassword ? <LuEyeOff size={14} /> : <LuEye size={14} />}
-                            </button>
+                      <button
+                        type="submit"
+                        className="mt-1 w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-primary-theme hover:opacity-90 disabled:opacity-50 text-white rounded-xl text-xs font-semibold cursor-pointer transition-all shadow-sm"
+                        disabled={isSubmitting || !resetIdentifier.trim()}
+                      >
+                        {isSubmitting ? (
+                          <>
+                            <LuLoader size={15} className="icon-spin" /> Sending
+                            Code...
+                          </>
+                        ) : (
+                          <>
+                            <LuKeyRound size={15} /> Send Reset Code
+                          </>
+                        )}
+                      </button>
+                    </form>
+                  ) : (
+                    /* RESET STEP 2: VERIFY CODE & SET NEW PASSWORD */
+                    <form
+                      onSubmit={handleResetPasswordSubmit}
+                      className="flex flex-col gap-3"
+                    >
+                      <div className="bg-(--border-subtle)/60 border border-(--border-subtle) rounded-xl p-3 flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className="w-8 h-8 rounded-lg bg-primary-theme/15 text-primary-theme flex items-center justify-center shrink-0">
+                            <LuMailCheck size={16} />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="text-[11px] text-(--text-muted)">
+                              Reset code sent to
+                            </div>
+                            <div className="text-xs font-semibold text-(--text-main) truncate">
+                              {resetMaskedEmail}
+                            </div>
                           </div>
                         </div>
-
-                        <div className="flex flex-col gap-1">
-                          <label className="text-xs text-(--text-main) font-medium">Confirm New Password *</label>
-                          <div className="relative flex items-center">
-                            <LuLock size={15} className="absolute left-3 text-(--text-muted) pointer-events-none" />
-                            <input
-                              type={showResetConfirmPassword ? 'text' : 'password'}
-                              value={resetConfirmPassword}
-                              onChange={(e) => setResetConfirmPassword(e.target.value)}
-                              placeholder="Confirm new password"
-                              required
-                              minLength={6}
-                              autoComplete="new-password"
-                              className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-9 text-xs outline-none transition-colors"
-                            />
-                            <button
-                              type="button"
-                              className="absolute right-3 text-(--text-muted) hover:text-(--text-main) cursor-pointer"
-                              onClick={() => setShowResetConfirmPassword((prev) => !prev)}
-                              title={showResetConfirmPassword ? 'Hide password' : 'Show password'}
-                            >
-                              {showResetConfirmPassword ? <LuEyeOff size={14} /> : <LuEye size={14} />}
-                            </button>
-                          </div>
-                        </div>
-
                         <button
-                          type="submit"
-                          className="mt-1 w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-primary-theme hover:opacity-90 disabled:opacity-50 text-white rounded-xl text-xs font-semibold cursor-pointer transition-all shadow-sm"
-                          disabled={isSubmitting || resetOtp.length !== 6 || resetNewPassword.length < 6}
+                          type="button"
+                          onClick={() => {
+                            setResetStep("request");
+                            setErrorMessage(null);
+                          }}
+                          className="text-[11px] font-medium text-primary-theme hover:underline shrink-0 cursor-pointer flex items-center gap-1"
                         >
-                          {isSubmitting ? (
-                            <>
-                              <LuLoader size={15} className="icon-spin" /> Resetting Password...
-                            </>
-                          ) : (
-                            <>
-                              <LuKeyRound size={15} /> Reset Password
-                            </>
-                          )}
+                          <LuArrowLeft size={12} /> Change
                         </button>
+                      </div>
 
-                        <div className="flex items-center justify-between text-[11px] text-(--text-muted) pt-1 border-t border-(--border-subtle)/50">
-                          {resendCountdown > 0 ? (
-                            <span>Resend in {resendCountdown}s</span>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => handleSendResetOtpSubmit()}
-                              disabled={isSubmitting}
-                              className="text-primary-theme hover:underline flex items-center gap-1 cursor-pointer font-medium"
-                            >
-                              <LuRefreshCw size={11} /> Resend code
-                            </button>
-                          )}
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs text-(--text-main) font-medium text-center">
+                          Enter 6-Digit Reset Code *
+                        </label>
+                        <input
+                          ref={resetOtpInputRef}
+                          type="text"
+                          inputMode="numeric"
+                          pattern="[0-9]*"
+                          maxLength={6}
+                          value={resetOtp}
+                          onChange={(e) => {
+                            const val = e.target.value
+                              .replace(/\D/g, "")
+                              .slice(0, 6);
+                            setResetOtp(val);
+                          }}
+                          placeholder="000000"
+                          required
+                          autoComplete="one-time-code"
+                          autoFocus
+                          className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 px-4 text-center font-mono text-lg tracking-[0.4em] outline-none font-bold text-(--text-main) transition-all"
+                        />
+                      </div>
 
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs text-(--text-main) font-medium">
+                          New Password * (min 8 characters)
+                        </label>
+                        <div className="relative flex items-center">
+                          <LuLock
+                            size={15}
+                            className="absolute left-3 text-(--text-muted) pointer-events-none"
+                          />
+                          <input
+                            type={showResetNewPassword ? "text" : "password"}
+                            value={resetNewPassword}
+                            onChange={(e) =>
+                              setResetNewPassword(e.target.value)
+                            }
+                            placeholder="Enter new secure password"
+                            required
+                            minLength={8}
+                            autoComplete="new-password"
+                            className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-9 text-xs outline-none transition-colors"
+                          />
                           <button
                             type="button"
-                            className="text-(--text-muted) hover:text-(--text-main) underline cursor-pointer"
-                            onClick={() => {
-                              setLoginMethod('password');
-                              setErrorMessage(null);
-                            }}
+                            className="absolute right-3 text-(--text-muted) hover:text-(--text-main) cursor-pointer"
+                            onClick={() =>
+                              setShowResetNewPassword((prev) => !prev)
+                            }
+                            title={
+                              showResetNewPassword
+                                ? "Hide password"
+                                : "Show password"
+                            }
                           >
-                            Cancel
+                            {showResetNewPassword ? (
+                              <LuEyeOff size={14} />
+                            ) : (
+                              <LuEye size={14} />
+                            )}
                           </button>
                         </div>
-                      </form>
-                    )
+                        {resetNewPassword.length > 0 && (
+                          <PasswordStrengthMeter result={resetStrength} />
+                        )}
+                      </div>
+
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs text-(--text-main) font-medium">
+                          Confirm New Password *
+                        </label>
+                        <div className="relative flex items-center">
+                          <LuLock
+                            size={15}
+                            className="absolute left-3 text-(--text-muted) pointer-events-none"
+                          />
+                          <input
+                            type={
+                              showResetConfirmPassword ? "text" : "password"
+                            }
+                            value={resetConfirmPassword}
+                            onChange={(e) =>
+                              setResetConfirmPassword(e.target.value)
+                            }
+                            placeholder="Confirm new password"
+                            required
+                            minLength={6}
+                            autoComplete="new-password"
+                            className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-9 text-xs outline-none transition-colors"
+                          />
+                          <button
+                            type="button"
+                            className="absolute right-3 text-(--text-muted) hover:text-(--text-main) cursor-pointer"
+                            onClick={() =>
+                              setShowResetConfirmPassword((prev) => !prev)
+                            }
+                            title={
+                              showResetConfirmPassword
+                                ? "Hide password"
+                                : "Show password"
+                            }
+                          >
+                            {showResetConfirmPassword ? (
+                              <LuEyeOff size={14} />
+                            ) : (
+                              <LuEye size={14} />
+                            )}
+                          </button>
+                        </div>
+                      </div>
+
+                      <button
+                        type="submit"
+                        className={`mt-1 w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs font-semibold transition-all shadow-sm ${
+                          !isSubmitting &&
+                          resetOtp.length === 6 &&
+                          resetNewPassword.length >= 8 &&
+                          resetStrength.isValid &&
+                          resetNewPassword === resetConfirmPassword
+                            ? "bg-primary-theme hover:opacity-90 text-white cursor-pointer"
+                            : "bg-(--border-subtle) text-(--text-muted) cursor-not-allowed opacity-60"
+                        }`}
+                        disabled={
+                          isSubmitting ||
+                          resetOtp.length !== 6 ||
+                          resetNewPassword.length < 8 ||
+                          !resetStrength.isValid ||
+                          resetNewPassword !== resetConfirmPassword
+                        }
+                      >
+                        {isSubmitting ? (
+                          <>
+                            <LuLoader size={15} className="icon-spin" />{" "}
+                            Resetting Password...
+                          </>
+                        ) : (
+                          <>
+                            <LuKeyRound size={15} /> Reset Password
+                          </>
+                        )}
+                      </button>
+
+                      <div className="flex items-center justify-between text-[11px] text-(--text-muted) pt-1 border-t border-(--border-subtle)/50">
+                        {resendCountdown > 0 ? (
+                          <span>Resend in {resendCountdown}s</span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => handleSendResetOtpSubmit()}
+                            disabled={isSubmitting}
+                            className="text-primary-theme hover:underline flex items-center gap-1 cursor-pointer font-medium"
+                          >
+                            <LuRefreshCw size={11} /> Resend code
+                          </button>
+                        )}
+
+                        <button
+                          type="button"
+                          className="text-(--text-muted) hover:text-(--text-main) underline cursor-pointer"
+                          onClick={() => {
+                            setLoginMethod("password");
+                            setErrorMessage(null);
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </form>
                   )}
                 </div>
               )}
 
               {/* TAB 2: REGISTER */}
-              {activeTab === 'register' && (
+              {activeTab === "register" && (
                 <div className="flex flex-col gap-3">
                   {/* Google One-Click Sign Up */}
                   <button
@@ -1506,15 +2090,25 @@ export const UserModal: React.FC<UserModalProps> = ({
 
                   <div className="flex items-center gap-2 my-0.5">
                     <div className="h-px bg-(--border-subtle) flex-1" />
-                    <span className="text-[10px] uppercase font-semibold text-(--text-muted) tracking-wider">or register with email</span>
+                    <span className="text-[10px] uppercase font-semibold text-(--text-muted) tracking-wider">
+                      or register with email
+                    </span>
                     <div className="h-px bg-(--border-subtle) flex-1" />
                   </div>
 
-                  <form onSubmit={handleRegisterSubmit} className="flex flex-col gap-2.5">
+                  <form
+                    onSubmit={handleRegisterSubmit}
+                    className="flex flex-col gap-2.5"
+                  >
                     <div className="flex flex-col gap-1">
-                      <label className="text-xs text-(--text-main) font-medium">Full Name *</label>
+                      <label className="text-xs text-(--text-main) font-medium">
+                        Full Name *
+                      </label>
                       <div className="relative flex items-center">
-                        <LuIdCard size={15} className="absolute left-3 text-(--text-muted) pointer-events-none" />
+                        <LuIdCard
+                          size={15}
+                          className="absolute left-3 text-(--text-muted) pointer-events-none"
+                        />
                         <input
                           type="text"
                           value={regDisplayName}
@@ -1528,9 +2122,14 @@ export const UserModal: React.FC<UserModalProps> = ({
                     </div>
 
                     <div className="flex flex-col gap-1">
-                      <label className="text-xs text-(--text-main) font-medium">Username *</label>
+                      <label className="text-xs text-(--text-main) font-medium">
+                        Username *
+                      </label>
                       <div className="relative flex items-center">
-                        <LuAtSign size={15} className="absolute left-3 text-(--text-muted) pointer-events-none" />
+                        <LuAtSign
+                          size={15}
+                          className="absolute left-3 text-(--text-muted) pointer-events-none"
+                        />
                         <input
                           type="text"
                           value={regUsername}
@@ -1544,9 +2143,14 @@ export const UserModal: React.FC<UserModalProps> = ({
                     </div>
 
                     <div className="flex flex-col gap-1">
-                      <label className="text-xs text-(--text-main) font-medium">Email Address *</label>
+                      <label className="text-xs text-(--text-main) font-medium">
+                        Email Address *
+                      </label>
                       <div className="relative flex items-center">
-                        <LuMail size={15} className="absolute left-3 text-(--text-muted) pointer-events-none" />
+                        <LuMail
+                          size={15}
+                          className="absolute left-3 text-(--text-muted) pointer-events-none"
+                        />
                         <input
                           type="email"
                           value={regEmail}
@@ -1560,16 +2164,21 @@ export const UserModal: React.FC<UserModalProps> = ({
                     </div>
 
                     <div className="flex flex-col gap-1">
-                      <label className="text-xs text-(--text-main) font-medium">Password * (min 6 chars)</label>
+                      <label className="text-xs text-(--text-main) font-medium">
+                        Password * (min 8 characters)
+                      </label>
                       <div className="relative flex items-center">
-                        <LuLock size={15} className="absolute left-3 text-(--text-muted) pointer-events-none" />
+                        <LuLock
+                          size={15}
+                          className="absolute left-3 text-(--text-muted) pointer-events-none"
+                        />
                         <input
-                          type={showRegPassword ? 'text' : 'password'}
+                          type={showRegPassword ? "text" : "password"}
                           value={regPassword}
                           onChange={(e) => setRegPassword(e.target.value)}
-                          placeholder="Create secure password"
+                          placeholder="Create strong, unique password"
                           required
-                          minLength={6}
+                          minLength={8}
                           autoComplete="new-password"
                           className="w-full bg-(--border-subtle) border border-(--border-subtle) focus:border-primary-theme rounded-xl py-2 pl-9 pr-9 text-xs outline-none"
                         />
@@ -1577,21 +2186,47 @@ export const UserModal: React.FC<UserModalProps> = ({
                           type="button"
                           className="absolute right-3 text-(--text-muted) hover:text-(--text-main) cursor-pointer"
                           onClick={() => setShowRegPassword((prev) => !prev)}
-                          title={showRegPassword ? 'Hide password' : 'Show password'}
+                          title={
+                            showRegPassword ? "Hide password" : "Show password"
+                          }
                         >
-                          {showRegPassword ? <LuEyeOff size={14} /> : <LuEye size={14} />}
+                          {showRegPassword ? (
+                            <LuEyeOff size={14} />
+                          ) : (
+                            <LuEye size={14} />
+                          )}
                         </button>
                       </div>
+                      {regPassword.length > 0 && (
+                        <PasswordStrengthMeter result={regStrength} />
+                      )}
                     </div>
 
                     <button
                       type="submit"
-                      className="mt-1 w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-primary-theme hover:opacity-90 disabled:opacity-50 text-white rounded-xl text-xs font-semibold cursor-pointer"
-                      disabled={isSubmitting}
+                      className={`mt-1 w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs font-semibold transition-all ${
+                        !isSubmitting &&
+                        regDisplayName.trim().length >= 2 &&
+                        regUsername.trim().length >= 3 &&
+                        regEmail.trim().length > 0 &&
+                        regPassword.length >= 8 &&
+                        regStrength.isValid
+                          ? "bg-primary-theme hover:opacity-90 text-white cursor-pointer shadow-sm"
+                          : "bg-(--border-subtle) text-(--text-muted) cursor-not-allowed opacity-60"
+                      }`}
+                      disabled={
+                        isSubmitting ||
+                        !regDisplayName.trim() ||
+                        regUsername.trim().length < 3 ||
+                        !regEmail.trim() ||
+                        regPassword.length < 8 ||
+                        !regStrength.isValid
+                      }
                     >
                       {isSubmitting ? (
                         <>
-                          <LuLoader size={15} className="icon-spin" /> Creating Account...
+                          <LuLoader size={15} className="icon-spin" /> Creating
+                          Account...
                         </>
                       ) : (
                         <>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import {
   Modal,
   View,
@@ -25,6 +25,10 @@ import {
   type ThemeMode,
 } from "../theme/colors";
 import { apiService } from "../services/api";
+import {
+  PasswordStrengthMeter,
+  checkPasswordStrength,
+} from "./PasswordStrengthMeter";
 import type { User } from "../types";
 
 interface ProfileModalProps {
@@ -69,6 +73,31 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   const [showOldPass, setShowOldPass] = useState(false);
   const [showNewPass, setShowNewPass] = useState(false);
   const [isChangingPass, setIsChangingPass] = useState(false);
+
+  // Real-time new password strength calculation
+  const changeStrength = useMemo(
+    () =>
+      checkPasswordStrength(newPassword, {
+        username: currentUser?.username,
+        email: currentUser?.email,
+        displayName: currentUser?.display_name,
+      }),
+    [newPassword, currentUser],
+  );
+
+  const isPasswordChangeValid = useMemo(
+    () =>
+      Boolean(oldPassword.trim()) &&
+      newPassword.length >= 8 &&
+      changeStrength.isValid &&
+      oldPassword !== newPassword,
+    [oldPassword, newPassword, changeStrength],
+  );
+
+  const [passwordErrorMsg, setPasswordErrorMsg] = useState<string | null>(null);
+  const [passwordSuccessMsg, setPasswordSuccessMsg] = useState<string | null>(
+    null,
+  );
 
   const [statusMessage, setStatusMessage] = useState<{
     text: string;
@@ -309,37 +338,47 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
 
   // --- 6. Change Password ---
   const handleChangePassword = async () => {
-    if (!oldPassword.trim() || !newPassword.trim()) {
-      setStatusMessage({
-        text: "Please fill in both password fields.",
-        isError: true,
-      });
+    setPasswordErrorMsg(null);
+    setPasswordSuccessMsg(null);
+    setStatusMessage(null);
+
+    if (!oldPassword.trim()) {
+      setPasswordErrorMsg("Please enter your current password.");
       return;
     }
-    if (newPassword.length < 6) {
-      setStatusMessage({
-        text: "New password must be at least 6 characters long.",
-        isError: true,
-      });
+    if (oldPassword === newPassword) {
+      setPasswordErrorMsg(
+        "New password cannot be the same as your current password.",
+      );
+      return;
+    }
+    if (newPassword.length < 8) {
+      setPasswordErrorMsg("New password must be at least 8 characters long.");
+      return;
+    }
+    if (!changeStrength.isValid) {
+      setPasswordErrorMsg(
+        changeStrength.feedback ||
+          "New password does not meet security requirements.",
+      );
       return;
     }
 
     setIsChangingPass(true);
-    setStatusMessage(null);
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       await apiService.changePassword(currentUser.id, oldPassword, newPassword);
       setOldPassword("");
       setNewPassword("");
-      setShowPasswordSection(false);
+      setPasswordSuccessMsg("Password changed successfully!");
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      setStatusMessage({
-        text: "Password changed successfully!",
-        isError: false,
-      });
+      setTimeout(() => {
+        setShowPasswordSection(false);
+        setPasswordSuccessMsg(null);
+      }, 2500);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      setStatusMessage({ text: msg, isError: true });
+      setPasswordErrorMsg(msg);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     } finally {
       setIsChangingPass(false);
@@ -802,6 +841,56 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
                   },
                 ]}
               >
+                {/* Error/Success Banners inside Password Box */}
+                {passwordErrorMsg && (
+                  <View
+                    style={[
+                      styles.inlineAlert,
+                      {
+                        backgroundColor:
+                          theme.dangerLight || "rgba(239,68,68,0.12)",
+                        borderColor:
+                          theme.dangerBorder || "rgba(239,68,68,0.3)",
+                      },
+                    ]}
+                  >
+                    <Feather
+                      name="alert-circle"
+                      size={14}
+                      color={theme.danger}
+                    />
+                    <Text
+                      style={[styles.inlineAlertText, { color: theme.danger }]}
+                    >
+                      {passwordErrorMsg}
+                    </Text>
+                  </View>
+                )}
+                {passwordSuccessMsg && (
+                  <View
+                    style={[
+                      styles.inlineAlert,
+                      {
+                        backgroundColor:
+                          theme.emeraldLight || "rgba(16,185,129,0.12)",
+                        borderColor:
+                          theme.emeraldBorder || "rgba(16,185,129,0.3)",
+                      },
+                    ]}
+                  >
+                    <Feather
+                      name="check-circle"
+                      size={14}
+                      color={theme.emerald}
+                    />
+                    <Text
+                      style={[styles.inlineAlertText, { color: theme.emerald }]}
+                    >
+                      {passwordSuccessMsg}
+                    </Text>
+                  </View>
+                )}
+
                 {/* Current Password */}
                 <View style={styles.passInputWrapper}>
                   <Text style={[styles.fieldLabel, { color: theme.textMuted }]}>
@@ -826,7 +915,10 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
                       style={[styles.input, { color: theme.textMain }]}
                       secureTextEntry={!showOldPass}
                       value={oldPassword}
-                      onChangeText={setOldPassword}
+                      onChangeText={(val) => {
+                        setOldPassword(val);
+                        if (passwordErrorMsg) setPasswordErrorMsg(null);
+                      }}
                       placeholder="••••••••"
                       placeholderTextColor={theme.textMuted}
                     />
@@ -846,7 +938,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
                 {/* New Password */}
                 <View style={styles.passInputWrapper}>
                   <Text style={[styles.fieldLabel, { color: theme.textMuted }]}>
-                    New Password (min 6 characters)
+                    New Password (min 8 characters)
                   </Text>
                   <View
                     style={[
@@ -867,7 +959,10 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
                       style={[styles.input, { color: theme.textMain }]}
                       secureTextEntry={!showNewPass}
                       value={newPassword}
-                      onChangeText={setNewPassword}
+                      onChangeText={(val) => {
+                        setNewPassword(val);
+                        if (passwordErrorMsg) setPasswordErrorMsg(null);
+                      }}
                       placeholder="••••••••"
                       placeholderTextColor={theme.textMuted}
                     />
@@ -882,23 +977,63 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
                       />
                     </TouchableOpacity>
                   </View>
+                  {newPassword.length > 0 && (
+                    <PasswordStrengthMeter
+                      result={changeStrength}
+                      theme={theme}
+                    />
+                  )}
+                  {oldPassword.length > 0 &&
+                    newPassword.length > 0 &&
+                    oldPassword === newPassword && (
+                      <Text
+                        style={{
+                          fontSize: 11,
+                          color: theme.amber || "#F59E0B",
+                          marginTop: 4,
+                        }}
+                      >
+                        New password cannot be the same as current password.
+                      </Text>
+                    )}
                 </View>
 
                 <TouchableOpacity
                   style={[
                     styles.updatePassBtn,
-                    { backgroundColor: theme.emerald },
+                    {
+                      backgroundColor: isPasswordChangeValid
+                        ? theme.emerald
+                        : theme.borderSubtle || "rgba(255,255,255,0.1)",
+                      opacity:
+                        isPasswordChangeValid && !isChangingPass ? 1 : 0.5,
+                    },
                   ]}
                   onPress={handleChangePassword}
-                  disabled={isChangingPass}
-                  activeOpacity={0.8}
+                  disabled={isChangingPass || !isPasswordChangeValid}
+                  activeOpacity={isPasswordChangeValid ? 0.8 : 1}
                 >
                   {isChangingPass ? (
                     <ActivityIndicator size="small" color="#ffffff" />
                   ) : (
                     <>
-                      <Feather name="check" size={14} color="#ffffff" />
-                      <Text style={styles.updatePassBtnText}>
+                      <Feather
+                        name="check"
+                        size={14}
+                        color={
+                          isPasswordChangeValid ? "#ffffff" : theme.textMuted
+                        }
+                      />
+                      <Text
+                        style={[
+                          styles.updatePassBtnText,
+                          {
+                            color: isPasswordChangeValid
+                              ? "#ffffff"
+                              : theme.textMuted,
+                          },
+                        ]}
+                      >
                         Update Password
                       </Text>
                     </>
@@ -1223,5 +1358,20 @@ const styles = StyleSheet.create({
   logoutBtnText: {
     fontSize: 14,
     fontWeight: "600",
+  },
+  inlineAlert: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: 10,
+    borderWidth: 1,
+    marginBottom: 4,
+  },
+  inlineAlertText: {
+    fontSize: 12,
+    fontWeight: "500",
+    flex: 1,
   },
 });
