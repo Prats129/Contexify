@@ -14,8 +14,9 @@ import {
   Platform,
 } from "react-native";
 import { Feather, Ionicons } from "@expo/vector-icons";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
-import { getAppTheme, type AppTheme } from "../theme/colors";
+import { colors, getAppTheme, type AppTheme } from "../theme/colors";
 import { apiService } from "../services/api";
 import type { ChatSession, DocumentMetadata, User } from "../types";
 
@@ -56,6 +57,7 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
   isDark = true,
   theme: customTheme,
 }) => {
+  const insets = useSafeAreaInsets();
   const theme = customTheme || getAppTheme(isDark);
   const sessionList = Array.isArray(sessions) ? sessions : [];
   const docList = Array.isArray(documents) ? documents : [];
@@ -189,6 +191,9 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
             {
               backgroundColor: theme.bgSidebar,
               borderColor: theme.borderSubtle,
+              paddingTop:
+                Math.max(insets.top, Platform.OS === "ios" ? 20 : 16) + 4,
+              paddingBottom: Math.max(insets.bottom, 12),
               transform: [{ translateX }],
             },
           ]}
@@ -217,9 +222,9 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
             </View>
           </View>
 
-          {/* New Chat Button */}
+          {/* New Chat Button (Consistent Contexify Brand Blue) */}
           <TouchableOpacity
-            style={[styles.newChatBtn, { backgroundColor: theme.primary }]}
+            style={[styles.newChatBtn, { backgroundColor: colors.primary }]}
             onPress={() => {
               handleClose(() => onNewChat());
             }}
@@ -291,13 +296,13 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
                       <Ionicons
                         name={isWeb ? "globe-outline" : "document-text-outline"}
                         size={14}
-                        color={isActive ? theme.primary : theme.textMuted}
+                        color={isActive ? colors.primary : theme.textMuted}
                       />
                       <Text
                         style={[
                           styles.sessionTitle,
                           {
-                            color: isActive ? theme.primary : theme.textMain,
+                            color: isActive ? colors.primary : theme.textMain,
                             fontWeight: isActive ? "700" : "500",
                           },
                         ]}
@@ -537,7 +542,6 @@ const styles = StyleSheet.create({
     maxWidth: 320,
     height: "100%",
     borderRightWidth: 1,
-    paddingTop: Platform.OS === "ios" ? 24 : 10,
   },
   brandRow: {
     flexDirection: "row",
