@@ -10,6 +10,14 @@ export interface User {
   is_verified?: boolean;
 }
 
+export interface GoogleAuthRequest {
+  credential?: string;
+  email?: string;
+  name?: string;
+  picture?: string;
+  google_id?: string;
+}
+
 export interface ChatSession {
   id: string;
   user_id: string;

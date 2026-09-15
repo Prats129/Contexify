@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 import type {
   User,
+  GoogleAuthRequest,
   ChatSession,
   ChatMode,
   SessionHistoryResponse,
@@ -181,6 +182,20 @@ export const apiService = {
     if (!res.ok) {
       const err = await res.json().catch(() => null);
       throw new Error(extractErrorMessage(err, 'Invalid credentials'));
+    }
+    return res.json();
+  },
+
+  async loginWithGoogle(data: GoogleAuthRequest): Promise<User> {
+    const url = await getEndpoint('/user/auth/google');
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Google authentication failed'));
     }
     return res.json();
   },

@@ -16,6 +16,9 @@ import {
 } from "react-native";
 import { Feather, Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
+import * as WebBrowser from "expo-web-browser";
+import * as Linking from "expo-linking";
+import Constants, { ExecutionEnvironment } from "expo-constants";
 import { getAppTheme, type AppTheme } from "../theme/colors";
 import { apiService } from "../services/api";
 import {
@@ -23,6 +26,8 @@ import {
   checkPasswordStrength,
 } from "./PasswordStrengthMeter";
 import type { User } from "../types";
+
+WebBrowser.maybeCompleteAuthSession();
 
 interface AuthModalProps {
   visible: boolean;
@@ -62,6 +67,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
   // Status
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const regStrength = useMemo(
@@ -152,6 +158,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setRegEmail("");
     setRegPassword("");
     setErrorMessage(null);
+    setGoogleLoading(false);
   };
 
   const handlePasswordLogin = async () => {
@@ -225,33 +232,47 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   };
 
   const handleRegister = async () => {
-    if (
-      !regName.trim() ||
-      !regUsername.trim() ||
-      !regEmail.trim() ||
-      !regPassword.trim()
-    ) {
-      setErrorMessage("Please fill in all required fields.");
+    setErrorMessage(null);
+
+    const trimmedName = regName.trim();
+    const trimmedUsername = regUsername.trim();
+    const trimmedEmail = regEmail.trim();
+
+    if (!trimmedName) {
+      setErrorMessage("Please enter your full name.");
+      return;
+    }
+    if (trimmedUsername.length < 3) {
+      setErrorMessage("Username must be at least 3 characters long.");
+      return;
+    }
+    if (!trimmedEmail) {
+      setErrorMessage("Please enter your email address.");
+      return;
+    }
+    if (!trimmedEmail.includes("@") || !trimmedEmail.includes(".")) {
+      setErrorMessage("Please enter a valid email address.");
       return;
     }
     if (regPassword.length < 8) {
-      setErrorMessage("Password must be at least 8 characters.");
+      setErrorMessage("Password must be at least 8 characters long.");
       return;
     }
     if (!regStrength.isValid) {
       setErrorMessage(
-        regStrength.feedback || "Please choose a stronger password.",
+        regStrength.feedback ||
+          "Please satisfy all password security requirements above.",
       );
       return;
     }
-    setErrorMessage(null);
+
     setLoading(true);
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       const user = await apiService.register(
-        regName.trim(),
-        regUsername.trim(),
-        regEmail.trim(),
+        trimmedName,
+        trimmedUsername,
+        trimmedEmail,
         regPassword,
       );
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -264,6 +285,186 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleGoogleAuth = async () => {
+    setErrorMessage(null);
+    const clientId =
+      process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID ||
+      "340672806744-bifsblkj1h07q1iriuhnb7foecav36qj.apps.googleusercontent.com";
+
+    if (!clientId) {
+      setErrorMessage("Google Sign-In is not configured.");
+      return;
+    }
+
+    try {
+      setGoogleLoading(true);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+      const isExpoGo =
+        Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
+
+      // 1. Production Standalone / EAS builds: Native Google Play Services & iOS One-Tap
+      if (!isExpoGo && Platform.OS !== "web") {
+        let GoogleSignin: any = null;
+        let statusCodes: any = null;
+
+        try {
+          // Dynamically loaded so Expo Go runtime does not trigger unlinked native TurboModule errors
+          const gModule = require("@react-native-google-signin/google-signin");
+          GoogleSignin = gModule.GoogleSignin;
+          statusCodes = gModule.statusCodes;
+        } catch {
+          // Native module not linked in current runtime; gracefully fall back to web/browser auth
+        }
+
+        if (GoogleSignin) {
+          try {
+            GoogleSignin.configure({
+              webClientId: clientId,
+              offlineAccess: false,
+            });
+
+            await GoogleSignin.hasPlayServices({
+              showPlayServicesUpdateDialog: true,
+            });
+            const response = await GoogleSignin.signIn();
+
+            if (response.type === "success" && response.data) {
+              const { user: gUser, idToken } = response.data;
+              const user = await apiService.loginWithGoogle({
+                credential: idToken || undefined,
+                email: gUser.email,
+                name: gUser.name || undefined,
+                picture: gUser.photo || undefined,
+                google_id: gUser.id,
+              });
+
+              Haptics.notificationAsync(
+                Haptics.NotificationFeedbackType.Success,
+              );
+              resetForm();
+              onSuccess(user);
+              onClose();
+              return;
+            } else if (response.type === "cancelled") {
+              return;
+            }
+          } catch (nativeErr: any) {
+            if (
+              statusCodes &&
+              nativeErr?.code === statusCodes.SIGN_IN_CANCELLED
+            ) {
+              return;
+            }
+            if (
+              statusCodes &&
+              nativeErr?.code === statusCodes.PLAY_SERVICES_NOT_AVAILABLE
+            ) {
+              throw new Error(
+                "Google Play Services is not available or outdated on this device.",
+              );
+            }
+            throw nativeErr;
+          }
+        }
+      }
+
+      // 2. Development (Expo Go) and Web fallback flow
+      let startUrl: string;
+      let returnUrl: string;
+
+      if (Platform.OS === "web") {
+        returnUrl =
+          typeof window !== "undefined"
+            ? window.location.origin
+            : "http://localhost:5173";
+        startUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(
+          clientId,
+        )}&redirect_uri=${encodeURIComponent(
+          returnUrl,
+        )}&response_type=token&scope=${encodeURIComponent(
+          "openid email profile",
+        )}&prompt=select_account`;
+      } else {
+        const proxyUri = "https://auth.expo.io/@prats129/contexify";
+        returnUrl = Linking.createURL("expo-auth-session");
+
+        const googleAuthUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(
+          clientId,
+        )}&redirect_uri=${encodeURIComponent(
+          proxyUri,
+        )}&response_type=token&scope=${encodeURIComponent(
+          "openid email profile",
+        )}&prompt=select_account`;
+
+        // The Expo Auth Proxy (auth.expo.io) must be initialized via /start with authUrl & returnUrl
+        // so that it can store returnUrl in its session and redirect back into the mobile app upon completion.
+        startUrl = `${proxyUri}/start?authUrl=${encodeURIComponent(
+          googleAuthUrl,
+        )}&returnUrl=${encodeURIComponent(returnUrl)}`;
+      }
+
+      const result = await WebBrowser.openAuthSessionAsync(startUrl, returnUrl);
+
+      if (result.type === "success" && result.url) {
+        if (result.url.includes("errorCode=login-declined")) {
+          return;
+        }
+
+        const rawParams = result.url.includes("#")
+          ? result.url.split("#")[1]
+          : result.url.includes("?")
+            ? result.url.split("?")[1]
+            : "";
+        const params = new URLSearchParams(rawParams);
+        const accessToken = params.get("access_token");
+
+        if (accessToken) {
+          const userInfoRes = await fetch(
+            "https://www.googleapis.com/oauth2/v3/userinfo",
+            {
+              headers: { Authorization: `Bearer ${accessToken}` },
+            },
+          );
+
+          if (userInfoRes.ok) {
+            const info = await userInfoRes.json();
+            const user = await apiService.loginWithGoogle({
+              email: info.email,
+              name: info.name,
+              picture: info.picture,
+              google_id: info.sub,
+            });
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+            resetForm();
+            onSuccess(user);
+            onClose();
+            return;
+          } else {
+            throw new Error("Failed to retrieve profile from Google.");
+          }
+        } else if (result.url.includes("error=")) {
+          const errorDesc =
+            params.get("error_description") || params.get("error");
+          if (errorDesc?.includes("redirect_uri_mismatch")) {
+            throw new Error(
+              `Google OAuth Redirect URI mismatch.\nPlease add this URL to your Google Cloud Console Authorized redirect URIs:\nhttps://auth.expo.io/@prats129/contexify`,
+            );
+          }
+          throw new Error(
+            errorDesc || "Google authentication was rejected or cancelled.",
+          );
+        }
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setErrorMessage(msg);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    } finally {
+      setGoogleLoading(false);
     }
   };
 
@@ -445,6 +646,61 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               {/* TAB 1: PASSWORD LOGIN */}
               {activeTab === "login" && (
                 <View style={styles.formSection}>
+                  {/* Google One-Click Sign In */}
+                  <TouchableOpacity
+                    style={[
+                      styles.googleBtn,
+                      {
+                        backgroundColor: theme.bgInput,
+                        borderColor: theme.borderSubtle,
+                        opacity: loading || googleLoading ? 0.6 : 1,
+                      },
+                    ]}
+                    onPress={handleGoogleAuth}
+                    disabled={loading || googleLoading}
+                    activeOpacity={0.8}
+                  >
+                    {googleLoading ? (
+                      <ActivityIndicator color={theme.primary} size="small" />
+                    ) : (
+                      <>
+                        <Ionicons
+                          name="logo-google"
+                          size={16}
+                          color="#EA4335"
+                        />
+                        <Text
+                          style={[
+                            styles.googleBtnText,
+                            { color: theme.textMain },
+                          ]}
+                        >
+                          Continue with Google
+                        </Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+
+                  <View style={styles.dividerRow}>
+                    <View
+                      style={[
+                        styles.dividerLine,
+                        { backgroundColor: theme.borderSubtle },
+                      ]}
+                    />
+                    <Text
+                      style={[styles.dividerText, { color: theme.textMuted }]}
+                    >
+                      or continue with
+                    </Text>
+                    <View
+                      style={[
+                        styles.dividerLine,
+                        { backgroundColor: theme.borderSubtle },
+                      ]}
+                    />
+                  </View>
+
                   <View style={styles.inputGroup}>
                     <Text style={[styles.label, { color: theme.textMuted }]}>
                       Username or Email
@@ -507,10 +763,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   <TouchableOpacity
                     style={[
                       styles.submitBtn,
-                      { backgroundColor: theme.primary },
+                      {
+                        backgroundColor: theme.primary,
+                        opacity: loading || googleLoading ? 0.6 : 1,
+                      },
                     ]}
                     onPress={handlePasswordLogin}
-                    disabled={loading}
+                    disabled={loading || googleLoading}
                     activeOpacity={0.8}
                   >
                     {loading ? (
@@ -636,6 +895,61 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               {/* TAB 3: REGISTER */}
               {activeTab === "register" && (
                 <View style={styles.formSection}>
+                  {/* Google One-Click Sign Up */}
+                  <TouchableOpacity
+                    style={[
+                      styles.googleBtn,
+                      {
+                        backgroundColor: theme.bgInput,
+                        borderColor: theme.borderSubtle,
+                        opacity: loading || googleLoading ? 0.6 : 1,
+                      },
+                    ]}
+                    onPress={handleGoogleAuth}
+                    disabled={loading || googleLoading}
+                    activeOpacity={0.8}
+                  >
+                    {googleLoading ? (
+                      <ActivityIndicator color={theme.primary} size="small" />
+                    ) : (
+                      <>
+                        <Ionicons
+                          name="logo-google"
+                          size={16}
+                          color="#EA4335"
+                        />
+                        <Text
+                          style={[
+                            styles.googleBtnText,
+                            { color: theme.textMain },
+                          ]}
+                        >
+                          Sign up with Google
+                        </Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+
+                  <View style={styles.dividerRow}>
+                    <View
+                      style={[
+                        styles.dividerLine,
+                        { backgroundColor: theme.borderSubtle },
+                      ]}
+                    />
+                    <Text
+                      style={[styles.dividerText, { color: theme.textMuted }]}
+                    >
+                      or register with email
+                    </Text>
+                    <View
+                      style={[
+                        styles.dividerLine,
+                        { backgroundColor: theme.borderSubtle },
+                      ]}
+                    />
+                  </View>
+
                   <View style={styles.inputGroup}>
                     <Text style={[styles.label, { color: theme.textMuted }]}>
                       Full Name
@@ -762,12 +1076,17 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                         backgroundColor: isRegisterValid
                           ? theme.primary
                           : theme.borderSubtle || "rgba(255,255,255,0.1)",
-                        opacity: isRegisterValid && !loading ? 1 : 0.5,
+                        opacity:
+                          loading || googleLoading
+                            ? 0.6
+                            : isRegisterValid
+                              ? 1
+                              : 0.7,
                       },
                     ]}
                     onPress={handleRegister}
-                    disabled={loading || !isRegisterValid}
-                    activeOpacity={isRegisterValid ? 0.8 : 1}
+                    disabled={loading || googleLoading}
+                    activeOpacity={0.8}
                   >
                     {loading ? (
                       <ActivityIndicator color="#ffffff" size="small" />
@@ -949,5 +1268,35 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "600",
     textDecorationLine: "underline",
+  },
+  googleBtn: {
+    height: 44,
+    borderRadius: 12,
+    borderWidth: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    marginBottom: 2,
+  },
+  googleBtnText: {
+    fontSize: 13.5,
+    fontWeight: "600",
+  },
+  dividerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginVertical: 4,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+  },
+  dividerText: {
+    fontSize: 10,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 0.8,
   },
 });
