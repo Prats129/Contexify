@@ -1,5 +1,5 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { LuChevronUp, LuChevronDown } from 'react-icons/lu';
+import React, { useState, useRef, useEffect, useCallback } from "react";
+import { LuChevronUp, LuChevronDown } from "react-icons/lu";
 
 export interface PromptItem {
   id: string;
@@ -36,15 +36,18 @@ export const ChatPromptTimeline: React.FC<ChatPromptTimelineProps> = ({
   useEffect(() => {
     if (!isOpen) return;
     const handleOutsideClick = (e: MouseEvent | TouchEvent) => {
-      if (timelineRef.current && !timelineRef.current.contains(e.target as Node)) {
+      if (
+        timelineRef.current &&
+        !timelineRef.current.contains(e.target as Node)
+      ) {
         setIsOpen(false);
       }
     };
-    document.addEventListener('mousedown', handleOutsideClick);
-    document.addEventListener('touchstart', handleOutsideClick);
+    document.addEventListener("mousedown", handleOutsideClick);
+    document.addEventListener("touchstart", handleOutsideClick);
     return () => {
-      document.removeEventListener('mousedown', handleOutsideClick);
-      document.removeEventListener('touchstart', handleOutsideClick);
+      document.removeEventListener("mousedown", handleOutsideClick);
+      document.removeEventListener("touchstart", handleOutsideClick);
     };
   }, [isOpen]);
 
@@ -72,8 +75,8 @@ export const ChatPromptTimeline: React.FC<ChatPromptTimelineProps> = ({
   useEffect(() => {
     if (isOpen && activeItemRef.current && popoverListRef.current) {
       activeItemRef.current.scrollIntoView({
-        block: 'nearest',
-        behavior: 'smooth',
+        block: "nearest",
+        behavior: "smooth",
       });
     }
   }, [isOpen, activePromptId]);
@@ -92,14 +95,10 @@ export const ChatPromptTimeline: React.FC<ChatPromptTimelineProps> = ({
     >
       {/* Floating Flyout Popover Menu (ChatGPT Style) */}
       {isOpen && (
-        <div
-          className="absolute right-7 top-1/2 -translate-y-1/2 w-72 sm:w-84 max-w-[calc(100vw-3rem)] p-2 rounded-2xl dark:bg-[#202123]/95 bg-white/95 backdrop-blur-md border border-white/10 dark:border-white/10 shadow-[0_12px_40px_rgba(0,0,0,0.45)] dark:shadow-[0_12px_40px_rgba(0,0,0,0.55)] text-white dark:text-white transition-all duration-200 animate-in fade-in zoom-in-95 flex flex-col gap-1 z-40"
-        >
+        <div className="absolute right-7 top-1/2 -translate-y-1/2 w-72 sm:w-84 max-w-[calc(100vw-3rem)] p-2 rounded-2xl bg-white/95 text-neutral-900 backdrop-blur-md border dark:border-white/10 dark:shadow-[0_12px_40px_rgba(0,0,0,0.55)] transition-all duration-200 animate-in fade-in zoom-in-95 flex flex-col gap-1 z-40">
           {/* Header Navigation Controls (Scroll Up / Down) */}
-          <div className="flex items-center justify-between px-2 py-1 border-b border-white/10 dark:border-white/10 text-[11px] font-medium dark:text-neutral-400 text-neutral-500">
-            <span>
-              Prompts ({prompts.length})
-            </span>
+          <div className="flex items-center justify-between px-2 py-1 border-b border-black/10 text-[11px] font-medium text-neutral-600">
+            <span>Prompts ({prompts.length})</span>
             <div className="flex items-center gap-1">
               <button
                 type="button"
@@ -108,10 +107,11 @@ export const ChatPromptTimeline: React.FC<ChatPromptTimelineProps> = ({
                   onNavigatePrev();
                 }}
                 disabled={!hasPrev}
-                className={`p-1 rounded-lg transition-colors cursor-pointer ${hasPrev
-                  ? 'hover:bg-white/15 dark:hover:bg-white/15 hover:bg-black/5 text-white dark:text-white'
-                  : 'opacity-30 cursor-not-allowed'
-                  }`}
+                className={`p-1 rounded-lg transition-colors cursor-pointer ${
+                  hasPrev
+                    ? "hover:bg-black/5 dark:hover:bg-white/15 text-neutral-700"
+                    : "opacity-30 cursor-not-allowed"
+                }`}
                 title="Previous prompt"
                 aria-label="Previous prompt"
               >
@@ -124,10 +124,11 @@ export const ChatPromptTimeline: React.FC<ChatPromptTimelineProps> = ({
                   onNavigateNext();
                 }}
                 disabled={!hasNext}
-                className={`p-1 rounded-lg transition-colors cursor-pointer ${hasNext
-                  ? 'hover:bg-white/15 dark:hover:bg-white/15 hover:bg-black/5 text-white dark:text-white'
-                  : 'opacity-30 cursor-not-allowed'
-                  }`}
+                className={`p-1 rounded-lg transition-colors cursor-pointer ${
+                  hasNext
+                    ? "hover:bg-black/5 dark:hover:bg-white/15 text-neutral-700"
+                    : "opacity-30 cursor-not-allowed"
+                }`}
                 title="Next prompt"
                 aria-label="Next prompt"
               >
@@ -152,17 +153,19 @@ export const ChatPromptTimeline: React.FC<ChatPromptTimelineProps> = ({
                     onNavigateToPrompt(prompt.id);
                     setIsOpen(false);
                   }}
-                  className={`w-full text-left px-3 py-2 rounded-xl text-xs sm:text-[13px] leading-snug transition-all flex items-center gap-2 group cursor-pointer ${isActive
-                    ? 'dark:bg-white/20 bg-black/10 dark:text-white text-neutral-900 font-medium shadow-xs'
-                    : 'dark:text-neutral-300 text-neutral-600 hover:text-white dark:hover:text-white hover:text-neutral-900 hover:bg-white/10 dark:hover:bg-white/10 hover:bg-black/5'
-                    }`}
+                  className={`w-full text-left px-3 py-2 rounded-xl text-xs sm:text-[13px] leading-snug transition-all flex items-center gap-2 group cursor-pointer ${
+                    isActive
+                      ? "dark:bg-white/20 dark:text-white font-medium shadow-xs"
+                      : "text-neutral-700 dark:hover:text-white hover:text-neutral-950 dark:hover:bg-white/10 hover:bg-black/5"
+                  }`}
                   title={prompt.content}
                 >
                   <span
-                    className={`shrink-0 w-1.5 h-1.5 rounded-full transition-all ${isActive
-                      ? 'bg-primary-theme scale-125'
-                      : 'bg-neutral-500/40 group-hover:bg-neutral-400'
-                      }`}
+                    className={`shrink-0 w-1.5 h-1.5 rounded-full transition-all ${
+                      isActive
+                        ? "bg-primary-theme scale-125"
+                        : "bg-neutral-500/40 group-hover:bg-neutral-400"
+                    }`}
                   />
                   <span className="truncate flex-1">
                     {prompt.content.trim() || `Prompt #${prompt.index + 1}`}
@@ -177,7 +180,7 @@ export const ChatPromptTimeline: React.FC<ChatPromptTimelineProps> = ({
       {/* Vertical Tick Lines Rail (ChatGPT Look & Feel) */}
       <div
         onClick={() => setIsOpen((prev) => !prev)}
-        className="flex flex-col items-end gap-1.5 py-3 px-1.5 rounded-full cursor-pointer bg-neutral-900/20 dark:bg-neutral-900/30 hover:bg-neutral-900/60 dark:hover:bg-neutral-900/70 hover:bg-neutral-300/70 backdrop-blur-xs border dark:border-white/5 border-black/5 transition-all duration-200 shadow-sm group"
+        className="flex flex-col items-end gap-1.5 py-3 px-1.5 rounded-full cursor-pointer bg-neutral-900/20 hover:bg-neutral-900/60 dark:hover:bg-neutral-900/70 hover:bg-neutral-300/70 backdrop-blur-xs border border-black/5 transition-all duration-200 shadow-sm group"
         role="navigation"
         aria-label="Chat prompt timeline"
       >
@@ -196,10 +199,11 @@ export const ChatPromptTimeline: React.FC<ChatPromptTimelineProps> = ({
               aria-label={`Jump to prompt ${prompt.index + 1}`}
             >
               <div
-                className={`transition-all duration-200 rounded-full w-5 ${isActive
-                  ? 'h-[2.5px] bg-white dark:bg-white shadow-[0_0_6px_rgba(255,255,255,0.6)] dark:shadow-[0_0_6px_rgba(255,255,255,0.6)]'
-                  : 'h-0.5 dark:bg-neutral-500/40 bg-neutral-600/40 group-hover/tick:w-4.5 group-hover/tick:bg-neutral-200 dark:group-hover/tick:bg-neutral-200 group-hover/tick:bg-neutral-800'
-                  }`}
+                className={`transition-all duration-200 rounded-full w-5 ${
+                  isActive
+                    ? "h-[2.5px] bg-white shadow-[0_0_6px_rgba(255,255,255,0.6)]"
+                    : "h-0.5 dark:bg-neutral-500/40 group-hover/tick:w-4.5 group-hover/tick:bg-neutral-200 dark:group-hover/tick:bg-neutral-200 group-hover/tick:bg-neutral-800"
+                }`}
               />
             </button>
           );

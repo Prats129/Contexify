@@ -73,6 +73,9 @@ class Settings(BaseSettings):
     OTP_RESEND_COOLDOWN_SECONDS: int = 30  # 0.5 minute between OTP resends
     OTP_MAX_ATTEMPTS: int = 3
 
+    # Temporary Chat Retention Settings
+    TEMPORARY_CHAT_RETENTION_DAYS: int = 3  # Temporary conversations automatically purged after 3 days
+
     model_config = SettingsConfigDict(
         env_file=[str(BASE_DIR / ".env"), ".env"],
         env_file_encoding="utf-8",

@@ -116,14 +116,14 @@ export const colors = {
     bgCard: '#ffffff',
     bgInput: '#f1f5f9',
     bgSidebar: '#ffffff',
-    textMain: '#0f172a',
-    textMuted: '#64748b',
+    textMain: '#020617',
+    textMuted: '#334155',
     borderSubtle: 'rgba(0, 0, 0, 0.08)',
     borderHover: 'rgba(0, 0, 0, 0.18)',
     userBubble: '#2563eb',
     userText: '#ffffff',
     aiBubble: '#ffffff',
-    aiText: '#0f172a',
+    aiText: '#020617',
   },
 };
 

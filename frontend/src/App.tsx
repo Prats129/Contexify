@@ -90,6 +90,7 @@ export const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [isTemporaryChat, setIsTemporaryChat] = useState<boolean>(false);
   const [currentMode, setCurrentMode] = useState<ChatMode>("WEB_SEARCH");
   const [documents, setDocuments] = useState<DocumentMetadata[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -130,6 +131,20 @@ export const App: React.FC = () => {
     });
   };
 
+  const handleToggleTemporaryChat = () => {
+    setIsTemporaryChat((prev) => {
+      const next = !prev;
+      setActiveSessionId(null);
+      setMessages([]);
+      setDocuments([]);
+      setStreamingMessage(null);
+      setInputQuery("");
+      updateUrlForSession(null);
+      localStorage.removeItem("contexify_active_session");
+      return next;
+    });
+  };
+
   // --- 1. Select / Switch Active Session ---
   const selectSession = useCallback(
     async (
@@ -141,6 +156,7 @@ export const App: React.FC = () => {
       if (typeof window !== "undefined" && window.innerWidth < 768) {
         setIsSidebarOpen(false);
       }
+      setIsTemporaryChat(false);
       setActiveSessionId(sessionId);
       setStreamingMessage(null);
 
@@ -301,6 +317,7 @@ export const App: React.FC = () => {
     if (typeof window !== "undefined" && window.innerWidth < 768) {
       setIsSidebarOpen(false);
     }
+    setIsTemporaryChat(false);
     setActiveSessionId(null);
     setMessages([]);
     setDocuments([]);
@@ -372,12 +389,15 @@ export const App: React.FC = () => {
             currentUser.id,
             "New Conversation",
             currentMode,
+            isTemporaryChat,
           );
           targetSessionId = newSess.id;
           setActiveSessionId(newSess.id);
-          setSessions((prev) => [newSess, ...prev]);
+          if (!isTemporaryChat) {
+            setSessions((prev) => [newSess, ...prev]);
+            localStorage.setItem("contexify_active_session", newSess.id);
+          }
           updateUrlForSession(newSess.id, false);
-          localStorage.setItem("contexify_active_session", newSess.id);
         } catch (err) {
           console.error("Failed to create session on file upload:", err);
           return;
@@ -525,12 +545,15 @@ export const App: React.FC = () => {
             currentUser.id,
             "New Conversation",
             currentMode,
+            isTemporaryChat,
           );
           targetSessionId = newSess.id;
           setActiveSessionId(newSess.id);
-          setSessions((prev) => [newSess, ...prev]);
+          if (!isTemporaryChat) {
+            setSessions((prev) => [newSess, ...prev]);
+            localStorage.setItem("contexify_active_session", newSess.id);
+          }
           updateUrlForSession(newSess.id, false);
-          localStorage.setItem("contexify_active_session", newSess.id);
         } catch (err) {
           console.error("Failed to create session on message send:", err);
           return;
@@ -816,6 +839,8 @@ export const App: React.FC = () => {
         onDeleteDocument={handleDeleteDocument}
         onClearChat={handleClearMessages}
         onToggleSidebar={handleToggleSidebar}
+        isTemporaryChat={isTemporaryChat}
+        onToggleTemporaryChat={handleToggleTemporaryChat}
       />
 
       <UserModal

@@ -94,6 +94,8 @@ export interface ChatSession {
   user_id: string;
   title: string;
   mode: ChatMode;
+  is_temporary?: boolean;
+  expires_at?: string | null;
   created_at: string;
   updated_at: string;
   message_count?: number;

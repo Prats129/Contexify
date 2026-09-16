@@ -271,7 +271,8 @@ export const apiService = {
   async createSession(
     userId: string,
     title: string = 'New Conversation',
-    mode: ChatMode = 'WEB_SEARCH'
+    mode: ChatMode = 'WEB_SEARCH',
+    isTemporary: boolean = false
   ): Promise<ChatSession> {
     const response = await fetch(`${API_BASE_URL}/session/create`, {
       method: 'POST',
@@ -280,6 +281,7 @@ export const apiService = {
         user_id: userId,
         title,
         mode,
+        is_temporary: isTemporary,
       }),
     });
     if (!response.ok) {

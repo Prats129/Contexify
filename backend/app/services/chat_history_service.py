@@ -1,7 +1,8 @@
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
+from app.core.config import settings
 from app.db.database import get_db_connection
 from app.schemas.chat import ChatMode, Citation
 from app.schemas.document import DocumentMetadata
@@ -16,27 +17,33 @@ class ChatHistoryService:
         user_id: str,
         session_id: Optional[str] = None,
         title: str = "New Conversation",
-        mode: ChatMode = ChatMode.WEB_SEARCH
+        mode: ChatMode = ChatMode.WEB_SEARCH,
+        is_temporary: bool = False
     ) -> ChatSessionResponse:
         session_id = session_id or str(uuid.uuid4())
         now = datetime.utcnow().isoformat()
+        expires_at = None
+        if is_temporary:
+            expires_at = (datetime.utcnow() + timedelta(days=settings.TEMPORARY_CHAT_RETENTION_DAYS)).isoformat()
         
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                INSERT OR REPLACE INTO chat_sessions (id, user_id, title, mode, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT OR REPLACE INTO chat_sessions (id, user_id, title, mode, is_temporary, expires_at, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (session_id, user_id, title, mode.value if hasattr(mode, 'value') else str(mode), now, now)
+                (session_id, user_id, title, mode.value if hasattr(mode, 'value') else str(mode), 1 if is_temporary else 0, expires_at, now, now)
             )
             
-        logger.info(f"Created/registered chat session '{session_id}' for user '{user_id}'")
+        logger.info(f"Created/registered chat session '{session_id}' for user '{user_id}' [Temporary={is_temporary}]")
         return ChatSessionResponse(
             id=session_id,
             user_id=user_id,
             title=title,
             mode=ChatMode(mode) if isinstance(mode, str) else mode,
+            is_temporary=is_temporary,
+            expires_at=expires_at,
             created_at=now,
             updated_at=now,
             message_count=0,
@@ -49,7 +56,7 @@ class ChatHistoryService:
             cursor.execute(
                 """
                 SELECT 
-                    s.id, s.user_id, s.title, s.mode, s.created_at, s.updated_at,
+                    s.id, s.user_id, s.title, s.mode, s.is_temporary, s.expires_at, s.created_at, s.updated_at,
                     (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) AS message_count,
                     (SELECT COUNT(*) FROM documents d WHERE d.session_id = s.id) AS document_count
                 FROM chat_sessions s
@@ -65,6 +72,8 @@ class ChatHistoryService:
                 user_id=row["user_id"],
                 title=row["title"],
                 mode=ChatMode(row["mode"]),
+                is_temporary=bool(row["is_temporary"]),
+                expires_at=row["expires_at"],
                 created_at=row["created_at"],
                 updated_at=row["updated_at"],
                 message_count=row["message_count"],
@@ -77,11 +86,11 @@ class ChatHistoryService:
             cursor.execute(
                 """
                 SELECT 
-                    s.id, s.user_id, s.title, s.mode, s.created_at, s.updated_at,
+                    s.id, s.user_id, s.title, s.mode, s.is_temporary, s.expires_at, s.created_at, s.updated_at,
                     (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) AS message_count,
                     (SELECT COUNT(*) FROM documents d WHERE d.session_id = s.id) AS document_count
                 FROM chat_sessions s
-                WHERE s.user_id = ?
+                WHERE s.user_id = ? AND (s.is_temporary IS NULL OR s.is_temporary = 0)
                 ORDER BY s.updated_at DESC
                 """,
                 (user_id,)
@@ -93,6 +102,8 @@ class ChatHistoryService:
                     user_id=row["user_id"],
                     title=row["title"],
                     mode=ChatMode(row["mode"]),
+                    is_temporary=bool(row["is_temporary"]),
+                    expires_at=row["expires_at"],
                     created_at=row["created_at"],
                     updated_at=row["updated_at"],
                     message_count=row["message_count"],
@@ -297,5 +308,46 @@ class ChatHistoryService:
             messages=messages,
             documents=documents
         )
+
+    def purge_expired_temporary_sessions(self) -> int:
+        """
+        Purge all temporary chat sessions that have passed their expiration timestamp.
+        Deletes vector store chunks, attached files, and cascades DB deletion.
+        """
+        now = datetime.utcnow().isoformat()
+        purged_count = 0
+        try:
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    SELECT id FROM chat_sessions
+                    WHERE is_temporary = 1 AND expires_at IS NOT NULL AND expires_at < ?
+                    """,
+                    (now,)
+                )
+                expired_rows = cursor.fetchall()
+                expired_session_ids = [row["id"] for row in expired_rows]
+
+            if not expired_session_ids:
+                return 0
+
+            from app.repositories.vector_store import vector_store_repo
+            for sess_id in expired_session_ids:
+                docs = self.list_session_documents(sess_id)
+                for doc in docs:
+                    try:
+                        vector_store_repo.delete_document(doc.document_id)
+                    except Exception as ve:
+                        logger.warning(f"Error purging vector store for doc '{doc.document_id}': {ve}")
+
+                self.delete_session(sess_id)
+                purged_count += 1
+
+            logger.info(f"Successfully purged {purged_count} expired temporary chat session(s).")
+        except Exception as e:
+            logger.error(f"Error purging expired temporary sessions: {e}")
+
+        return purged_count
 
 chat_history_service = ChatHistoryService()

@@ -68,8 +68,37 @@ else:
             "frontend_dev_url": "http://localhost:8000"
         }
 
+import asyncio
+from app.services.chat_history_service import chat_history_service
+
+_cleanup_task: asyncio.Task = None
+
+async def _periodic_temporary_cleanup():
+    while True:
+        try:
+            await asyncio.sleep(21600)  # Every 6 hours
+            chat_history_service.purge_expired_temporary_sessions()
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"Error in periodic temporary cleanup: {e}")
+
 @app.on_event("startup")
 async def startup_event():
+    global _cleanup_task
     logger.info(f"Starting {settings.PROJECT_NAME}...")
     init_db()
+    # Run initial cleanup of expired temporary conversations
+    try:
+        chat_history_service.purge_expired_temporary_sessions()
+    except Exception as e:
+        logger.warning(f"Initial temporary chat purge notice: {e}")
+    # Launch periodic background cleanup
+    _cleanup_task = asyncio.create_task(_periodic_temporary_cleanup())
     logger.info("API documentation available at /docs")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    global _cleanup_task
+    if _cleanup_task and not _cleanup_task.done():
+        _cleanup_task.cancel()

@@ -21,7 +21,7 @@ import {
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { Feather, Ionicons } from "@expo/vector-icons";
+import { Feather, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 
 import {
@@ -72,6 +72,7 @@ export default function App() {
   // Global State
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [isTemporaryChat, setIsTemporaryChat] = useState(false);
   const [currentMode, setCurrentMode] = useState<ChatMode>("WEB_SEARCH");
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -181,6 +182,7 @@ export default function App() {
 
   // --- 2. Switch Conversation ---
   const selectSession = async (sessionId: string, sessionMode?: ChatMode) => {
+    setIsTemporaryChat(false);
     setActiveSessionId(sessionId);
     setStreamingMessage(null);
     if (sessionMode) setCurrentMode(sessionMode);
@@ -196,8 +198,17 @@ export default function App() {
     }
   };
 
+  const handleToggleTemporaryChat = () => {
+    setIsTemporaryChat((prev) => {
+      const next = !prev;
+      handleNewChat();
+      return next;
+    });
+  };
+
   // --- 3. New Chat ---
   const handleNewChat = () => {
+    setIsTemporaryChat(false);
     if (currentUser) {
       setActiveSessionId(null);
     } else {
@@ -256,10 +267,13 @@ export default function App() {
           currentUser.id,
           textToSend.slice(0, 40),
           currentMode,
+          isTemporaryChat,
         );
         sessionId = newSession.id;
         setActiveSessionId(sessionId);
-        setSessions((prev) => [newSession, ...prev]);
+        if (!isTemporaryChat) {
+          setSessions((prev) => [newSession, ...prev]);
+        }
       } catch {
         sessionId = generateGuestSessionId();
         setActiveSessionId(sessionId);
@@ -377,8 +391,27 @@ export default function App() {
   }) => {
     let sessionId = activeSessionId;
     if (!sessionId) {
-      sessionId = generateGuestSessionId();
-      setActiveSessionId(sessionId);
+      if (currentUser) {
+        try {
+          const newSession = await apiService.createSession(
+            currentUser.id,
+            `Doc: ${file.name}`.slice(0, 40),
+            "DOCUMENT_RAG",
+            isTemporaryChat,
+          );
+          sessionId = newSession.id;
+          setActiveSessionId(sessionId);
+          if (!isTemporaryChat) {
+            setSessions((prev) => [newSession, ...prev]);
+          }
+        } catch {
+          sessionId = generateGuestSessionId();
+          setActiveSessionId(sessionId);
+        }
+      } else {
+        sessionId = generateGuestSessionId();
+        setActiveSessionId(sessionId);
+      }
     }
 
     setIsUploading(true);
@@ -419,9 +452,9 @@ export default function App() {
     }
   };
 
-  // --- 8. Citations Sheet Open ---
-  const handleOpenCitations = (cits: Citation[]) => {
-    setActiveCitations(cits);
+  // --- 8. Citations Sheet ---
+  const handleOpenCitations = (citations: Citation[]) => {
+    setActiveCitations(citations);
     setCitationsVisible(true);
   };
 
@@ -454,7 +487,67 @@ export default function App() {
           onToggleTheme={handleToggleTheme}
           isDark={isDark}
           theme={theme}
+          isTemporaryChat={isTemporaryChat}
+          onToggleTemporaryChat={handleToggleTemporaryChat}
         />
+
+        {/* Temporary Chat Notice Banner (shown when conversation is active) */}
+        {isTemporaryChat && messages.length > 0 && (
+          <View
+            style={[
+              styles.temporaryBanner,
+              {
+                backgroundColor: isDark
+                  ? "rgba(245, 158, 11, 0.14)"
+                  : "rgba(245, 158, 11, 0.10)",
+                borderBottomColor: isDark
+                  ? "rgba(245, 158, 11, 0.3)"
+                  : "rgba(245, 158, 11, 0.2)",
+              },
+            ]}
+          >
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                flex: 1,
+                marginRight: 8,
+              }}
+            >
+              <MaterialCommunityIcons
+                name="ghost"
+                size={16}
+                color="#f59e0b"
+                style={{ marginRight: 6 }}
+              />
+              <Text
+                numberOfLines={1}
+                style={[
+                  styles.temporaryBannerText,
+                  { color: isDark ? "#fcd34d" : "#b45309", flex: 1 },
+                ]}
+              >
+                Temporary Chat • Not saved to history
+              </Text>
+            </View>
+            <TouchableOpacity
+              onPress={handleToggleTemporaryChat}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              activeOpacity={0.7}
+            >
+              <Text
+                style={{
+                  fontSize: 12,
+                  fontWeight: "700",
+                  textDecorationLine: "underline",
+                  color: isDark ? "#fcd34d" : "#b45309",
+                }}
+              >
+                Turn off
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
         {/* Main Chat Workspace */}
         <KeyboardAvoidingView
@@ -462,120 +555,253 @@ export default function App() {
           style={styles.workspace}
           keyboardVerticalOffset={Platform.OS === "ios" ? 54 : 0}
         >
-          {/* Welcome Screen if empty */}
+          {/* Welcome Screen or ChatGPT Temporary Chat Screen */}
           {messages.length === 0 && !streamingMessage ? (
-            <TouchableWithoutFeedback
-              onPress={Keyboard.dismiss}
-              accessible={false}
-            >
-              <View style={styles.welcomeContainer}>
-                <View style={styles.welcomeBrandGroup}>
-                  <Image
-                    source={require("./assets/logo.png")}
-                    style={styles.welcomeLogo}
-                    resizeMode="contain"
-                  />
+            isTemporaryChat ? (
+              <TouchableWithoutFeedback
+                onPress={Keyboard.dismiss}
+                accessible={false}
+              >
+                <View style={styles.welcomeContainer}>
+                  <View
+                    style={{
+                      width: 64,
+                      height: 64,
+                      borderRadius: 32,
+                      backgroundColor: "rgba(245, 158, 11, 0.16)",
+                      borderWidth: 1.5,
+                      borderColor: "rgba(245, 158, 11, 0.35)",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      marginBottom: 16,
+                    }}
+                  >
+                    <MaterialCommunityIcons
+                      name="ghost"
+                      size={32}
+                      color="#f59e0b"
+                    />
+                  </View>
                   <Text
                     style={[styles.welcomeTitle, { color: theme.textMain }]}
                   >
-                    Contexify AI
+                    Temporary Chat
                   </Text>
-                </View>
-                <Text
-                  style={[styles.welcomeSubtitle, { color: theme.textMuted }]}
-                >
-                  Ask grounded questions with real-time web search or attach
-                  files for instant document RAG.
-                </Text>
-
-                {/* Starter Prompt Chips */}
-                <View style={styles.starterChipsRow}>
-                  <TouchableOpacity
+                  <Text
                     style={[
-                      styles.starterChip,
-                      {
-                        backgroundColor: theme.bgCard,
-                        borderColor: theme.borderSubtle,
-                      },
+                      styles.welcomeSubtitle,
+                      { color: theme.textMuted, marginTop: 4 },
                     ]}
-                    onPress={() =>
-                      handleSendMessage(
-                        "Summarize key points covered in the document.",
-                      )
-                    }
+                  >
+                    Chats in this mode won&apos;t be saved in your chat history
+                    and will be permanently deleted after 3 days.
+                  </Text>
+
+                  <TouchableOpacity
+                    style={{
+                      marginTop: 10,
+                      marginBottom: 16,
+                      paddingHorizontal: 18,
+                      paddingVertical: 9,
+                      borderRadius: 20,
+                      backgroundColor: theme.bgCard,
+                      borderWidth: 1,
+                      borderColor: theme.borderSubtle,
+                    }}
+                    onPress={handleToggleTemporaryChat}
                     activeOpacity={0.8}
                   >
-                    <Ionicons name="list" size={14} color={theme.primary} />
                     <Text
-                      style={[
-                        styles.starterChipText,
-                        { color: theme.textMain },
-                      ]}
+                      style={{
+                        fontSize: 12.5,
+                        fontWeight: "600",
+                        color: theme.textMain,
+                      }}
                     >
-                      Summarize Document
+                      Turn off Temporary Chat
                     </Text>
                   </TouchableOpacity>
 
-                  <TouchableOpacity
-                    style={[
-                      styles.starterChip,
-                      {
-                        backgroundColor: theme.bgCard,
-                        borderColor: theme.borderSubtle,
-                      },
-                    ]}
-                    onPress={() =>
-                      handleSendMessage("Explain the main technical concepts.")
-                    }
-                    activeOpacity={0.8}
-                  >
-                    <Ionicons
-                      name="hardware-chip-outline"
-                      size={14}
-                      color={theme.primary}
+                  {/* Temporary Starter Prompt Chips */}
+                  <View style={styles.starterChipsRow}>
+                    <TouchableOpacity
+                      style={[
+                        styles.starterChip,
+                        {
+                          backgroundColor: theme.bgCard,
+                          borderColor: "rgba(245, 158, 11, 0.3)",
+                        },
+                      ]}
+                      onPress={() =>
+                        handleSendMessage(
+                          "Explain how zero-trust security architecture works.",
+                        )
+                      }
+                      activeOpacity={0.8}
+                    >
+                      <Ionicons
+                        name="shield-checkmark-outline"
+                        size={14}
+                        color="#f59e0b"
+                      />
+                      <Text
+                        style={[
+                          styles.starterChipText,
+                          { color: theme.textMain },
+                        ]}
+                      >
+                        Quick Research
+                      </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[
+                        styles.starterChip,
+                        {
+                          backgroundColor: theme.bgCard,
+                          borderColor: "rgba(245, 158, 11, 0.3)",
+                        },
+                      ]}
+                      onPress={() =>
+                        handleSendMessage(
+                          "Check this confidential snippet for potential bugs or security risks.",
+                        )
+                      }
+                      activeOpacity={0.8}
+                    >
+                      <Ionicons
+                        name="code-slash-outline"
+                        size={14}
+                        color="#f59e0b"
+                      />
+                      <Text
+                        style={[
+                          styles.starterChipText,
+                          { color: theme.textMain },
+                        ]}
+                      >
+                        Confidential Review
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </TouchableWithoutFeedback>
+            ) : (
+              <TouchableWithoutFeedback
+                onPress={Keyboard.dismiss}
+                accessible={false}
+              >
+                <View style={styles.welcomeContainer}>
+                  <View style={styles.welcomeBrandGroup}>
+                    <Image
+                      source={require("./assets/logo.png")}
+                      style={styles.welcomeLogo}
+                      resizeMode="contain"
                     />
                     <Text
-                      style={[
-                        styles.starterChipText,
-                        { color: theme.textMain },
-                      ]}
+                      style={[styles.welcomeTitle, { color: theme.textMain }]}
                     >
-                      Key Concepts
+                      Contexify AI
                     </Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={[
-                      styles.starterChip,
-                      {
-                        backgroundColor: theme.bgCard,
-                        borderColor: theme.borderSubtle,
-                      },
-                    ]}
-                    onPress={() =>
-                      handleSendMessage(
-                        "Search the web for the latest updates on this topic.",
-                      )
-                    }
-                    activeOpacity={0.8}
+                  </View>
+                  <Text
+                    style={[styles.welcomeSubtitle, { color: theme.textMuted }]}
                   >
-                    <Ionicons
-                      name="globe-outline"
-                      size={14}
-                      color={theme.emerald}
-                    />
-                    <Text
+                    Ask grounded questions with real-time web search or attach
+                    files for instant document RAG.
+                  </Text>
+
+                  {/* Starter Prompt Chips */}
+                  <View style={styles.starterChipsRow}>
+                    <TouchableOpacity
                       style={[
-                        styles.starterChipText,
-                        { color: theme.textMain },
+                        styles.starterChip,
+                        {
+                          backgroundColor: theme.bgCard,
+                          borderColor: theme.borderSubtle,
+                        },
                       ]}
+                      onPress={() =>
+                        handleSendMessage(
+                          "Summarize key points covered in the document.",
+                        )
+                      }
+                      activeOpacity={0.8}
                     >
-                      Search Live Web
-                    </Text>
-                  </TouchableOpacity>
+                      <Ionicons name="list" size={14} color={theme.primary} />
+                      <Text
+                        style={[
+                          styles.starterChipText,
+                          { color: theme.textMain },
+                        ]}
+                      >
+                        Summarize Document
+                      </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[
+                        styles.starterChip,
+                        {
+                          backgroundColor: theme.bgCard,
+                          borderColor: theme.borderSubtle,
+                        },
+                      ]}
+                      onPress={() =>
+                        handleSendMessage(
+                          "Explain the main technical concepts.",
+                        )
+                      }
+                      activeOpacity={0.8}
+                    >
+                      <Ionicons
+                        name="hardware-chip-outline"
+                        size={14}
+                        color={theme.primary}
+                      />
+                      <Text
+                        style={[
+                          styles.starterChipText,
+                          { color: theme.textMain },
+                        ]}
+                      >
+                        Key Concepts
+                      </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[
+                        styles.starterChip,
+                        {
+                          backgroundColor: theme.bgCard,
+                          borderColor: theme.borderSubtle,
+                        },
+                      ]}
+                      onPress={() =>
+                        handleSendMessage(
+                          "Search the web for the latest updates on this topic.",
+                        )
+                      }
+                      activeOpacity={0.8}
+                    >
+                      <Ionicons
+                        name="globe-outline"
+                        size={14}
+                        color={theme.emerald}
+                      />
+                      <Text
+                        style={[
+                          styles.starterChipText,
+                          { color: theme.textMain },
+                        ]}
+                      >
+                        Search Live Web
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
                 </View>
-              </View>
-            </TouchableWithoutFeedback>
+              </TouchableWithoutFeedback>
+            )
           ) : (
             <FlatList
               ref={flatListRef}
@@ -761,5 +987,17 @@ const styles = StyleSheet.create({
   messageListContent: {
     paddingVertical: 12,
     flexGrow: 1,
+  },
+  temporaryBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 7,
+    paddingHorizontal: 16,
+    borderBottomWidth: 1,
+  },
+  temporaryBannerText: {
+    fontSize: 12,
+    fontWeight: "600",
   },
 });

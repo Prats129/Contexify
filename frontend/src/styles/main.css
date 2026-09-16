@@ -1,21 +1,23 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 /* Theme Surface & Accent Color Variables (Default: Light Mode) */
 :root {
   --color-primary: #2563eb;
   --color-primary-hover: #1d4ed8;
-  --color-primary-light: rgba(37, 99, 235, 0.15);
+  --color-primary-light: rgba(37, 99, 235, 0.12);
   --color-primary-border: rgba(37, 99, 235, 0.35);
 
   --bg-app: #f8fafc;
   --bg-sidebar: #ffffff;
   --bg-card: #ffffff;
-  --bg-input: rgba(255, 255, 255, 0.95);
+  --bg-input: #ffffff;
   --bg-bubble-ai: #ffffff;
-  --text-main: #0f172a;
-  --text-muted: #64748b;
-  --border-subtle: rgba(0, 0, 0, 0.08);
-  --border-hover: rgba(0, 0, 0, 0.18);
+  --text-main: #020617;
+  --text-muted: #334155;
+  --border-subtle: rgba(0, 0, 0, 0.10);
+  --border-hover: rgba(0, 0, 0, 0.22);
 }
 
 /* Light Mode */
@@ -23,12 +25,12 @@ html.light {
   --bg-app: #f8fafc;
   --bg-sidebar: #ffffff;
   --bg-card: #ffffff;
-  --bg-input: rgba(255, 255, 255, 0.95);
+  --bg-input: #ffffff;
   --bg-bubble-ai: #ffffff;
-  --text-main: #0f172a;
-  --text-muted: #64748b;
-  --border-subtle: rgba(0, 0, 0, 0.08);
-  --border-hover: rgba(0, 0, 0, 0.18);
+  --text-main: #020617;
+  --text-muted: #334155;
+  --border-subtle: rgba(0, 0, 0, 0.10);
+  --border-hover: rgba(0, 0, 0, 0.22);
 }
 
 /* Dark Mode Overrides */

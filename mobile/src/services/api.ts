@@ -384,12 +384,17 @@ export const apiService = {
     }
   },
 
-  async createSession(userId: string, title: string, mode: ChatMode): Promise<ChatSession> {
+  async createSession(
+    userId: string,
+    title: string,
+    mode: ChatMode,
+    isTemporary: boolean = false
+  ): Promise<ChatSession> {
     const url = await getEndpoint('/session/create');
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user_id: userId, title, mode }),
+      body: JSON.stringify({ user_id: userId, title, mode, is_temporary: isTemporary }),
     });
     if (!res.ok) throw new Error('Failed to create conversation');
     return res.json();

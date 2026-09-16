@@ -7,6 +7,7 @@ class ChatSessionCreate(BaseModel):
     user_id: str
     title: Optional[str] = "New Conversation"
     mode: Optional[ChatMode] = ChatMode.WEB_SEARCH
+    is_temporary: Optional[bool] = False
 
 class ChatSessionUpdate(BaseModel):
     title: Optional[str] = None
@@ -24,6 +25,8 @@ class ChatSessionResponse(BaseModel):
     user_id: str
     title: str
     mode: ChatMode
+    is_temporary: bool = False
+    expires_at: Optional[str] = None
     created_at: str
     updated_at: str
     message_count: int = 0
