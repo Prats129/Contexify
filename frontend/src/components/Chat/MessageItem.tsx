@@ -4,14 +4,19 @@ import {
   LuCopy,
   LuCheck,
   LuExternalLink,
+  LuDownload,
+  LuMaximize2,
+  LuSparkles,
+  LuX,
 } from "react-icons/lu";
-import type { Citation } from "../../types";
+import type { Citation, MediaAttachment } from "../../types";
 
 interface MessageItemProps {
   id?: string;
   role: "user" | "assistant";
   content: string;
   citations?: Citation[] | null;
+  attachments?: MediaAttachment[] | null;
   isStreaming?: boolean;
   isError?: boolean;
   userAvatarUrl?: string | null;
@@ -21,6 +26,7 @@ interface MessageItemProps {
   isSourcesActive?: boolean;
   isHighlighted?: boolean;
   onToggleSources?: (citations: Citation[]) => void;
+  onUseAsReference?: (media: MediaAttachment) => void;
 }
 
 export const MessageItem: React.FC<MessageItemProps> = React.memo(
@@ -29,14 +35,17 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(
     role,
     content,
     citations,
+    attachments,
     isStreaming,
     isError,
     isSourcesActive,
     isHighlighted,
     onToggleSources,
+    onUseAsReference,
   }) => {
     const isUser = role === "user";
     const [copied, setCopied] = useState(false);
+    const [selectedImage, setSelectedImage] = useState<string | null>(null);
 
     const handleCopy = async () => {
       if (!content) return;
@@ -237,6 +246,73 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(
             isUser ? "items-end" : "items-start"
           }`}
         >
+          {/* Attached Media (Images / Documents) */}
+          {attachments && attachments.length > 0 && (
+            <div
+              className={`flex flex-wrap gap-2 mb-1.5 ${
+                isUser ? "justify-end" : "justify-start"
+              }`}
+            >
+              {attachments.map((att, attIdx) => {
+                if (att.file_type === "image" || att.url) {
+                  return (
+                    <div
+                      key={att.id || attIdx}
+                      className="group/img relative rounded-xl overflow-hidden border border-(--border-subtle) bg-(--bg-card) shadow-sm max-w-xs sm:max-w-sm"
+                    >
+                      <img
+                        src={att.url}
+                        alt={att.file_name || att.prompt || "Attached media"}
+                        className="w-full max-h-72 sm:max-h-80 object-cover cursor-pointer transition-transform duration-200 hover:scale-[1.02]"
+                        onClick={() => setSelectedImage(att.url)}
+                        loading="lazy"
+                      />
+                      
+                      {/* Overlay action bar */}
+                      <div className="absolute top-2 right-2 flex items-center gap-1.5 opacity-0 group-hover/img:opacity-100 transition-opacity bg-black/65 backdrop-blur-xs p-1 rounded-lg">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedImage(att.url)}
+                          className="p-1 text-white/90 hover:text-white hover:bg-white/20 rounded cursor-pointer transition-colors"
+                          title="View Fullscreen"
+                        >
+                          <LuMaximize2 size={13} />
+                        </button>
+                        <a
+                          href={att.url}
+                          download={att.file_name || "contexify_image.png"}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="p-1 text-white/90 hover:text-white hover:bg-white/20 rounded cursor-pointer transition-colors"
+                          title="Download Image"
+                        >
+                          <LuDownload size={13} />
+                        </a>
+                        {!isUser && onUseAsReference && (
+                          <button
+                            type="button"
+                            onClick={() => onUseAsReference(att)}
+                            className="p-1 text-white/90 hover:text-white hover:bg-white/20 rounded cursor-pointer transition-colors"
+                            title="Use as Reference for new variation"
+                          >
+                            <LuSparkles size={13} />
+                          </button>
+                        )}
+                      </div>
+
+                      {att.prompt && (
+                        <div className="p-2 text-[11px] text-(--text-muted) border-t border-(--border-subtle) bg-(--bg-input)/80 truncate max-w-xs">
+                          {att.prompt}
+                        </div>
+                      )}
+                    </div>
+                  );
+                }
+                return null;
+              })}
+            </div>
+          )}
+
           <div
             className={`px-3.5 sm:px-4 py-2.5 rounded-2xl text-sm leading-relaxed transition-all duration-300 wrap-break-word ${
               isUser
@@ -365,6 +441,45 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(
             </div>
           )}
         </div>
+
+        {/* Lightbox Preview Modal */}
+        {selectedImage && (
+          <div
+            role="dialog"
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in"
+            onClick={() => setSelectedImage(null)}
+          >
+            <div
+              className="relative max-w-4xl max-h-[90vh] flex flex-col items-center"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <button
+                type="button"
+                className="absolute -top-10 right-0 text-white/80 hover:text-white p-1 rounded-full cursor-pointer transition-colors"
+                onClick={() => setSelectedImage(null)}
+                title="Close"
+              >
+                <LuX size={24} />
+              </button>
+              <img
+                src={selectedImage}
+                alt="Enlarged view"
+                className="max-w-full max-h-[80vh] rounded-2xl object-contain shadow-2xl border border-white/10"
+              />
+              <div className="flex items-center gap-3 mt-3">
+                <a
+                  href={selectedImage}
+                  download="contexify_image.png"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex items-center gap-1.5 px-4 py-2 bg-primary-theme text-white text-xs font-medium rounded-full shadow-lg hover:opacity-90 transition-opacity"
+                >
+                  <LuDownload size={14} /> Download High-Res
+                </a>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   },

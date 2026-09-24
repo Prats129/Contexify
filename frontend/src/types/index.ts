@@ -2,7 +2,18 @@
  * Core TypeScript definitions for Contexify AI
  */
 
-export type ChatMode = 'DOCUMENT_RAG' | 'WEB_SEARCH' | 'MULTIMODAL';
+export type ChatMode = 'AUTO' | 'DOCUMENT_RAG' | 'WEB_SEARCH' | 'MULTIMODAL' | 'IMAGE_GENERATION';
+
+export interface MediaAttachment {
+  id?: string;
+  url: string;
+  file_type: 'image' | 'document';
+  file_name?: string;
+  mime_type?: string;
+  file_size_bytes?: number;
+  media_type?: 'upload' | 'generated';
+  prompt?: string;
+}
 
 export interface User {
   id: string;
@@ -86,6 +97,7 @@ export interface Message {
   role: 'user' | 'assistant';
   content: string;
   citations?: Citation[] | null;
+  attachments?: MediaAttachment[] | null;
   created_at: string;
 }
 
@@ -144,6 +156,7 @@ export interface SessionHistoryResponse {
 
 export interface StreamHandlers {
   onCitations?: (citations: Citation[]) => void;
+  onMedia?: (media: MediaAttachment) => void;
   onToken?: (token: string) => void;
   onError?: (error: string) => void;
   onDone?: () => void;
@@ -153,6 +166,7 @@ export interface StreamingMessageState {
   role: 'assistant';
   content: string;
   citations?: Citation[] | null;
+  attachments?: MediaAttachment[] | null;
   isStreaming: boolean;
   isError: boolean;
 }

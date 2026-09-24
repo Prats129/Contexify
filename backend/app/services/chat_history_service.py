@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 from app.core.config import settings
 from app.db.database import get_db_connection
-from app.schemas.chat import ChatMode, Citation
+from app.schemas.chat import ChatMode, Citation, MediaAttachment
 from app.schemas.document import DocumentMetadata
 from app.schemas.session import ChatSessionResponse, MessageResponse, SessionHistoryResponse
 from app.core.logging import logger
@@ -165,22 +165,40 @@ class ChatHistoryService:
         session_id: str,
         role: str,
         content: str,
-        citations: Optional[List[Dict[str, Any]]] = None
+        citations: Optional[List[Dict[str, Any]]] = None,
+        attachments: Optional[List[Any]] = None
     ) -> MessageResponse:
         message_id = str(uuid.uuid4())
         now = datetime.utcnow().isoformat()
         citations_json = json.dumps(citations) if citations else None
         
+        # Serialize attachments to JSON
+        attachments_json = "[]"
+        attachments_obj = None
+        if attachments:
+            try:
+                dumped = []
+                for a in attachments:
+                    if hasattr(a, "model_dump"):
+                        dumped.append(a.model_dump())
+                    elif isinstance(a, dict):
+                        dumped.append(a)
+                attachments_json = json.dumps(dumped)
+                attachments_obj = [MediaAttachment(**a) if isinstance(a, dict) else a for a in dumped]
+            except Exception as e:
+                logger.error(f"Error serializing attachments for session {session_id}: {e}")
+                attachments_json = "[]"
+
         # Only persist to SQLite if the session is registered in the database (logged-in user)
         if self.get_session(session_id) is not None:
             with get_db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
                     """
-                    INSERT INTO messages (id, session_id, role, content, citations_json, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO messages (id, session_id, role, content, citations_json, attachments_json, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (message_id, session_id, role, content, citations_json, now)
+                    (message_id, session_id, role, content, citations_json, attachments_json, now)
                 )
                 cursor.execute(
                     "UPDATE chat_sessions SET updated_at = ? WHERE id = ?",
@@ -197,6 +215,7 @@ class ChatHistoryService:
             role=role,
             content=content,
             citations=citations_obj,
+            attachments=attachments_obj,
             created_at=now
         )
 
@@ -205,7 +224,7 @@ class ChatHistoryService:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT id, session_id, role, content, citations_json, created_at
+                SELECT id, session_id, role, content, citations_json, attachments_json, created_at
                 FROM messages
                 WHERE session_id = ?
                 ORDER BY created_at ASC
@@ -223,6 +242,17 @@ class ChatHistoryService:
                         citations = [Citation(**c) for c in raw_c]
                     except Exception as e:
                         logger.error(f"Error parsing citations for message {row['id']}: {e}")
+
+                attachments = None
+                # Check if attachments_json column exists and has content
+                row_keys = row.keys() if hasattr(row, "keys") else []
+                if "attachments_json" in row_keys and row["attachments_json"]:
+                    try:
+                        raw_att = json.loads(row["attachments_json"])
+                        if raw_att:
+                            attachments = [MediaAttachment(**a) for a in raw_att]
+                    except Exception as e:
+                        logger.error(f"Error parsing attachments for message {row['id']}: {e}")
                 
                 messages.append(MessageResponse(
                     id=row["id"],
@@ -230,6 +260,7 @@ class ChatHistoryService:
                     role=row["role"],
                     content=row["content"],
                     citations=citations,
+                    attachments=attachments,
                     created_at=row["created_at"]
                 ))
             return messages
@@ -242,7 +273,8 @@ class ChatHistoryService:
         filename: str,
         file_type: str,
         file_size_bytes: int,
-        total_chunks: int
+        total_chunks: int,
+        storage_url: str = ""
     ) -> DocumentMetadata:
         now = datetime.utcnow().isoformat()
         # Only persist to SQLite if the session is registered in the database
@@ -251,10 +283,10 @@ class ChatHistoryService:
                 cursor = conn.cursor()
                 cursor.execute(
                     """
-                    INSERT OR REPLACE INTO documents (id, user_id, session_id, filename, file_type, file_size_bytes, total_chunks, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT OR REPLACE INTO documents (id, user_id, session_id, filename, file_type, file_size_bytes, total_chunks, storage_url, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (document_id, user_id, session_id, filename, file_type, file_size_bytes, total_chunks, now)
+                    (document_id, user_id, session_id, filename, file_type, file_size_bytes, total_chunks, storage_url, now)
                 )
             
         return DocumentMetadata(
@@ -263,6 +295,7 @@ class ChatHistoryService:
             file_type=file_type,
             file_size_bytes=file_size_bytes,
             total_chunks=total_chunks,
+            storage_url=storage_url if storage_url else None,
             uploaded_at=now
         )
 
@@ -271,7 +304,7 @@ class ChatHistoryService:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT id, filename, file_type, file_size_bytes, total_chunks, created_at
+                SELECT id, filename, file_type, file_size_bytes, total_chunks, storage_url, created_at
                 FROM documents
                 WHERE session_id = ?
                 ORDER BY created_at DESC
@@ -286,10 +319,20 @@ class ChatHistoryService:
                     file_type=row["file_type"],
                     file_size_bytes=row["file_size_bytes"],
                     total_chunks=row["total_chunks"],
+                    storage_url=row["storage_url"] if "storage_url" in row.keys() and row["storage_url"] else None,
                     uploaded_at=row["created_at"]
                 )
                 for row in rows
             ]
+
+    def get_document_storage_url(self, document_id: str) -> Optional[str]:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT storage_url FROM documents WHERE id = ?", (document_id,))
+            row = cursor.fetchone()
+            if row and "storage_url" in row.keys() and row["storage_url"]:
+                return row["storage_url"]
+        return None
 
     def delete_document(self, document_id: str) -> bool:
         with get_db_connection() as conn:

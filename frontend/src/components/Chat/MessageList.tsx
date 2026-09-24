@@ -20,6 +20,7 @@ import type {
   StreamingMessageState,
   User,
   Citation,
+  MediaAttachment,
 } from "../../types";
 
 interface MessageListProps {
@@ -36,6 +37,7 @@ interface MessageListProps {
   activeSources?: boolean;
   isTemporaryChat?: boolean;
   onToggleTemporaryChat?: () => void;
+  onUseAsReference?: (media: MediaAttachment) => void;
 }
 
 export const MessageList: React.FC<MessageListProps> = ({
@@ -48,6 +50,7 @@ export const MessageList: React.FC<MessageListProps> = ({
   activeSources,
   isTemporaryChat = false,
   onToggleTemporaryChat,
+  onUseAsReference,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollEndRef = useRef<HTMLDivElement>(null);
@@ -324,6 +327,7 @@ export const MessageList: React.FC<MessageListProps> = ({
                 role={msg.role}
                 content={msg.content}
                 citations={msg.citations}
+                attachments={msg.attachments}
                 isHighlighted={highlightedMessageId === msg.id}
                 userAvatarUrl={currentUser?.avatar_url}
                 userAvatarColor={currentUser?.avatar_color}
@@ -342,6 +346,7 @@ export const MessageList: React.FC<MessageListProps> = ({
                         )
                     : undefined
                 }
+                onUseAsReference={onUseAsReference}
               />
             );
           })}
@@ -352,6 +357,7 @@ export const MessageList: React.FC<MessageListProps> = ({
               isStreaming={true}
               content={streamingMessage.content}
               citations={streamingMessage.citations}
+              attachments={streamingMessage.attachments}
               isHighlighted={false}
               queryTitle={messages[messages.length - 1]?.content || ""}
               isSourcesActive={activeSourcesMessageId === "streaming"}
@@ -367,6 +373,7 @@ export const MessageList: React.FC<MessageListProps> = ({
                       )
                   : undefined
               }
+              onUseAsReference={onUseAsReference}
             />
           )}
 

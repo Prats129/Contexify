@@ -1,12 +1,12 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional
-from app.schemas.chat import ChatMode, Citation
+from app.schemas.chat import ChatMode, Citation, MediaAttachment
 from app.schemas.document import DocumentMetadata
 
 class ChatSessionCreate(BaseModel):
     user_id: str
     title: Optional[str] = "New Conversation"
-    mode: Optional[ChatMode] = ChatMode.WEB_SEARCH
+    mode: Optional[ChatMode] = ChatMode.AUTO
     is_temporary: Optional[bool] = False
 
 class ChatSessionUpdate(BaseModel):
@@ -17,7 +17,7 @@ class TitleUpdatePayload(BaseModel):
     title: str = Field(..., min_length=1, max_length=100, description="New title for the session")
 
 class ModeUpdatePayload(BaseModel):
-    mode: ChatMode = Field(..., description="Target chat mode (DOCUMENT_RAG or WEB_SEARCH)")
+    mode: ChatMode = Field(..., description="Target chat mode (AUTO, DOCUMENT_RAG, WEB_SEARCH, MULTIMODAL, IMAGE_GENERATION)")
 
 
 class ChatSessionResponse(BaseModel):
@@ -38,6 +38,7 @@ class MessageResponse(BaseModel):
     role: str
     content: str
     citations: Optional[List[Citation]] = None
+    attachments: Optional[List[MediaAttachment]] = None
     created_at: str
 
 class SessionHistoryResponse(BaseModel):

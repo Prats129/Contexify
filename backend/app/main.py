@@ -11,7 +11,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.logging import logger
 from app.db.database import init_db
-from app.api.v1.endpoints import document, chat, health, user, session
+from app.api.v1.endpoints import document, chat, health, user, session, media
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -29,15 +31,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Mount media static directory for uploaded and generated images and documents (local fallback)
+app.mount("/api/v1/media/uploads", StaticFiles(directory=str(settings.UPLOAD_IMAGE_DIR)), name="media-uploads")
+app.mount("/api/v1/media/generated", StaticFiles(directory=str(settings.GENERATED_IMAGE_DIR)), name="media-generated")
+documents_dir = settings.DATA_DIR / "documents"
+documents_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/api/v1/media/documents", StaticFiles(directory=str(documents_dir)), name="media-documents")
+
 # API Routers
 app.include_router(health.router, prefix=f"{settings.API_V1_STR}/health", tags=["Health"])
 app.include_router(user.router, prefix=f"{settings.API_V1_STR}/user", tags=["Users"])
 app.include_router(session.router, prefix=f"{settings.API_V1_STR}/session", tags=["Sessions"])
 app.include_router(document.router, prefix=f"{settings.API_V1_STR}/document", tags=["Documents"])
+app.include_router(media.router, prefix=f"{settings.API_V1_STR}/media", tags=["Media"])
 app.include_router(chat.router, prefix=f"{settings.API_V1_STR}/chat", tags=["Chat"])
-
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
 
 # Check for production frontend build
 frontend_dist = settings.WORKSPACE_DIR / "frontend" / "dist"

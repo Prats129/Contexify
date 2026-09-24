@@ -7,6 +7,8 @@ import {
   LuFile,
   LuGlobe,
   LuImage,
+  LuSparkles,
+  LuPalette,
   LuChevronDown,
   LuChevronUp,
   LuCheck,
@@ -16,7 +18,7 @@ import {
   LuDatabase,
   LuSlidersHorizontal,
 } from "react-icons/lu";
-import type { ChatMode, DocumentMetadata } from "../../types";
+import type { ChatMode, DocumentMetadata, MediaAttachment } from "../../types";
 
 interface ChatInputProps {
   inputQuery: string;
@@ -31,6 +33,8 @@ interface ChatInputProps {
   uploadStatusText?: string;
   documents?: DocumentMetadata[];
   onDeleteDocument?: (documentId: string) => void;
+  attachedMedia?: MediaAttachment[];
+  onDeleteMedia?: (index: number) => void;
 }
 
 export const ChatInput: React.FC<ChatInputProps> = ({
@@ -46,6 +50,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   uploadStatusText,
   documents = [],
   onDeleteDocument,
+  attachedMedia = [],
+  onDeleteMedia,
 }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -200,8 +206,29 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     setIsDropdownOpen(false);
   };
 
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items;
+    if (items) {
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.startsWith("image/")) {
+          const file = items[i].getAsFile();
+          if (file) {
+            e.preventDefault();
+            onFileUpload(file);
+          }
+        }
+      }
+    }
+  };
+
   const getModeDetails = (mode: ChatMode) => {
     switch (mode) {
+      case "AUTO":
+        return {
+          title: "Auto",
+          desc: "Smart AI (ChatGPT Style)",
+          icon: <LuSparkles size={15} className="text-amber-500" />,
+        };
       case "WEB_SEARCH":
         return {
           title: "Web Search",
@@ -216,15 +243,21 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         };
       case "MULTIMODAL":
         return {
-          title: "Multimodal",
-          desc: "Vision & Audio (Coming)",
+          title: "Vision & OCR",
+          desc: "Analyze Images & Docs",
           icon: <LuImage size={15} />,
+        };
+      case "IMAGE_GENERATION":
+        return {
+          title: "Image Gen",
+          desc: "Google Imagen 3 Artwork",
+          icon: <LuPalette size={15} className="text-pink-500" />,
         };
       default:
         return {
-          title: "Document RAG",
-          desc: "Grounded Context QA",
-          icon: <LuFileText size={15} />,
+          title: "Auto",
+          desc: "Smart AI (ChatGPT Style)",
+          icon: <LuSparkles size={15} className="text-amber-500" />,
         };
     }
   };
@@ -246,7 +279,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     return <LuFile size={13} className="text-(--text-muted)" />;
   };
 
-  const isExpanded = isMultiline || documents.length > 0 || isUploading;
+  const isExpanded =
+    isMultiline ||
+    documents.length > 0 ||
+    attachedMedia.length > 0 ||
+    isUploading;
 
   return (
     <div className="p-2 sm:p-4 max-w-4xl w-full mx-auto shrink-0 flex flex-col gap-1.5 sm:gap-2">
@@ -258,16 +295,47 @@ export const ChatInput: React.FC<ChatInputProps> = ({
               : "rounded-full px-3 sm:px-3.5 py-1.5 gap-x-1.5 sm:gap-x-2 grid-cols-[auto_1fr_auto] items-center"
           }`}
         >
-          {/* Uploading progress indicator or attached documents banner */}
-          {(isUploading || documents.length > 0) && (
-            <div className="col-span-full row-start-1 flex flex-wrap items-center gap-1.5 pb-2 mb-1 mt-3 border-b border-(--border-subtle)/50 max-h-24 overflow-y-auto">
+          {/* Uploading progress indicator or attached documents/media banner */}
+          {(isUploading ||
+            documents.length > 0 ||
+            attachedMedia.length > 0) && (
+            <div className="col-span-full row-start-1 flex flex-wrap items-center gap-1.5 pb-2 mb-1 mt-3 border-b border-(--border-subtle)/50 max-h-28 overflow-y-auto">
               {isUploading && (
                 <div className="flex items-center gap-1.5 px-2.5 py-1 bg-primary-light-theme border border-primary-theme text-primary-theme rounded-full text-xs animate-pulse">
                   <LuLoader size={13} className="icon-spin" />
-                  <span>{uploadStatusText || "Vectorizing document..."}</span>
+                  <span>{uploadStatusText || "Processing upload..."}</span>
                 </div>
               )}
 
+              {/* Uploaded Image Previews */}
+              {attachedMedia.map((media, mIdx) => (
+                <div
+                  key={media.id || mIdx}
+                  className="flex items-center gap-1.5 p-1 pr-2 bg-(--border-subtle) border border-(--border-subtle) text-(--text-main) rounded-full text-xs max-w-44 shadow-2xs"
+                  title={media.file_name || "Attached Image"}
+                >
+                  <img
+                    src={media.url}
+                    alt=""
+                    className="w-5 h-5 rounded-full object-cover shrink-0 border border-white/20"
+                  />
+                  <span className="truncate max-w-24 text-[11px] font-medium">
+                    {media.file_name || "Image"}
+                  </span>
+                  {onDeleteMedia && (
+                    <button
+                      type="button"
+                      className="hover:text-red-500 cursor-pointer ml-0.5 shrink-0"
+                      onClick={() => onDeleteMedia(mIdx)}
+                      title="Remove image"
+                    >
+                      <LuX size={12} />
+                    </button>
+                  )}
+                </div>
+              ))}
+
+              {/* Uploaded Documents */}
               {documents.map((doc) => (
                 <div
                   key={doc.document_id}
@@ -307,7 +375,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
               type="button"
               className="w-8 h-8 rounded-full bg-(--border-subtle) hover:bg-(--border-hover) text-(--text-muted) hover:text-(--text-main) flex items-center justify-center cursor-pointer shrink-0 disabled:opacity-50 transition-colors"
               onClick={() => fileInputRef.current?.click()}
-              title="Add document or image"
+              title="Attach image or document"
               disabled={isUploading}
             >
               {isUploading ? (
@@ -324,6 +392,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             value={inputQuery}
             onChange={(e) => setInputQuery(e.target.value)}
             onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
             onFocus={() => {
               if (typeof window !== "undefined" && window.innerWidth < 768) {
                 setTimeout(() => {
@@ -334,9 +403,17 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                 }, 300);
               }
             }}
-            placeholder="Ask anything ..."
+            placeholder={
+              currentMode === "IMAGE_GENERATION"
+                ? "Describe the image you want to generate..."
+                : currentMode === "MULTIMODAL"
+                  ? "Ask a question about your attached image or document..."
+                  : currentMode === "DOCUMENT_RAG"
+                    ? "Ask questions based on your uploaded document..."
+                    : "Ask anything, attach files, or type 'generate image of...' "
+            }
             rows={1}
-            required
+            required={attachedMedia.length === 0}
             className={`bg-transparent border-0 outline-none resize-none text-[16px] sm:text-[15px] text-(--text-main) px-2 leading-normal ${
               isExpanded
                 ? "col-span-full row-start-2 w-full max-h-52 overflow-y-auto py-1"
@@ -358,44 +435,71 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                 type="button"
                 className={`flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-medium rounded-full border cursor-pointer transition-colors ${
                   isDropdownOpen
-                    ? "bg-primary-light-theme text-primary-theme border-primary-theme"
-                    : "bg-(--border-subtle) text-(--text-muted) hover:text-(--text-main) border-(--border-subtle) hover:border-(--border-hover)"
+                    ? "bg-primary-theme text-white border-primary-theme shadow-xs"
+                    : "bg-(--border-subtle) hover:bg-(--border-hover) border-(--border-subtle) text-(--text-main)"
                 }`}
                 onClick={() => setIsDropdownOpen((prev) => !prev)}
-                title="Select Engine Mode"
+                title="Select AI Chat Engine"
               >
                 {currentModeDetails.icon}
-                <span className="hidden sm:inline-block">
+                <span className="hidden sm:inline">
                   {currentModeDetails.title}
                 </span>
                 {isDropdownOpen ? (
-                  <LuChevronUp size={13} />
+                  <LuChevronUp size={12} />
                 ) : (
-                  <LuChevronDown size={13} />
+                  <LuChevronDown size={12} />
                 )}
               </button>
 
-              {/* Dropdown Popup Menu */}
+              {/* Mode Selection Popover Menu */}
               {isDropdownOpen && (
-                <div className="absolute bottom-full right-0 mb-2 w-56 max-w-[calc(100vw-2rem)] bg-(--bg-card) border border-(--border-hover) rounded-xl shadow-2xl z-50 p-1.5 flex flex-col gap-1 backdrop-blur-xl">
-                  <div className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-semibold text-(--text-muted) uppercase tracking-wider border-b border-(--border-subtle) mb-0.5">
-                    <LuSlidersHorizontal size={12} /> Engine Mode
+                <div className="absolute right-0 bottom-full mb-2 w-56 sm:w-60 bg-(--bg-card) border border-(--border-subtle) rounded-xl shadow-xl p-1.5 flex flex-col gap-1 z-50 animate-fade-in backdrop-blur-md">
+                  <div className="px-2 py-1 text-[11px] font-medium text-(--text-muted) border-b border-(--border-subtle) mb-1 flex items-center justify-between">
+                    <span>AI Engine</span>
+                    <LuSlidersHorizontal size={11} />
                   </div>
+
+                  {/* AUTO Mode (Smart / Default) */}
+                  <button
+                    type="button"
+                    className={`flex items-center justify-between p-2 rounded-lg text-left text-xs cursor-pointer w-full transition-colors ${
+                      currentMode === "AUTO"
+                        ? "bg-amber-500/10 text-amber-600 font-medium"
+                        : "hover:bg-(--border-subtle) text-(--text-main)"
+                    }`}
+                    onClick={() => handleSelectMode("AUTO")}
+                  >
+                    <div className="flex items-center gap-2">
+                      <LuSparkles size={16} className="text-amber-500" />
+                      <div className="flex flex-col">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-semibold">Auto</span>
+                          <span className="text-[9px] px-1 py-0.2 bg-amber-500/20 text-amber-600 rounded font-bold uppercase tracking-wider">
+                            Smart
+                          </span>
+                        </div>
+                        <span className="text-[10px] text-(--text-muted)">
+                          ChatGPT-style dynamic AI
+                        </span>
+                      </div>
+                    </div>
+                    {currentMode === "AUTO" && (
+                      <LuCheck size={14} className="text-amber-500" />
+                    )}
+                  </button>
 
                   <button
                     type="button"
                     className={`flex items-center justify-between p-2 rounded-lg text-left text-xs cursor-pointer w-full ${
                       currentMode === "WEB_SEARCH"
-                        ? "bg-emerald-500/15 text-emerald-500 dark:text-emerald-400 font-medium"
+                        ? "bg-emerald-500/10 dark:text-emerald-400 font-medium"
                         : "hover:bg-(--border-subtle) text-(--text-main)"
                     }`}
                     onClick={() => handleSelectMode("WEB_SEARCH")}
                   >
                     <div className="flex items-center gap-2">
-                      <LuGlobe
-                        size={16}
-                        className="text-emerald-500 dark:text-emerald-400"
-                      />
+                      <LuGlobe size={16} className="text-emerald-500" />
                       <div className="flex flex-col">
                         <span className="font-semibold">Web Search</span>
                         <span className="text-[10px] text-(--text-muted)">
@@ -404,10 +508,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                       </div>
                     </div>
                     {currentMode === "WEB_SEARCH" && (
-                      <LuCheck
-                        size={14}
-                        className="text-emerald-500 dark:text-emerald-400"
-                      />
+                      <LuCheck size={14} className="text-emerald-500" />
                     )}
                   </button>
 
@@ -436,24 +537,52 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
                   <button
                     type="button"
-                    disabled
-                    className="flex items-center justify-between p-2 rounded-lg text-left text-xs opacity-40 cursor-not-allowed w-full select-none"
-                    title="Multimodal Engine is coming soon"
+                    className={`flex items-center justify-between p-2 rounded-lg text-left text-xs cursor-pointer w-full ${
+                      currentMode === "MULTIMODAL"
+                        ? "bg-purple-500/10 text-purple-600 font-medium"
+                        : "hover:bg-(--border-subtle) text-(--text-main)"
+                    }`}
+                    onClick={() => handleSelectMode("MULTIMODAL")}
                   >
                     <div className="flex items-center gap-2">
-                      <LuImage size={16} className="text-purple-400" />
+                      <LuImage size={16} className="text-purple-500" />
                       <div className="flex flex-col">
                         <div className="flex items-center gap-1.5">
-                          <span className="font-semibold">Multimodal</span>
-                          <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-(--border-subtle) text-(--text-muted) uppercase font-medium">
-                            Soon
-                          </span>
+                          <span className="font-semibold">Vision & OCR</span>
                         </div>
                         <span className="text-[10px] text-(--text-muted)">
-                          Vision & Audio (Coming)
+                          Analyze Images & Docs
                         </span>
                       </div>
                     </div>
+                    {currentMode === "MULTIMODAL" && (
+                      <LuCheck size={14} className="text-purple-500" />
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`flex items-center justify-between p-2 rounded-lg text-left text-xs cursor-pointer w-full ${
+                      currentMode === "IMAGE_GENERATION"
+                        ? "bg-pink-500/10 text-pink-600 font-medium"
+                        : "hover:bg-(--border-subtle) text-(--text-main)"
+                    }`}
+                    onClick={() => handleSelectMode("IMAGE_GENERATION")}
+                  >
+                    <div className="flex items-center gap-2">
+                      <LuPalette size={16} className="text-pink-500" />
+                      <div className="flex flex-col">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-semibold">Image Gen</span>
+                        </div>
+                        <span className="text-[10px] text-(--text-muted)">
+                          Google Imagen 3 Artwork
+                        </span>
+                      </div>
+                    </div>
+                    {currentMode === "IMAGE_GENERATION" && (
+                      <LuCheck size={14} className="text-pink-500" />
+                    )}
                   </button>
                 </div>
               )}
@@ -473,7 +602,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
               <button
                 type="submit"
                 className="w-8 h-8 rounded-full bg-primary-theme hover:opacity-90 disabled:opacity-30 text-white flex items-center justify-center disabled:cursor-not-allowed shrink-0 disabled:shadow-none transition-all"
-                disabled={!inputQuery.trim()}
+                disabled={!inputQuery.trim() && attachedMedia.length === 0}
                 title="Send Question"
               >
                 <LuArrowUp size={18} />

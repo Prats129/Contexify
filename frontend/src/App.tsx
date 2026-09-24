@@ -12,6 +12,7 @@ import type {
   StreamingMessageState,
   Citation,
   GoogleAuthRequest,
+  MediaAttachment,
 } from "./types";
 import { useTheme } from "./context/ThemeContext";
 import { useConfirm } from "./context/ConfirmContext";
@@ -28,36 +29,31 @@ interface UrlRouteInfo {
 
 function getUrlRouteInfo(): UrlRouteInfo {
   const path = window.location.pathname;
-  // Authenticated chat: /c/:id
+  // Route /c/:id (authenticated) or /uc/:id (guest temp chat)
   const authMatch = path.match(/^\/c\/([^/]+)/);
-  if (authMatch && authMatch[1]) {
+  if (authMatch) {
     return {
       sessionId: decodeURIComponent(authMatch[1]),
       isUnauthenticated: false,
     };
   }
-  // Unauthenticated guest temp chat: /uc/:id
-  const guestMatch = path.match(/^\/uc\/([^/]+)/);
-  if (guestMatch && guestMatch[1]) {
+  const unauthMatch = path.match(/^\/uc\/([^/]+)/);
+  if (unauthMatch) {
     return {
-      sessionId: decodeURIComponent(guestMatch[1]),
+      sessionId: decodeURIComponent(unauthMatch[1]),
       isUnauthenticated: true,
     };
   }
-  // Query parameters fallback
-  const params = new URLSearchParams(window.location.search);
-  const ucParam = params.get("uc");
-  if (ucParam) {
-    return { sessionId: ucParam, isUnauthenticated: true };
+
+  // Legacy fallback ?c=:id query param
+  if (typeof window !== "undefined" && window.location.search) {
+    const params = new URLSearchParams(window.location.search);
+    const c = params.get("c");
+    if (c) {
+      return { sessionId: c, isUnauthenticated: false };
+    }
   }
-  const cParam = params.get("c");
-  if (cParam) {
-    return { sessionId: cParam, isUnauthenticated: false };
-  }
-  const sid = params.get("session") || params.get("id");
-  if (sid) {
-    return { sessionId: sid, isUnauthenticated: false };
-  }
+
   return { sessionId: null, isUnauthenticated: false };
 }
 
@@ -91,8 +87,9 @@ export const App: React.FC = () => {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [isTemporaryChat, setIsTemporaryChat] = useState<boolean>(false);
-  const [currentMode, setCurrentMode] = useState<ChatMode>("WEB_SEARCH");
+  const [currentMode, setCurrentMode] = useState<ChatMode>("AUTO");
   const [documents, setDocuments] = useState<DocumentMetadata[]>([]);
+  const [attachedMedia, setAttachedMedia] = useState<MediaAttachment[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
 
   // --- Interaction States ---
@@ -379,7 +376,7 @@ export const App: React.FC = () => {
     }
   };
 
-  // --- 7. Document Upload & Delete ---
+  // --- 7. Document & Media Upload / Delete ---
   const handleFileUpload = async (file: File) => {
     let targetSessionId = activeSessionId;
     if (!targetSessionId) {
@@ -409,6 +406,32 @@ export const App: React.FC = () => {
       }
     }
 
+    const isImage =
+      file.type.startsWith("image/") ||
+      [".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".svg"].some((ext) =>
+        file.name.toLowerCase().endsWith(ext),
+      );
+
+    if (isImage) {
+      setIsUploading(true);
+      setUploadStatusText(`Uploading image '${file.name}'...`);
+      try {
+        const mediaRes = await apiService.uploadMedia(
+          file,
+          targetSessionId,
+          currentUser?.id,
+        );
+        setAttachedMedia((prev) => [...prev, mediaRes]);
+      } catch (e: unknown) {
+        const err = e instanceof Error ? e.message : String(e);
+        await showAlert({ title: "Image Upload Failed", message: err });
+      } finally {
+        setIsUploading(false);
+        setUploadStatusText("");
+      }
+      return;
+    }
+
     setIsUploading(true);
     setUploadStatusText(`Vectorizing '${file.name}'...`);
 
@@ -431,6 +454,18 @@ export const App: React.FC = () => {
     } finally {
       setIsUploading(false);
       setUploadStatusText("");
+    }
+  };
+
+  const handleDeleteMedia = (index: number) => {
+    setAttachedMedia((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const handleUseAsReference = (media: MediaAttachment) => {
+    setAttachedMedia([media]);
+    setCurrentMode("IMAGE_GENERATION");
+    if (!inputQuery.trim()) {
+      setInputQuery("Recreate this image with ");
     }
   };
 
@@ -529,7 +564,7 @@ export const App: React.FC = () => {
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     const query = inputQuery.trim();
-    if (!query || isSending) return;
+    if ((!query && attachedMedia.length === 0) || isSending) return;
 
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -565,16 +600,19 @@ export const App: React.FC = () => {
       }
     }
 
-    // Reset input
+    // Capture media to send & reset input
+    const mediaToSend = [...attachedMedia];
     setInputQuery("");
+    setAttachedMedia([]);
     setIsSending(true);
 
-    // Append optimistic user message
+    // Append optimistic user message with attachments
     const userMsg: Message = {
       id: `user-${Date.now()}`,
       session_id: targetSessionId,
       role: "user",
-      content: query,
+      content: query || (mediaToSend.length > 0 ? "Analyze attached media" : ""),
+      attachments: mediaToSend.length > 0 ? mediaToSend : null,
       created_at: new Date().toISOString(),
     };
     setMessages((prev) => [...prev, userMsg]);
@@ -582,11 +620,13 @@ export const App: React.FC = () => {
     // Setup streaming placeholder
     let accumulatedText = "";
     let receivedCitations: Citation[] | null = null;
+    let receivedMedia: MediaAttachment[] = [];
 
     setStreamingMessage({
       role: "assistant",
       content: "",
       citations: null,
+      attachments: null,
       isStreaming: true,
       isError: false,
     });
@@ -608,6 +648,18 @@ export const App: React.FC = () => {
               : null,
           );
         },
+        onMedia: (media) => {
+          if (abortController.signal.aborted) return;
+          receivedMedia = [...receivedMedia, media];
+          setStreamingMessage((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  attachments: receivedMedia,
+                }
+              : null,
+          );
+        },
         onToken: (token) => {
           if (abortController.signal.aborted) return;
           accumulatedText += token;
@@ -617,6 +669,7 @@ export const App: React.FC = () => {
                   ...prev,
                   content: accumulatedText,
                   citations: receivedCitations,
+                  attachments: receivedMedia.length > 0 ? receivedMedia : null,
                   isStreaming: true,
                 }
               : null,
@@ -629,6 +682,7 @@ export const App: React.FC = () => {
             role: "assistant",
             content: `Error: ${errMsg}`,
             citations: null,
+            attachments: null,
             isStreaming: false,
             isError: true,
           });
@@ -638,12 +692,14 @@ export const App: React.FC = () => {
           if (abortController.signal.aborted) return;
           abortControllerRef.current = null;
           setIsSending(false);
+
           const finishedAssistantMsg: Message = {
             id: `asst-${Date.now()}`,
             session_id: targetSessionId,
             role: "assistant",
             content: accumulatedText,
             citations: receivedCitations,
+            attachments: receivedMedia.length > 0 ? receivedMedia : null,
             created_at: new Date().toISOString(),
           };
 
@@ -665,6 +721,7 @@ export const App: React.FC = () => {
         },
       },
       abortController.signal,
+      mediaToSend,
     );
   };
 
@@ -837,6 +894,9 @@ export const App: React.FC = () => {
         uploadStatusText={uploadStatusText}
         documents={documents}
         onDeleteDocument={handleDeleteDocument}
+        attachedMedia={attachedMedia}
+        onDeleteMedia={handleDeleteMedia}
+        onUseAsReference={handleUseAsReference}
         onClearChat={handleClearMessages}
         onToggleSidebar={handleToggleSidebar}
         isTemporaryChat={isTemporaryChat}
