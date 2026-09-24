@@ -1,8 +1,9 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { LuSettings, LuLogOut } from 'react-icons/lu';
-import { useTheme } from '../../context/ThemeContext';
-import { useConfirm } from '../../context/ConfirmContext';
-import type { User } from '../../types';
+import React, { useState, useRef, useEffect } from "react";
+import { createPortal } from "react-dom";
+import { LuSettings, LuLogOut } from "react-icons/lu";
+import { useTheme } from "../../context/ThemeContext";
+import { useConfirm } from "../../context/ConfirmContext";
+import type { User } from "../../types";
 
 interface UserProfileCardProps {
   isOpen?: boolean;
@@ -19,13 +20,31 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
 }) => {
   const { confirm } = useConfirm();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [menuPosition, setMenuPosition] = useState<{ left: number; bottom: number }>({
+  const [menuPosition, setMenuPosition] = useState<{
+    left: number;
+    bottom: number;
+  }>({
     left: 12,
     bottom: 60,
   });
   const popoverRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const { currentAccent } = useTheme();
+
+  // Close menu when sidebar isOpen state changes or window resizes
+  useEffect(() => {
+    setIsMenuOpen(false);
+  }, [isOpen]);
+
+  useEffect(() => {
+    const handleResize = () => setIsMenuOpen(false);
+    if (isMenuOpen) {
+      window.addEventListener("resize", handleResize);
+    }
+    return () => {
+      window.removeEventListener("resize", handleResize);
+    };
+  }, [isMenuOpen]);
 
   // Close menu on outside click or Escape
   useEffect(() => {
@@ -41,19 +60,19 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
     };
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+      if (event.key === "Escape") {
         setIsMenuOpen(false);
       }
     };
 
     if (isMenuOpen) {
-      document.addEventListener('mousedown', handleClickOutside);
-      document.addEventListener('keydown', handleKeyDown);
+      document.addEventListener("mousedown", handleClickOutside);
+      document.addEventListener("keydown", handleKeyDown);
     }
 
     return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleKeyDown);
     };
   }, [isMenuOpen]);
 
@@ -61,7 +80,7 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
     return null;
   }
 
-  const initial = (currentUser.display_name || currentUser.username || 'U')
+  const initial = (currentUser.display_name || currentUser.username || "U")
     .charAt(0)
     .toUpperCase();
   const avatarBg = currentUser.avatar_color || currentAccent.primary;
@@ -70,7 +89,10 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
     if (!isMenuOpen && buttonRef.current) {
       const rect = buttonRef.current.getBoundingClientRect();
       const popoverWidth = 256;
-      const left = Math.min(Math.max(8, rect.left), Math.max(8, window.innerWidth - popoverWidth - 8));
+      const left = Math.min(
+        Math.max(8, rect.left),
+        Math.max(8, window.innerWidth - popoverWidth - 8),
+      );
       const bottom = Math.max(8, window.innerHeight - rect.top + 8);
       setMenuPosition({ left, bottom });
     }
@@ -85,9 +107,9 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
   const handleLogoutConfirm = async () => {
     setIsMenuOpen(false);
     const confirmed = await confirm({
-      type: 'logout',
-      confirmText: 'Log out',
-      cancelText: 'Cancel',
+      type: "logout",
+      confirmText: "Log out",
+      cancelText: "Cancel",
       user: {
         displayName: currentUser.display_name,
         email: currentUser.email,
@@ -102,68 +124,77 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
 
   return (
     <div className="relative w-full">
-      {/* Fixed position popover menu */}
-      {isMenuOpen && (
-        <div
-          ref={popoverRef}
-          className="fixed w-64 bg-(--bg-card) border border-(--border-hover) rounded-xl shadow-2xl z-1000 p-2 flex flex-col gap-1 backdrop-blur-xl animate-[popoverIn_0.18s_ease-out]"
-          style={{
-            left: `${menuPosition.left}px`,
-            bottom: `${menuPosition.bottom}px`,
-          }}
-        >
-          <div className="flex items-center gap-2.5 p-2 border-b border-(--border-subtle)">
-            {currentUser.avatar_url ? (
-              <img
-                src={currentUser.avatar_url}
-                alt={currentUser.display_name}
-                className="w-9 h-9 rounded-full object-cover shrink-0 border border-(--border-subtle)"
-              />
-            ) : (
-              <div
-                className="w-9 h-9 rounded-full flex items-center justify-center font-bold text-white text-sm shrink-0"
-                style={{ backgroundColor: avatarBg }}
-              >
-                {initial}
+      {/* Fixed position popover menu rendered in portal to prevent clipping by sidebar overflow */}
+      {isMenuOpen &&
+        createPortal(
+          <div
+            ref={popoverRef}
+            className="fixed w-64 bg-(--bg-card) border border-(--border-hover) rounded-xl shadow-2xl z-1000 p-2 flex flex-col gap-1 backdrop-blur-xl animate-[popoverIn_0.18s_ease-out]"
+            style={{
+              left: `${menuPosition.left}px`,
+              bottom: `${menuPosition.bottom}px`,
+            }}
+          >
+            <div className="flex items-center gap-2.5 p-2 border-b border-(--border-subtle)">
+              {currentUser.avatar_url ? (
+                <img
+                  src={currentUser.avatar_url}
+                  alt={currentUser.display_name}
+                  className="w-9 h-9 aspect-square rounded-full object-cover shrink-0 border border-(--border-subtle)"
+                />
+              ) : (
+                <div
+                  className="w-9 h-9 aspect-square rounded-full flex items-center justify-center font-bold text-white text-sm shrink-0"
+                  style={{ backgroundColor: avatarBg }}
+                >
+                  {initial}
+                </div>
+              )}
+              <div className="flex flex-col overflow-hidden min-w-0">
+                <span className="text-xs font-semibold text-(--text-main) truncate">
+                  {currentUser.display_name}
+                </span>
+                <span className="text-[11px] text-(--text-muted) truncate">
+                  @{currentUser.username}
+                </span>
+                <span className="text-[10px] text-(--text-muted) opacity-80 truncate">
+                  {currentUser.email}
+                </span>
               </div>
-            )}
-            <div className="flex flex-col overflow-hidden min-w-0">
-              <span className="text-xs font-semibold text-(--text-main) truncate">
-                {currentUser.display_name}
-              </span>
-              <span className="text-[11px] text-(--text-muted) truncate">@{currentUser.username}</span>
-              <span className="text-[10px] text-(--text-muted) opacity-80 truncate">{currentUser.email}</span>
             </div>
-          </div>
 
-          <button
-            type="button"
-            className="flex items-center gap-2 px-2.5 py-2 text-xs font-medium text-(--text-main) hover:bg-(--border-subtle) rounded-lg cursor-pointer text-left w-full"
-            onClick={handleOpenSettings}
-          >
-            <LuSettings size={15} />
-            <span>Settings & Preferences</span>
-          </button>
+            <button
+              type="button"
+              className="flex items-center gap-2 px-2.5 py-2 text-xs font-medium text-(--text-main) hover:bg-(--border-subtle) rounded-lg cursor-pointer text-left w-full"
+              onClick={handleOpenSettings}
+            >
+              <LuSettings size={15} />
+              <span>Settings & Preferences</span>
+            </button>
 
-          <div className="h-px bg-(--border-subtle) my-0.5"></div>
+            <div className="h-px bg-(--border-subtle) my-0.5"></div>
 
-          <button
-            type="button"
-            className="flex items-center gap-2 px-2.5 py-2 text-xs font-medium text-red-500 hover:text-red-400 hover:bg-red-500/15 rounded-lg cursor-pointer text-left w-full"
-            onClick={handleLogoutConfirm}
-          >
-            <LuLogOut size={15} />
-            <span>Log out</span>
-          </button>
-        </div>
-      )}
+            <button
+              type="button"
+              className="flex items-center gap-2 px-2.5 py-2 text-xs font-medium text-red-500 hover:text-red-400 hover:bg-red-500/15 rounded-lg cursor-pointer text-left w-full"
+              onClick={handleLogoutConfirm}
+            >
+              <LuLogOut size={15} />
+              <span>Log out</span>
+            </button>
+          </div>,
+          document.body,
+        )}
 
       {/* Bottom Profile Trigger Pill */}
       <button
         ref={buttonRef}
         type="button"
-        className={`flex items-center gap-2.5 p-2 bg-(--border-subtle) hover:bg-(--border-hover) border border-(--border-subtle) rounded-xl cursor-pointer text-left ${isOpen ? 'w-full' : 'w-10 h-10 justify-center mx-auto rounded-full p-0'
-          } ${isMenuOpen ? 'border-primary-theme' : ''}`}
+        className={`flex items-center bg-(--border-subtle) hover:bg-(--border-hover) border border-(--border-subtle) cursor-pointer text-left shrink-0 transition-colors ${
+          isOpen
+            ? "w-full p-2 gap-2.5 rounded-xl"
+            : "w-10 h-10 p-0 justify-center mx-auto rounded-full aspect-square"
+        } ${isMenuOpen ? "border-primary-theme" : ""}`}
         onClick={handleToggleMenu}
         title="Account & Settings"
       >
@@ -171,11 +202,11 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
           <img
             src={currentUser.avatar_url}
             alt={currentUser.display_name}
-            className="w-8 h-8 rounded-full object-cover shrink-0 border border-(--border-subtle)"
+            className="w-8 h-8 aspect-square rounded-full object-cover shrink-0 border border-(--border-subtle)"
           />
         ) : (
           <div
-            className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-white text-xs shrink-0"
+            className="w-8 h-8 aspect-square rounded-full flex items-center justify-center font-bold text-white text-xs shrink-0"
             style={{ backgroundColor: avatarBg }}
           >
             {initial}
@@ -183,8 +214,12 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
         )}
         {isOpen && (
           <div className="flex flex-col min-w-0 overflow-hidden">
-            <span className="text-xs font-semibold text-(--text-main) truncate">{currentUser.display_name}</span>
-            <span className="text-[11px] text-(--text-muted) truncate">@{currentUser.username}</span>
+            <span className="text-xs font-semibold text-(--text-main) truncate">
+              {currentUser.display_name}
+            </span>
+            <span className="text-[11px] text-(--text-muted) truncate">
+              @{currentUser.username}
+            </span>
           </div>
         )}
       </button>
