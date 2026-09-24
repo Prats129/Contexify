@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from datetime import datetime
 from app.schemas.chat import ChatMode, SessionState
 from app.schemas.document import DocumentMetadata
@@ -10,7 +10,7 @@ class SessionStoreRepository:
         self._sessions: Dict[str, SessionState] = {}
         self._documents: Dict[str, DocumentMetadata] = {}
 
-    def get_or_create_session(self, session_id: str, default_mode: ChatMode = ChatMode.WEB_SEARCH, user_id: Optional[str] = None) -> SessionState:
+    def get_or_create_session(self, session_id: str, default_mode: ChatMode = ChatMode.AUTO, user_id: Optional[str] = None) -> SessionState:
         if session_id not in self._sessions:
             # Check if exists in DB (logged-in user session)
             db_session = chat_history_service.get_session(session_id)
@@ -55,7 +55,8 @@ class SessionStoreRepository:
                 filename=metadata.filename,
                 file_type=metadata.file_type,
                 file_size_bytes=metadata.file_size_bytes,
-                total_chunks=metadata.total_chunks
+                total_chunks=metadata.total_chunks,
+                storage_url=getattr(metadata, "storage_url", "") or ""
             )
 
     def get_document_metadata(self, document_id: str) -> Optional[DocumentMetadata]:
@@ -66,20 +67,43 @@ class SessionStoreRepository:
     def list_all_documents(self) -> List[DocumentMetadata]:
         return list(self._documents.values())
 
-    def get_history_messages(self, session_id: str) -> List[Dict[str, str]]:
-        """Retrieve conversation history for a session from SQLite or in-memory state."""
+    def get_history_messages(self, session_id: str) -> List[Dict[str, Any]]:
+        """Retrieve conversation history for a session from SQLite or in-memory state including attachments."""
         db_messages = chat_history_service.get_session_messages(session_id)
         if db_messages:
-            return [{"role": m.role, "content": m.content} for m in db_messages]
+            return [
+                {
+                    "role": m.role,
+                    "content": m.content,
+                    "attachments": [a.model_dump() if hasattr(a, "model_dump") else a for a in (m.attachments or [])]
+                }
+                for m in db_messages
+            ]
         session = self.get_or_create_session(session_id)
-        return [{"role": m.get("role", "user"), "content": m.get("content", "")} for m in session.messages]
+        return [
+            {
+                "role": m.get("role", "user"),
+                "content": m.get("content", ""),
+                "attachments": m.get("attachments", [])
+            }
+            for m in session.messages
+        ]
 
-    def record_message(self, session_id: str, role: str, content: str):
+    def record_message(self, session_id: str, role: str, content: str, attachments: Optional[List[Any]] = None):
         """Record an in-memory message for active/guest sessions."""
         session = self.get_or_create_session(session_id)
-        session.messages.append({"role": role, "content": content})
+        msg_dict: Dict[str, Any] = {"role": role, "content": content}
+        if attachments:
+            msg_dict["attachments"] = [a.model_dump() if hasattr(a, "model_dump") else a for a in attachments]
+        session.messages.append(msg_dict)
 
     def remove_document(self, document_id: str):
+        from app.services.storage_service import storage_service
+        # Check storage URL to purge from Cloudflare R2
+        storage_url = chat_history_service.get_document_storage_url(document_id)
+        if storage_url:
+            storage_service.delete_file(storage_url)
+
         if document_id in self._documents:
             del self._documents[document_id]
         for session in self._sessions.values():

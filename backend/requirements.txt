@@ -12,3 +12,4 @@ numpy>=1.26.0
 beautifulsoup4>=4.12.0
 libsql-client>=0.3.0
 pinecone>=6.0.0
+boto3>=1.34.0

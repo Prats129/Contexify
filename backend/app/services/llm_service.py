@@ -42,7 +42,12 @@ class LLMService:
         for msg in recent:
             role = "User" if msg.get("role") == "user" else "Assistant"
             content = msg.get("content", "").strip()
-            formatted_lines.append(f"{role}: {content}")
+            atts = msg.get("attachments") or []
+            att_desc = ""
+            if atts:
+                names = [a.get("file_name", "image") if isinstance(a, dict) else getattr(a, "file_name", "image") for a in atts]
+                att_desc = f" [Attached: {', '.join(names)}]"
+            formatted_lines.append(f"{role}{att_desc}: {content}")
 
         return "CONVERSATION HISTORY (Previous turns in this chat):\n" + "\n".join(formatted_lines) + "\n\n"
 
@@ -263,9 +268,81 @@ class LLMService:
             elif "429" in api_error or "RESOURCE_EXHAUSTED" in api_error:
                 note = "\n\n⚠️ *(Gemini API rate limit reached — showing direct search excerpt)*"
             else:
-                note = f"\n\n*(Note: Gemini API notice: {api_error[:100]})*"
+                note = f"\n\n⚠️ *(Gemini API call notice: {api_error[:120]})*"
             for char in note:
                 yield char
                 await asyncio.sleep(0.005)
+
+    async def stream_multimodal_answer(
+        self,
+        query: str,
+        attachments: List[Any],
+        chat_history: Optional[List[Dict[str, str]]] = None
+    ) -> AsyncGenerator[str, None]:
+        """
+        Stream an answer using Gemini Vision / Multimodal capabilities over attached images and documents.
+        Supports OCR, visual QA, diagram reasoning, and custom structured outputs (Markdown tables, JSON, code).
+        """
+        from app.services.media_service import media_service
+        
+        system_instruction = (
+            "You are Contexify AI, an expert multimodal assistant with advanced vision and document intelligence. "
+            "Examine the attached image(s) and documents thoroughly. "
+            "Provide insightful, accurate, and direct answers. "
+            "If the user asks for OCR or text extraction, transcribe accurately. "
+            "If the user requests specific structured formats like Markdown tables, JSON, or bulleted action items, adhere to them strictly. "
+            "Explain diagrams, math formulas, charts, or UI screenshots with clarity and precision."
+        )
+
+        history_block = self._format_chat_history(chat_history)
+        text_prompt = f"{history_block}USER INQUIRY: {query if query else 'Please analyze the attached image/document in detail.'}"
+
+        contents: List[Any] = []
+        
+        # Process and load attached media
+        if self.client:
+            from google.genai import types
+            for att in attachments:
+                url = att.get("url") if isinstance(att, dict) else getattr(att, "url", "")
+                mime = att.get("mime_type") if isinstance(att, dict) else getattr(att, "mime_type", "image/png")
+                
+                file_bytes = media_service.get_media_bytes(url)
+                if file_bytes:
+                    try:
+                        contents.append(types.Part.from_bytes(data=file_bytes, mime_type=mime or "image/png"))
+                        logger.info(f"Loaded multimodal attachment for Gemini from {url} ({len(file_bytes)} bytes)")
+                    except Exception as e:
+                        logger.warning(f"Failed to create multimodal Part from media bytes for {url}: {e}")
+                else:
+                    logger.warning(f"Could not load media bytes for attachment URL: {url}")
+
+            contents.append(text_prompt)
+
+            api_error = None
+            for model_name in self._get_models_to_try():
+                try:
+                    response = self.client.models.generate_content_stream(
+                        model=model_name,
+                        contents=contents,
+                        config={"system_instruction": system_instruction}
+                    )
+                    streamed_any = False
+                    for chunk in response:
+                        if chunk.text:
+                            streamed_any = True
+                            yield chunk.text
+                            await asyncio.sleep(0.01)
+                    if streamed_any:
+                        return
+                except Exception as e:
+                    api_error = str(e)
+                    logger.warning(f"Gemini Multimodal Streaming Error on model {model_name}: {e}. Retrying with fallback model.")
+                    continue
+
+        # Fallback if client call fails
+        fallback = "I have received the attached image/document. To perform deep multimodal visual analysis, please ensure your Gemini API Key is configured and has vision quotas enabled."
+        for char in fallback:
+            yield char
+            await asyncio.sleep(0.005)
 
 llm_service = LLMService()

@@ -1,7 +1,6 @@
 import React from "react";
 import {
   LuGlobe,
-  LuShieldCheck,
   LuLogIn,
   LuUserPlus,
   LuSun,
@@ -9,6 +8,10 @@ import {
   LuEraser,
   LuMenu,
   LuGhost,
+  LuSparkles,
+  LuFileText,
+  LuImage,
+  LuPalette,
 } from "react-icons/lu";
 import { useTheme } from "../../context/ThemeContext";
 import type { ChatMode, User } from "../../types";
@@ -34,8 +37,66 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   isTemporaryChat = false,
   onToggleTemporaryChat,
 }) => {
-  const isWeb = currentMode === "WEB_SEARCH";
   const { mode, toggleMode } = useTheme();
+
+  const getHeaderBadge = () => {
+    switch (currentMode) {
+      case "AUTO":
+        return {
+          icon: <LuSparkles size={14} className="shrink-0 text-amber-500" />,
+          title: "Auto (Smart AI)",
+          short: "Auto",
+          style:
+            "bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30",
+        };
+      case "WEB_SEARCH":
+        return {
+          icon: (
+            <LuGlobe size={14} className="shrink-0 dark:text-emerald-400" />
+          ),
+          title: "Live Web Search",
+          short: "Web Search",
+          style:
+            "bg-emerald-500/15 text-emerald-800 dark:text-emerald-300 border-emerald-500/30",
+        };
+      case "DOCUMENT_RAG":
+        return {
+          icon: (
+            <LuFileText size={14} className="shrink-0 text-primary-theme" />
+          ),
+          title: "Document Grounded RAG",
+          short: "Doc RAG",
+          style:
+            "bg-primary-light-theme text-primary-theme border-primary-theme",
+        };
+      case "MULTIMODAL":
+        return {
+          icon: <LuImage size={14} className="shrink-0 text-purple-600" />,
+          title: "Vision & OCR",
+          short: "Vision",
+          style:
+            "bg-purple-500/15 text-purple-700 dark:text-purple-300 border-purple-500/30",
+        };
+      case "IMAGE_GENERATION":
+        return {
+          icon: <LuPalette size={14} className="shrink-0 text-pink-600" />,
+          title: "Image Studio",
+          short: "Image Gen",
+          style:
+            "bg-pink-500/15 text-pink-700 dark:text-pink-300 border-pink-500/30",
+        };
+      default:
+        return {
+          icon: <LuSparkles size={14} className="shrink-0 text-amber-500" />,
+          title: "Auto (Smart AI)",
+          short: "Auto",
+          style:
+            "bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30",
+        };
+    }
+  };
+
+  const badge = getHeaderBadge();
 
   return (
     <header className="h-14 border-b border-(--border-subtle) flex items-center justify-between px-3 sm:px-5 bg-(--bg-app)/80 backdrop-blur-md shrink-0 gap-2">
@@ -53,21 +114,11 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
         )}
 
         <span
-          className={`px-2.5 sm:px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5 border truncate ${
-            isWeb
-              ? "bg-emerald-500/15 text-emerald-800 border-emerald-500/30"
-              : "bg-primary-light-theme text-primary-theme border-primary-theme"
-          }`}
+          className={`px-2.5 sm:px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5 border truncate ${badge.style}`}
         >
-          {isWeb ? (
-            <LuGlobe size={14} className="shrink-0" />
-          ) : (
-            <LuShieldCheck size={14} className="shrink-0" />
-          )}
-          <span className="hidden sm:inline">
-            {isWeb ? "Live Web Search" : "Document Grounded RAG"}
-          </span>
-          <span className="sm:hidden">{isWeb ? "Web Search" : "Doc RAG"}</span>
+          {badge.icon}
+          <span className="hidden sm:inline">{badge.title}</span>
+          <span className="sm:hidden">{badge.short}</span>
         </span>
       </div>
 

@@ -15,7 +15,8 @@ import { Feather, Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import * as DocumentPicker from "expo-document-picker";
 import { getAppTheme, type AppTheme } from "../theme/colors";
-import type { DocumentMetadata, ChatMode } from "../types";
+import type { DocumentMetadata, ChatMode, MediaAttachment } from "../types";
+import { Image } from "react-native";
 
 interface ChatInputProps {
   query: string;
@@ -27,6 +28,8 @@ interface ChatInputProps {
   isUploading: boolean;
   documents: DocumentMetadata[];
   onDeleteDocument: (docId: string) => void;
+  attachedMedia?: MediaAttachment[];
+  onDeleteMedia?: (index: number) => void;
   currentMode: ChatMode;
   onToggleMode?: () => void;
   isDark?: boolean;
@@ -43,14 +46,20 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   isUploading,
   documents,
   onDeleteDocument,
+  attachedMedia = [],
+  onDeleteMedia,
   currentMode,
   onToggleMode,
   isDark = true,
   theme: customTheme,
 }) => {
   const theme = customTheme || getAppTheme(isDark);
+  const isAuto = currentMode === "AUTO";
   const isWeb = currentMode === "WEB_SEARCH";
-  const canSend = query.trim().length > 0 && !isSending;
+  const isDraw = currentMode === "IMAGE_GENERATION";
+  const isVision = currentMode === "MULTIMODAL";
+  const isDoc = currentMode === "DOCUMENT_RAG";
+  const canSend = (query.trim().length > 0 || attachedMedia.length > 0) && !isSending;
   const insets = useSafeAreaInsets();
   const [isKeyboardOpen, setIsKeyboardOpen] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
@@ -93,6 +102,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       const res = await DocumentPicker.getDocumentAsync({
         type: [
+          "image/*",
           "application/pdf",
           "text/plain",
           "text/markdown",
@@ -144,6 +154,16 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     </TouchableOpacity>
   );
 
+  const getModeDetails = () => {
+    if (isAuto) return { icon: "sparkles", label: "Auto", color: "#f59e0b", bg: "rgba(245, 158, 11, 0.14)", border: "rgba(245, 158, 11, 0.3)" };
+    if (isWeb) return { icon: "globe-outline", label: "Web", color: theme.emerald, bg: theme.emeraldLight, border: theme.emeraldBorder };
+    if (isDraw) return { icon: "color-palette-outline", label: "Draw", color: "#ec4899", bg: "rgba(236, 72, 153, 0.14)", border: "rgba(236, 72, 153, 0.3)" };
+    if (isVision) return { icon: "eye-outline", label: "Vision", color: "#8b5cf6", bg: "rgba(139, 92, 246, 0.14)", border: "rgba(139, 92, 246, 0.3)" };
+    return { icon: "document-text-outline", label: "Doc", color: theme.primary, bg: theme.primaryLight, border: theme.primaryBorder };
+  };
+
+  const modeDetails = getModeDetails();
+
   const renderRightActions = () => (
     <View style={styles.rightActions}>
       {onToggleMode && (
@@ -151,8 +171,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
           style={[
             styles.modeChip,
             {
-              backgroundColor: isWeb ? theme.emeraldLight : theme.primaryLight,
-              borderColor: isWeb ? theme.emeraldBorder : theme.primaryBorder,
+              backgroundColor: modeDetails.bg,
+              borderColor: modeDetails.border,
             },
           ]}
           onPress={() => {
@@ -162,17 +182,17 @@ export const ChatInput: React.FC<ChatInputProps> = ({
           activeOpacity={0.7}
         >
           <Ionicons
-            name={isWeb ? "globe-outline" : "document-text-outline"}
+            name={modeDetails.icon as any}
             size={12}
-            color={isWeb ? theme.emerald : theme.primary}
+            color={modeDetails.color}
           />
           <Text
             style={[
               styles.modeChipText,
-              { color: isWeb ? theme.emerald : theme.primary },
+              { color: modeDetails.color },
             ]}
           >
-            {isWeb ? "Web" : "Doc"}
+            {modeDetails.label}
           </Text>
         </TouchableOpacity>
       )}
@@ -223,8 +243,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         },
       ]}
     >
-      {/* Attached Documents Row */}
-      {(documents.length > 0 || isUploading) && (
+      {/* Attached Documents & Media Row */}
+      {(documents.length > 0 || attachedMedia.length > 0 || isUploading) && (
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
@@ -242,11 +262,50 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             >
               <ActivityIndicator size="small" color={theme.primary} />
               <Text style={[styles.chipText, { color: theme.primary }]}>
-                Vectorizing file...
+                Uploading & processing...
               </Text>
             </View>
           )}
 
+          {/* Image / Media Attachments */}
+          {attachedMedia.map((media, idx) => (
+            <View
+              key={media.url || `media_${idx}`}
+              style={[
+                styles.mediaChip,
+                {
+                  backgroundColor: theme.bgInput,
+                  borderColor: theme.borderSubtle,
+                },
+              ]}
+            >
+              {media.url ? (
+                <Image
+                  source={{ uri: media.url }}
+                  style={styles.mediaThumb}
+                  resizeMode="cover"
+                />
+              ) : (
+                <Ionicons name="image-outline" size={14} color={theme.primary} />
+              )}
+              <Text
+                style={[styles.chipText, { color: theme.textMain }]}
+                numberOfLines={1}
+              >
+                {media.file_name || `Image ${idx + 1}`}
+              </Text>
+              {onDeleteMedia && (
+                <TouchableOpacity
+                  onPress={() => onDeleteMedia(idx)}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Feather name="x" size={12} color={theme.textMuted} />
+                </TouchableOpacity>
+              )}
+            </View>
+          ))}
+
+          {/* Documents */}
           {documents.map((doc) => (
             <View
               key={doc.document_id}
@@ -298,9 +357,15 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             },
           ]}
           placeholder={
-            currentMode === "WEB_SEARCH"
-              ? "Ask anything"
-              : "Ask questions about documents"
+            isDraw
+              ? "Describe image to generate or remix..."
+              : isVision
+              ? "Ask about image, or extract tables/text..."
+              : isDoc
+              ? "Ask questions about documents..."
+              : isWeb
+              ? "Search live web..."
+              : "Ask anything, attach files, or generate images..."
           }
           placeholderTextColor={theme.textMuted}
           multiline
@@ -344,6 +409,21 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
     borderRadius: 14,
     borderWidth: 1,
+  },
+  mediaChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+    borderRadius: 14,
+    borderWidth: 1,
+    maxWidth: 180,
+  },
+  mediaThumb: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
   },
   docChip: {
     flexDirection: "row",

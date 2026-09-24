@@ -8,6 +8,8 @@ import type {
   SessionHistoryResponse,
   DocumentMetadata,
   Citation,
+  MediaAttachment,
+  StreamHandlers,
 } from '../types';
 
 // Default development IP matching your current Wi-Fi network (10.66.137.54:8001)
@@ -107,12 +109,6 @@ function uploadMultipart<T>(url: string, formData: FormData): Promise<T> {
   });
 }
 
-export interface StreamHandlers {
-  onToken: (token: string) => void;
-  onCitations: (citations: Citation[]) => void;
-  onComplete: () => void;
-  onError: (err: string) => void;
-}
 
 export function extractErrorMessage(errData: any, fallback = 'Operation failed'): string {
   if (!errData) return fallback;
@@ -374,14 +370,51 @@ export const apiService = {
         return { session: null as any, messages: [], documents: [] };
       }
       const data = await res.json();
+      const host = await getCleanHost();
+      const messages = (Array.isArray(data?.messages) ? data.messages : []).map((m: any) => {
+        if (m.attachments && Array.isArray(m.attachments)) {
+          m.attachments = m.attachments.map((att: any) => ({
+            ...att,
+            url: att.url?.startsWith('/') ? `${host}${att.url}` : att.url,
+          }));
+        }
+        return m;
+      });
       return {
         session: data?.session || null,
-        messages: Array.isArray(data?.messages) ? data.messages : [],
+        messages,
         documents: Array.isArray(data?.documents) ? data.documents : [],
       };
     } catch {
       return { session: null as any, messages: [], documents: [] };
     }
+  },
+
+  async uploadMedia(
+    sessionId: string,
+    fileUri: string,
+    fileName: string,
+    mimeType: string = 'image/png',
+    userId?: string
+  ): Promise<MediaAttachment> {
+    const url = await getEndpoint('/media/upload');
+    const formData = new FormData();
+    formData.append('session_id', sessionId);
+    if (userId) {
+      formData.append('user_id', userId);
+    }
+    formData.append('file', {
+      uri: fileUri,
+      name: fileName || 'photo.png',
+      type: mimeType || 'image/png',
+    } as any);
+
+    const data = await uploadMultipart<MediaAttachment>(url, formData);
+    const host = await getCleanHost();
+    if (data.url && data.url.startsWith('/')) {
+      data.url = `${host}${data.url}`;
+    }
+    return data;
   },
 
   async createSession(
@@ -466,7 +499,8 @@ export const apiService = {
     sessionId: string,
     query: string,
     mode: ChatMode,
-    handlers: StreamHandlers
+    handlers: StreamHandlers,
+    attachments?: MediaAttachment[]
   ): () => void {
     let isAborted = false;
     let hasEnded = false;
@@ -484,8 +518,9 @@ export const apiService = {
       handlers.onError(errMsg);
     };
 
-    getEndpoint('/chat/stream').then((url) => {
+    getEndpoint('/chat/stream').then(async (url) => {
       if (isAborted || hasEnded) return;
+      const host = await getCleanHost();
 
       xhr.open('POST', url, true);
       xhr.setRequestHeader('Content-Type', 'application/json');
@@ -514,6 +549,12 @@ export const apiService = {
             const data = JSON.parse(payload);
             if (data.event === 'citations' && data.citations) {
               handlers.onCitations(data.citations);
+            } else if (data.event === 'media' && data.media && handlers.onMedia) {
+              const m: MediaAttachment = {
+                ...data.media,
+                url: data.media.url?.startsWith('/') ? `${host}${data.media.url}` : data.media.url,
+              };
+              handlers.onMedia(m);
             } else if (data.event === 'token' && typeof data.data === 'string') {
               handlers.onToken(data.data);
             } else if (data.event === 'error') {
@@ -567,6 +608,7 @@ export const apiService = {
           message: query,
           query,
           mode,
+          attachments: attachments || [],
         })
       );
     });

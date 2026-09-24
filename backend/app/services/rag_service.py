@@ -102,7 +102,8 @@ class RAGService:
         file_path: Path,
         filename: str,
         session_id: str,
-        user_id: Optional[str] = None
+        user_id: Optional[str] = None,
+        storage_url: Optional[str] = None
     ) -> DocumentMetadata:
         """
         Full ingestion pipeline: Extract -> Chunk -> Embed -> Index -> Register Metadata.
@@ -154,6 +155,7 @@ class RAGService:
             file_type=file_type,
             file_size_bytes=file_size,
             total_chunks=len(chunks),
+            storage_url=storage_url if storage_url else None,
             uploaded_at=Path(file_path).stat().st_mtime.__str__()
         )
 

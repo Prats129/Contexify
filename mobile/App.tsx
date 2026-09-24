@@ -40,6 +40,7 @@ import type {
   Citation,
   StreamingMessageState,
   DocumentMetadata,
+  MediaAttachment,
 } from "./src/types";
 
 import { Header } from "./src/components/Header";
@@ -73,10 +74,11 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [isTemporaryChat, setIsTemporaryChat] = useState(false);
-  const [currentMode, setCurrentMode] = useState<ChatMode>("WEB_SEARCH");
+  const [currentMode, setCurrentMode] = useState<ChatMode>("AUTO");
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [documents, setDocuments] = useState<DocumentMetadata[]>([]);
+  const [attachedMedia, setAttachedMedia] = useState<MediaAttachment[]>([]);
 
   // Interaction State
   const [query, setQuery] = useState("");
@@ -185,6 +187,7 @@ export default function App() {
     setIsTemporaryChat(false);
     setActiveSessionId(sessionId);
     setStreamingMessage(null);
+    setAttachedMedia([]);
     if (sessionMode) setCurrentMode(sessionMode);
 
     try {
@@ -216,6 +219,7 @@ export default function App() {
     }
     setMessages([]);
     setDocuments([]);
+    setAttachedMedia([]);
     setStreamingMessage(null);
     setQuery("");
   };
@@ -242,8 +246,15 @@ export default function App() {
 
   // --- 5. Toggle Mode ---
   const handleToggleMode = () => {
-    const nextMode: ChatMode =
-      currentMode === "WEB_SEARCH" ? "DOCUMENT_RAG" : "WEB_SEARCH";
+    const modes: ChatMode[] = [
+      "AUTO",
+      "WEB_SEARCH",
+      "DOCUMENT_RAG",
+      "MULTIMODAL",
+      "IMAGE_GENERATION",
+    ];
+    const idx = modes.indexOf(currentMode);
+    const nextMode = modes[(idx + 1) % modes.length];
     setCurrentMode(nextMode);
     if (activeSessionId && currentUser) {
       apiService.updateSessionMode(activeSessionId, nextMode).catch(() => {});
@@ -253,19 +264,33 @@ export default function App() {
   // --- 6. Send Message & Streaming ---
   const handleSendMessage = async (customQuery?: string) => {
     const textToSend = (customQuery || query).trim();
-    if (!textToSend || isSending || isSendingRef.current) return;
+    if (
+      (!textToSend && attachedMedia.length === 0) ||
+      isSending ||
+      isSendingRef.current
+    )
+      return;
 
     isSendingRef.current = true;
     setIsSending(true);
     setQuery("");
     let sessionId = activeSessionId;
 
+    const mediaToSend = [...attachedMedia];
+    setAttachedMedia([]);
+
+    const prompt =
+      textToSend ||
+      (currentMode === "IMAGE_GENERATION"
+        ? "Generate a creative variation of this image"
+        : "Analyze this image and describe what you see in detail.");
+
     // Create session in backend if user is logged in and no session is active yet
     if (!sessionId && currentUser) {
       try {
         const newSession = await apiService.createSession(
           currentUser.id,
-          textToSend.slice(0, 40),
+          prompt.slice(0, 40),
           currentMode,
           isTemporaryChat,
         );
@@ -288,16 +313,18 @@ export default function App() {
       id: "usr_" + Date.now(),
       session_id: sessionId,
       role: "user",
-      content: textToSend,
+      content: prompt,
+      attachments: mediaToSend.length > 0 ? mediaToSend : undefined,
       created_at: new Date().toISOString(),
     };
 
     setMessages((prev) => [...prev, userMsg]);
-    setStreamingMessage({ content: "", citations: [] });
+    setStreamingMessage({ content: "", citations: [], attachments: [] });
 
     // Stream SSE Response
     let streamedContent = "";
     let streamedCitations: Citation[] = [];
+    let streamedMedia: MediaAttachment[] = [];
     let isStreamFinalized = false;
 
     const finalizeStream = (action: () => void) => {
@@ -310,54 +337,77 @@ export default function App() {
       action();
     };
 
-    const cancel = apiService.streamChat(sessionId, textToSend, currentMode, {
-      onToken: (token) => {
-        if (isStreamFinalized) return;
-        streamedContent += token;
-        setStreamingMessage({
-          content: streamedContent,
-          citations: streamedCitations,
-        });
-      },
-      onCitations: (cits) => {
-        if (isStreamFinalized) return;
-        streamedCitations = cits;
-        setStreamingMessage({
-          content: streamedContent,
-          citations: streamedCitations,
-        });
-      },
-      onComplete: () => {
-        finalizeStream(() => {
-          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-
-          const aiMsg: Message = {
-            id: "ai_" + Date.now(),
-            session_id: sessionId!,
-            role: "assistant",
-            content: streamedContent || "No response generated.",
+    const cancel = apiService.streamChat(
+      sessionId,
+      prompt,
+      currentMode,
+      {
+        onToken: (token) => {
+          if (isStreamFinalized) return;
+          streamedContent += token;
+          setStreamingMessage({
+            content: streamedContent,
             citations: streamedCitations,
-            created_at: new Date().toISOString(),
-          };
-          setMessages((prev) => [...prev, aiMsg]);
-        });
-      },
-      onError: (errMsg) => {
-        finalizeStream(() => {
-          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+            attachments: streamedMedia,
+          });
+        },
+        onCitations: (cits) => {
+          if (isStreamFinalized) return;
+          streamedCitations = cits;
+          setStreamingMessage({
+            content: streamedContent,
+            citations: streamedCitations,
+            attachments: streamedMedia,
+          });
+        },
+        onMedia: (media: MediaAttachment) => {
+          if (isStreamFinalized) return;
+          streamedMedia = [...streamedMedia, media];
+          setStreamingMessage({
+            content: streamedContent,
+            citations: streamedCitations,
+            attachments: streamedMedia,
+          });
+        },
+        onComplete: () => {
+          finalizeStream(() => {
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
-          const errorMsg: Message = {
-            id: "err_" + Date.now(),
-            session_id: sessionId!,
-            role: "assistant",
-            content: `⚠️ ${errMsg}`,
-            citations: [],
-            created_at: new Date().toISOString(),
-          };
-          setMessages((prev) => [...prev, errorMsg]);
-        });
+            const aiMsg: Message = {
+              id: "ai_" + Date.now(),
+              session_id: sessionId!,
+              role: "assistant",
+              content:
+                streamedContent ||
+                (streamedMedia.length > 0
+                  ? "Here is your generated image:"
+                  : "No response generated."),
+              citations: streamedCitations,
+              attachments: streamedMedia.length > 0 ? streamedMedia : undefined,
+              created_at: new Date().toISOString(),
+            };
+            setMessages((prev) => [...prev, aiMsg]);
+          });
+        },
+        onError: (errMsg) => {
+          finalizeStream(() => {
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+
+            const errorMsg: Message = {
+              id: "err_" + Date.now(),
+              session_id: sessionId!,
+              role: "assistant",
+              content: `⚠️ ${errMsg}`,
+              citations: [],
+              attachments: streamedMedia.length > 0 ? streamedMedia : undefined,
+              created_at: new Date().toISOString(),
+            };
+            setMessages((prev) => [...prev, errorMsg]);
+          });
+        },
       },
-    });
+      mediaToSend.length > 0 ? mediaToSend : undefined,
+    );
 
     streamAbortRef.current = cancel;
   };
@@ -395,7 +445,7 @@ export default function App() {
         try {
           const newSession = await apiService.createSession(
             currentUser.id,
-            `Doc: ${file.name}`.slice(0, 40),
+            `File: ${file.name}`.slice(0, 40),
             "DOCUMENT_RAG",
             isTemporaryChat,
           );
@@ -414,6 +464,33 @@ export default function App() {
       }
     }
 
+    const isImage =
+      file.mimeType.startsWith("image/") ||
+      /\.(jpg|jpeg|png|webp|gif|bmp)$/i.test(file.name);
+
+    if (isImage) {
+      setIsUploading(true);
+      try {
+        const media = await apiService.uploadMedia(
+          sessionId,
+          file.uri,
+          file.name,
+          file.mimeType,
+        );
+        setAttachedMedia((prev) => [...prev, media]);
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        if (currentMode !== "IMAGE_GENERATION" && currentMode !== "AUTO") {
+          setCurrentMode("MULTIMODAL");
+        }
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        Alert.alert("Image Upload Failed", msg);
+      } finally {
+        setIsUploading(false);
+      }
+      return;
+    }
+
     setIsUploading(true);
     try {
       const doc = await apiService.uploadDocument(
@@ -425,8 +502,8 @@ export default function App() {
       );
       setDocuments((prev) => [...(Array.isArray(prev) ? prev : []), doc]);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      // Auto-switch to Document RAG if uploaded
-      if (currentMode !== "DOCUMENT_RAG") {
+      // Auto-switch to Document RAG if uploaded and not in AUTO mode
+      if (currentMode !== "DOCUMENT_RAG" && currentMode !== "AUTO") {
         setCurrentMode("DOCUMENT_RAG");
       }
     } catch (err: unknown) {
@@ -450,6 +527,17 @@ export default function App() {
       const msg = err instanceof Error ? err.message : String(err);
       Alert.alert("Delete Failed", msg);
     }
+  };
+
+  const handleDeleteMedia = (index: number) => {
+    setAttachedMedia((prev) => prev.filter((_, i) => i !== index));
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  };
+
+  const handleUseAsReference = (media: MediaAttachment) => {
+    setAttachedMedia([media]);
+    setCurrentMode("IMAGE_GENERATION");
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
   };
 
   // --- 8. Citations Sheet ---
@@ -820,7 +908,9 @@ export default function App() {
                   role={item.role}
                   content={item.content}
                   citations={item.citations}
+                  attachments={item.attachments}
                   onOpenCitations={handleOpenCitations}
+                  onUseAsReference={handleUseAsReference}
                   isDark={isDark}
                   theme={theme}
                 />
@@ -831,8 +921,10 @@ export default function App() {
                     role="assistant"
                     content={streamingMessage.content}
                     citations={streamingMessage.citations}
+                    attachments={streamingMessage.attachments}
                     isStreaming={true}
                     onOpenCitations={handleOpenCitations}
+                    onUseAsReference={handleUseAsReference}
                     isDark={isDark}
                     theme={theme}
                   />
@@ -852,6 +944,8 @@ export default function App() {
             isUploading={isUploading}
             documents={documents}
             onDeleteDocument={handleDeleteDocument}
+            attachedMedia={attachedMedia}
+            onDeleteMedia={handleDeleteMedia}
             currentMode={currentMode}
             onToggleMode={handleToggleMode}
             isDark={isDark}

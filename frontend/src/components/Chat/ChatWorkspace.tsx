@@ -11,6 +11,7 @@ import type {
   DocumentMetadata,
   User,
   Citation,
+  MediaAttachment,
 } from "../../types";
 
 interface ChatWorkspaceProps {
@@ -29,6 +30,9 @@ interface ChatWorkspaceProps {
   uploadStatusText?: string;
   documents: DocumentMetadata[];
   onDeleteDocument: (documentId: string) => void;
+  attachedMedia?: MediaAttachment[];
+  onDeleteMedia?: (index: number) => void;
+  onUseAsReference?: (media: MediaAttachment) => void;
   currentUser: User | null;
   onOpenUserModal: (tab?: "login" | "register") => void;
   onClearChat?: () => void;
@@ -53,6 +57,9 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
   uploadStatusText,
   documents,
   onDeleteDocument,
+  attachedMedia = [],
+  onDeleteMedia,
+  onUseAsReference,
   currentUser,
   onOpenUserModal,
   onClearChat,
@@ -231,6 +238,7 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
             activeSources={!!activeSources}
             isTemporaryChat={isTemporaryChat}
             onToggleTemporaryChat={onToggleTemporaryChat}
+            onUseAsReference={onUseAsReference}
           />
 
           <div className="w-full shrink-0 px-2 sm:px-6 pb-3.5 sm:pb-4 pb-safe">
@@ -250,6 +258,8 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
                 uploadStatusText={uploadStatusText}
                 documents={documents}
                 onDeleteDocument={onDeleteDocument}
+                attachedMedia={attachedMedia}
+                onDeleteMedia={onDeleteMedia}
               />
             </div>
           </div>

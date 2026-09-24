@@ -6,20 +6,25 @@ import {
   TouchableOpacity,
   Pressable,
   Platform,
+  Image,
+  Modal,
+  Dimensions,
 } from "react-native";
 import { Feather, Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import * as Clipboard from "expo-clipboard";
 import { getAppTheme, type AppTheme } from "../theme/colors";
-import type { Citation } from "../types";
+import type { Citation, MediaAttachment } from "../types";
 
 interface MessageItemProps {
   id?: string;
   role: "user" | "assistant";
   content: string;
   citations?: Citation[] | null;
+  attachments?: MediaAttachment[] | null;
   isStreaming?: boolean;
   onOpenCitations?: (citations: Citation[]) => void;
+  onUseAsReference?: (media: MediaAttachment) => void;
   isDark?: boolean;
   theme?: AppTheme;
 }
@@ -28,14 +33,17 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   role,
   content,
   citations,
+  attachments,
   isStreaming = false,
   onOpenCitations,
+  onUseAsReference,
   isDark = true,
   theme: customTheme,
 }) => {
   const isUser = role === "user";
   const theme = customTheme || getAppTheme(isDark);
   const [copied, setCopied] = useState(false);
+  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
 
   const handleCopy = async () => {
     if (!content) return;
@@ -191,6 +199,43 @@ export const MessageItem: React.FC<MessageItemProps> = ({
         isUser ? styles.userContainer : styles.assistantContainer,
       ]}
     >
+      {/* Attached Media Previews */}
+      {attachments && attachments.length > 0 && (
+        <View
+          style={[
+            styles.mediaContainer,
+            isUser ? styles.userMediaContainer : styles.assistantMediaContainer,
+          ]}
+        >
+          {attachments.map((att, attIdx) => (
+            <TouchableOpacity
+              key={att.id || attIdx}
+              onPress={() => setPreviewImageUrl(att.url)}
+              activeOpacity={0.85}
+              style={[
+                styles.mediaCard,
+                { borderColor: theme.borderSubtle, backgroundColor: theme.bgCard },
+              ]}
+            >
+              <Image
+                source={{ uri: att.url }}
+                style={styles.mediaImage}
+                resizeMode="cover"
+              />
+              {!isUser && onUseAsReference && (
+                <TouchableOpacity
+                  style={[styles.refBtn, { backgroundColor: theme.primary }]}
+                  onPress={() => onUseAsReference(att)}
+                >
+                  <Ionicons name="sparkles" size={11} color="#FFF" />
+                  <Text style={styles.refBtnText}>Remix</Text>
+                </TouchableOpacity>
+              )}
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
+
       <Pressable
         onLongPress={handleCopy}
         delayLongPress={350}
@@ -289,6 +334,30 @@ export const MessageItem: React.FC<MessageItemProps> = ({
           )}
         </View>
       )}
+
+      {/* Fullscreen Image Preview Modal */}
+      {previewImageUrl && (
+        <Modal
+          visible={!!previewImageUrl}
+          transparent={true}
+          animationType="fade"
+          onRequestClose={() => setPreviewImageUrl(null)}
+        >
+          <View style={styles.modalBackdrop}>
+            <TouchableOpacity
+              style={styles.modalCloseBtn}
+              onPress={() => setPreviewImageUrl(null)}
+            >
+              <Feather name="x" size={24} color="#FFF" />
+            </TouchableOpacity>
+            <Image
+              source={{ uri: previewImageUrl }}
+              style={styles.modalImage}
+              resizeMode="contain"
+            />
+          </View>
+        </Modal>
+      )}
     </View>
   );
 };
@@ -304,6 +373,68 @@ const styles = StyleSheet.create({
   },
   assistantContainer: {
     alignItems: "flex-start",
+  },
+  mediaContainer: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginBottom: 6,
+    maxWidth: "88%",
+  },
+  userMediaContainer: {
+    justifyContent: "flex-end",
+  },
+  assistantMediaContainer: {
+    justifyContent: "flex-start",
+  },
+  mediaCard: {
+    borderRadius: 14,
+    overflow: "hidden",
+    borderWidth: 1,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 3,
+    elevation: 2,
+    position: "relative",
+  },
+  mediaImage: {
+    width: 200,
+    height: 180,
+    borderRadius: 13,
+  },
+  refBtn: {
+    position: "absolute",
+    bottom: 8,
+    right: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  refBtnText: {
+    color: "#FFF",
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.9)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  modalCloseBtn: {
+    position: "absolute",
+    top: 50,
+    right: 20,
+    zIndex: 10,
+    padding: 10,
+  },
+  modalImage: {
+    width: "92%",
+    height: "80%",
   },
   bubble: {
     maxWidth: "88%",
@@ -348,7 +479,6 @@ const styles = StyleSheet.create({
     height: 6,
     borderRadius: 3,
     marginTop: 9.5,
-    marginRight: 9,
   },
   numberPrefix: {
     fontSize: 16,
@@ -358,15 +488,19 @@ const styles = StyleSheet.create({
     lineHeight: 25,
   },
   bulletText: {
-    fontSize: 16.5,
-    lineHeight: 25,
     flex: 1,
+    fontSize: 16,
+    lineHeight: 24,
+    marginLeft: 10,
+  },
+  boldText: {
+    fontWeight: "700",
   },
   thinkingRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    paddingVertical: 2,
+    paddingVertical: 4,
   },
   pulseDot: {
     width: 8,
@@ -375,7 +509,7 @@ const styles = StyleSheet.create({
   },
   thinkingText: {
     fontSize: 14,
-    fontStyle: "italic",
+    fontWeight: "500",
   },
   toolbarRow: {
     flexDirection: "row",

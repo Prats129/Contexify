@@ -31,19 +31,64 @@ class Settings(BaseSettings):
     @property
     def UPLOAD_DIR(self) -> Path:
         return self.DATA_DIR / "uploads"
+
+    @property
+    def MEDIA_DIR(self) -> Path:
+        return self.DATA_DIR / "media"
+
+    @property
+    def UPLOAD_IMAGE_DIR(self) -> Path:
+        return self.MEDIA_DIR / "uploads"
+
+    @property
+    def GENERATED_IMAGE_DIR(self) -> Path:
+        return self.MEDIA_DIR / "generated"
     
     # API Keys & Models
     GEMINI_API_KEY: str = Field(default="", env="GEMINI_API_KEY")
     DEFAULT_EMBEDDING_MODEL: str = "gemini-embedding-001"
     EMBEDDING_DIMENSION: int = 768
     DEFAULT_LLM_MODEL: str = "gemini-3.5-flash"
-    FALLBACK_LLM_MODELS: list[str] = ["gemini-3.6-flash", "gemini-3.5-flash-lite"]
+    FALLBACK_LLM_MODELS: list[str] = ["gemini-3-flash-preview"]
+    DEFAULT_IMAGE_MODEL: str = "imagen-3.0-generate-002"
+    FALLBACK_IMAGE_MODELS: list[str] = ["imagen-3.0-generate-001", "imagen-3.0-fast-generate-001"]
     GOOGLE_CLIENT_ID: str = Field(default="", env="GOOGLE_CLIENT_ID")
 
     # Database & Vector Store Execution Mode: "local" (SQLite + ChromaDB) or "cloud" (Turso + Pinecone)
     DB_MODE: str = Field(default="local", env="DB_MODE")
     VECTOR_STORE_TYPE: str = Field(default="", env="VECTOR_STORE_TYPE")  # Optional override: "chromadb" | "pinecone"
     DATABASE_TYPE: str = Field(default="", env="DATABASE_TYPE")          # Optional override: "sqlite" | "turso"
+
+    # Object Storage Mode: "cloudflare" (Cloudflare R2 S3-compatible) or "local" (local disk)
+    STORAGE_MODE: str = Field(default="cloudflare", env="STORAGE_MODE")
+
+    # Cloudflare R2 Object Storage Configuration (S3-Compatible)
+    CLOUDFLARE_R2_ACCOUNT_ID: str = Field(default="", env="CLOUDFLARE_R2_ACCOUNT_ID")
+    CLOUDFLARE_R2_ACCESS_KEY_ID: str = Field(default="", env="CLOUDFLARE_R2_ACCESS_KEY_ID")
+    CLOUDFLARE_R2_SECRET_ACCESS_KEY: str = Field(default="", env="CLOUDFLARE_R2_SECRET_ACCESS_KEY")
+    CLOUDFLARE_R2_BUCKET_NAME: str = Field(default="contexify", env="CLOUDFLARE_R2_BUCKET_NAME")
+    CLOUDFLARE_R2_PUBLIC_URL: str = Field(default="", env="CLOUDFLARE_R2_PUBLIC_URL")
+    CLOUDFLARE_R2_ENDPOINT_URL: str = Field(default="", env="CLOUDFLARE_R2_ENDPOINT_URL")
+
+    @property
+    def r2_endpoint_url(self) -> str:
+        if self.CLOUDFLARE_R2_ENDPOINT_URL:
+            return self.CLOUDFLARE_R2_ENDPOINT_URL.strip().rstrip("/")
+        if self.CLOUDFLARE_R2_ACCOUNT_ID:
+            return f"https://{self.CLOUDFLARE_R2_ACCOUNT_ID.strip()}.r2.cloudflarestorage.com"
+        return ""
+
+    @property
+    def is_cloudflare_r2_configured(self) -> bool:
+        mode = (self.STORAGE_MODE or "").strip().lower()
+        if mode in ["local", "disk"]:
+            return False
+        return bool(
+            self.CLOUDFLARE_R2_ACCESS_KEY_ID
+            and self.CLOUDFLARE_R2_SECRET_ACCESS_KEY
+            and self.CLOUDFLARE_R2_BUCKET_NAME
+            and (self.CLOUDFLARE_R2_ACCOUNT_ID or self.CLOUDFLARE_R2_ENDPOINT_URL)
+        )
 
     # Turso Cloud Database Configuration
     TURSO_DATABASE_URL: str = Field(default="", env="TURSO_DATABASE_URL")
@@ -88,3 +133,6 @@ settings = Settings()
 settings.DATA_DIR.mkdir(parents=True, exist_ok=True)
 settings.CHROMA_PERSIST_DIR.mkdir(parents=True, exist_ok=True)
 settings.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+settings.MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+settings.UPLOAD_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+settings.GENERATED_IMAGE_DIR.mkdir(parents=True, exist_ok=True)

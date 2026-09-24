@@ -192,7 +192,7 @@ def init_db():
                 id TEXT PRIMARY KEY,
                 user_id TEXT NOT NULL,
                 title TEXT NOT NULL,
-                mode TEXT NOT NULL DEFAULT 'WEB_SEARCH',
+                mode TEXT NOT NULL DEFAULT 'AUTO',
                 is_temporary INTEGER DEFAULT 0,
                 expires_at TEXT,
                 created_at TEXT NOT NULL,
@@ -217,10 +217,17 @@ def init_db():
                 role TEXT NOT NULL,
                 content TEXT NOT NULL,
                 citations_json TEXT,
+                attachments_json TEXT DEFAULT '[]',
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
             );
         """)
+        
+        # Schema migration check: ensure attachments_json column exists if table was previously created
+        cursor.execute("PRAGMA table_info(messages);")
+        message_columns = [row["name"] for row in cursor.fetchall()]
+        if "attachments_json" not in message_columns:
+            cursor.execute("ALTER TABLE messages ADD COLUMN attachments_json TEXT DEFAULT '[]';")
         
         # 4. Documents Table
         cursor.execute("""
@@ -232,12 +239,37 @@ def init_db():
                 file_type TEXT NOT NULL,
                 file_size_bytes INTEGER NOT NULL,
                 total_chunks INTEGER NOT NULL,
+                storage_url TEXT DEFAULT '',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
+            );
+        """)
+
+        # Migration check: ensure storage_url column exists in documents table
+        cursor.execute("PRAGMA table_info(documents);")
+        document_columns = [row["name"] for row in cursor.fetchall()]
+        if "storage_url" not in document_columns:
+            cursor.execute("ALTER TABLE documents ADD COLUMN storage_url TEXT DEFAULT '';")
+
+        # 5. Media Assets Table (for user uploads and AI generated images)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS media_assets (
+                id TEXT PRIMARY KEY,
+                user_id TEXT,
+                session_id TEXT,
+                filename TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                file_url TEXT NOT NULL,
+                mime_type TEXT NOT NULL,
+                file_size_bytes INTEGER DEFAULT 0,
+                media_type TEXT NOT NULL DEFAULT 'upload',
+                prompt TEXT DEFAULT '',
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
             );
         """)
         
-        # 5. Email OTPs Table
+        # 6. Email OTPs Table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS email_otps (
                 id TEXT PRIMARY KEY,
@@ -255,6 +287,7 @@ def init_db():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_temporary ON chat_sessions(is_temporary, expires_at);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_documents_session_id ON documents(session_id);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_media_session_id ON media_assets(session_id);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_email_otps_email ON email_otps(email);")
         
         logger.info("Database schema initialized successfully.")

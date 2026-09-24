@@ -34,6 +34,8 @@ __pycache__/
 backend/data/chroma_db/
 backend/data/uploads/
 backend/data/avatars/
+backend/data/media/
+backend/data/documents/
 data/chroma_db/
 data/uploads/
 data/avatars/
