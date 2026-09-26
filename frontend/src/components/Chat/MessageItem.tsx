@@ -86,12 +86,18 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(
               href={url}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-primary-theme hover:underline inline-flex items-center gap-0.5 font-medium underline-offset-2 break-all"
+              className={`${
+                isUser
+                  ? "text-white underline decoration-white/70 hover:decoration-white font-medium"
+                  : "text-primary-theme hover:underline font-medium"
+              } inline-flex items-center gap-0.5 underline-offset-2 break-all`}
             >
               <span>{title}</span>
               <LuExternalLink
                 size={10}
-                className="inline ml-0.5 opacity-70 shrink-0"
+                className={`inline ml-0.5 ${
+                  isUser ? "text-white/80" : "opacity-70"
+                } shrink-0`}
               />
             </a>
           );
@@ -105,12 +111,18 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(
               href={seg}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-primary-theme hover:underline inline-flex items-center gap-0.5 font-medium underline-offset-2 break-all"
+              className={`${
+                isUser
+                  ? "text-white underline decoration-white/70 hover:decoration-white font-medium"
+                  : "text-primary-theme hover:underline font-medium"
+              } inline-flex items-center gap-0.5 underline-offset-2 break-all`}
             >
               <span>{seg}</span>
               <LuExternalLink
                 size={10}
-                className="inline ml-0.5 opacity-70 shrink-0"
+                className={`inline ml-0.5 ${
+                  isUser ? "text-white/80" : "opacity-70"
+                } shrink-0`}
               />
             </a>
           );
@@ -160,7 +172,9 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(
           return (
             <h4
               key={lineIdx}
-              className="text-sm font-bold text-(--text-main) mt-2.5 mb-1 flex items-center gap-1.5"
+              className={`text-sm font-bold ${
+                isUser ? "text-white" : "text-(--text-main)"
+              } mt-2.5 mb-1 flex items-center gap-1.5`}
             >
               {renderInline(line.slice(4), lineIdx)}
             </h4>
@@ -172,7 +186,9 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(
           return (
             <h3
               key={lineIdx}
-              className="text-base font-bold text-(--text-main) mt-3 mb-1.5"
+              className={`text-base font-bold ${
+                isUser ? "text-white" : "text-(--text-main)"
+              } mt-3 mb-1.5`}
             >
               {renderInline(line.slice(3), lineIdx)}
             </h3>
@@ -184,7 +200,9 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(
           return (
             <h2
               key={lineIdx}
-              className="text-lg font-bold text-(--text-main) mt-3.5 mb-2"
+              className={`text-lg font-bold ${
+                isUser ? "text-white" : "text-(--text-main)"
+              } mt-3.5 mb-2`}
             >
               {renderInline(line.slice(2), lineIdx)}
             </h2>
@@ -196,7 +214,11 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(
           const bulletContent = trimmed.slice(2);
           return (
             <div key={lineIdx} className="flex items-start gap-2 my-1 pl-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-primary-theme shrink-0 mt-2"></span>
+              <span
+                className={`w-1.5 h-1.5 rounded-full ${
+                  isUser ? "bg-white" : "bg-primary-theme"
+                } shrink-0 mt-2`}
+              ></span>
               <div className="flex-1 min-w-0">
                 {renderInline(bulletContent, lineIdx)}
               </div>
@@ -210,7 +232,11 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(
           const [, num, itemContent] = numMatch;
           return (
             <div key={lineIdx} className="flex items-start gap-2 my-1 pl-1">
-              <span className="text-xs font-bold text-primary-theme shrink-0 mt-0.5 min-w-[1.2rem]">
+              <span
+                className={`text-xs font-bold ${
+                  isUser ? "text-white" : "text-primary-theme"
+                } shrink-0 mt-0.5 min-w-[1.2rem]`}
+              >
                 {num}.
               </span>
               <div className="flex-1 min-w-0">
@@ -267,7 +293,7 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(
                         onClick={() => setSelectedImage(att.url)}
                         loading="lazy"
                       />
-                      
+
                       {/* Overlay action bar */}
                       <div className="absolute top-2 right-2 flex items-center gap-1.5 opacity-0 group-hover/img:opacity-100 transition-opacity bg-black/65 backdrop-blur-xs p-1 rounded-lg">
                         <button
@@ -351,8 +377,12 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(
 
           {/* Action toolbar (ChatGPT & Perplexity style) */}
           {content && !isStreaming && (
-            <div className="flex items-center justify-between w-full mt-1 px-1">
-              {/* Left side actions: Copy button */}
+            <div
+              className={`flex items-center ${
+                isUser ? "justify-end" : "justify-between"
+              } w-full mt-1 px-1`}
+            >
+              {/* Actions: Copy button */}
               <div
                 className={`flex items-center gap-1 transition-opacity duration-150 ${
                   copied
