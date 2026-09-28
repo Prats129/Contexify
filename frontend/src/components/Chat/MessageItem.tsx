@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import {
   LuTriangleAlert,
   LuCopy,
@@ -45,18 +45,66 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(
   }) => {
     const isUser = role === "user";
     const [copied, setCopied] = useState(false);
+    const [copiedTextType, setCopiedTextType] = useState<"all" | "selection">(
+      "all",
+    );
+    const [hasSelection, setHasSelection] = useState(false);
     const [selectedImage, setSelectedImage] = useState<string | null>(null);
+    const bubbleRef = useRef<HTMLDivElement>(null);
+
+    // Track active selection within this specific message
+    useEffect(() => {
+      const handleSelectionChange = () => {
+        const selection = window.getSelection();
+        if (
+          selection &&
+          !selection.isCollapsed &&
+          selection.toString().trim().length > 0 &&
+          bubbleRef.current &&
+          selection.anchorNode &&
+          (bubbleRef.current.contains(selection.anchorNode) ||
+            (selection.focusNode &&
+              bubbleRef.current.contains(selection.focusNode)))
+        ) {
+          setHasSelection(true);
+        } else {
+          setHasSelection(false);
+        }
+      };
+
+      document.addEventListener("selectionchange", handleSelectionChange);
+      return () => {
+        document.removeEventListener("selectionchange", handleSelectionChange);
+      };
+    }, []);
 
     const handleCopy = async () => {
       if (!content) return;
+
+      const selection = window.getSelection();
+      const selectedStr = selection?.toString()?.trim();
+      const isSelectingInside = Boolean(
+        selectedStr &&
+        bubbleRef.current &&
+        selection &&
+        selection.anchorNode &&
+        (bubbleRef.current.contains(selection.anchorNode) ||
+          (selection.focusNode &&
+            bubbleRef.current.contains(selection.focusNode))),
+      );
+
+      const textToCopy =
+        isSelectingInside && selection ? selection.toString() : content;
+      setCopiedTextType(isSelectingInside ? "selection" : "all");
+
       try {
-        await navigator.clipboard.writeText(content);
+        await navigator.clipboard.writeText(textToCopy);
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
       } catch {
         // Fallback if clipboard API is restricted
         const textarea = document.createElement("textarea");
-        textarea.value = content;
+        textarea.value = textToCopy;
         document.body.appendChild(textarea);
         textarea.select();
         document.execCommand("copy");
@@ -86,18 +134,25 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(
               href={url}
               target="_blank"
               rel="noopener noreferrer"
+              draggable={false}
+              onClick={(e) => {
+                // If user selected text within the link, don't open link
+                if (window.getSelection()?.toString().trim()) {
+                  e.preventDefault();
+                }
+              }}
               className={`${
                 isUser
                   ? "text-white underline decoration-white/70 hover:decoration-white font-medium"
                   : "text-primary-theme hover:underline font-medium"
-              } inline-flex items-center gap-0.5 underline-offset-2 break-all`}
+              } inline-flex items-center gap-0.5 underline-offset-2 break-all select-text cursor-pointer`}
             >
-              <span>{title}</span>
+              <span className="select-text">{title}</span>
               <LuExternalLink
                 size={10}
                 className={`inline ml-0.5 ${
                   isUser ? "text-white/80" : "opacity-70"
-                } shrink-0`}
+                } shrink-0 select-none pointer-events-none`}
               />
             </a>
           );
@@ -111,18 +166,25 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(
               href={seg}
               target="_blank"
               rel="noopener noreferrer"
+              draggable={false}
+              onClick={(e) => {
+                // If user selected text within the link, don't open link
+                if (window.getSelection()?.toString().trim()) {
+                  e.preventDefault();
+                }
+              }}
               className={`${
                 isUser
                   ? "text-white underline decoration-white/70 hover:decoration-white font-medium"
                   : "text-primary-theme hover:underline font-medium"
-              } inline-flex items-center gap-0.5 underline-offset-2 break-all`}
+              } inline-flex items-center gap-0.5 underline-offset-2 break-all select-text cursor-pointer`}
             >
-              <span>{seg}</span>
+              <span className="select-text">{seg}</span>
               <LuExternalLink
                 size={10}
                 className={`inline ml-0.5 ${
                   isUser ? "text-white/80" : "opacity-70"
-                } shrink-0`}
+                } shrink-0 select-none pointer-events-none`}
               />
             </a>
           );
@@ -340,7 +402,8 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(
           )}
 
           <div
-            className={`px-3.5 sm:px-4 py-2.5 rounded-2xl text-sm leading-relaxed transition-all duration-300 wrap-break-word ${
+            ref={bubbleRef}
+            className={`px-3.5 sm:px-4 py-2.5 rounded-2xl text-sm leading-relaxed transition-all duration-300 wrap-break-word select-text cursor-text ${
               isUser
                 ? `bg-primary-theme text-white ${
                     isHighlighted
@@ -385,26 +448,45 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(
               {/* Actions: Copy button */}
               <div
                 className={`flex items-center gap-1 transition-opacity duration-150 ${
-                  copied
+                  copied || hasSelection
                     ? "opacity-100"
                     : "opacity-80 sm:opacity-0 sm:group-hover:opacity-100"
                 }`}
               >
                 <button
                   type="button"
+                  onMouseDown={(e) => {
+                    // Prevent button click from deselecting highlighted text
+                    e.preventDefault();
+                  }}
                   onClick={handleCopy}
                   className="flex items-center gap-1 text-[11px] text-(--text-muted) hover:text-(--text-main) hover:bg-(--border-subtle) px-1.5 py-0.5 rounded cursor-pointer transition-colors"
-                  title={copied ? "Copied to clipboard" : "Copy message"}
+                  title={
+                    copied
+                      ? "Copied to clipboard"
+                      : hasSelection
+                        ? "Copy selected text"
+                        : "Copy message"
+                  }
                 >
                   {copied ? (
                     <>
                       <LuCheck size={12} className="text-emerald-500" />
                       <span className="text-emerald-500 text-[10px] font-medium">
-                        Copied
+                        {copiedTextType === "selection"
+                          ? "Copied selection"
+                          : "Copied"}
                       </span>
                     </>
                   ) : (
-                    <LuCopy size={12} />
+                    <>
+                      <LuCopy size={12} />
+                      {hasSelection && (
+                        <span className="text-primary-theme text-[10px] font-medium">
+                          Copy selection
+                        </span>
+                      )}
+                    </>
                   )}
                 </button>
               </div>

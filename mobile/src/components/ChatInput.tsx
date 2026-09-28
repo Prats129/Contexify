@@ -59,7 +59,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const isDraw = currentMode === "IMAGE_GENERATION";
   const isVision = currentMode === "MULTIMODAL";
   const isDoc = currentMode === "DOCUMENT_RAG";
-  const canSend = (query.trim().length > 0 || attachedMedia.length > 0) && !isSending;
+  const canSend =
+    (query.trim().length > 0 || attachedMedia.length > 0) && !isSending;
   const insets = useSafeAreaInsets();
   const [isKeyboardOpen, setIsKeyboardOpen] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
@@ -155,11 +156,45 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   );
 
   const getModeDetails = () => {
-    if (isAuto) return { icon: "sparkles", label: "Auto", color: "#f59e0b", bg: "rgba(245, 158, 11, 0.14)", border: "rgba(245, 158, 11, 0.3)" };
-    if (isWeb) return { icon: "globe-outline", label: "Web", color: theme.emerald, bg: theme.emeraldLight, border: theme.emeraldBorder };
-    if (isDraw) return { icon: "color-palette-outline", label: "Draw", color: "#ec4899", bg: "rgba(236, 72, 153, 0.14)", border: "rgba(236, 72, 153, 0.3)" };
-    if (isVision) return { icon: "eye-outline", label: "Vision", color: "#8b5cf6", bg: "rgba(139, 92, 246, 0.14)", border: "rgba(139, 92, 246, 0.3)" };
-    return { icon: "document-text-outline", label: "Doc", color: theme.primary, bg: theme.primaryLight, border: theme.primaryBorder };
+    if (isAuto)
+      return {
+        icon: "sparkles",
+        label: "Auto",
+        color: "#f59e0b",
+        bg: "rgba(245, 158, 11, 0.14)",
+        border: "rgba(245, 158, 11, 0.3)",
+      };
+    if (isWeb)
+      return {
+        icon: "globe-outline",
+        label: "Web",
+        color: theme.emerald,
+        bg: theme.emeraldLight,
+        border: theme.emeraldBorder,
+      };
+    if (isDraw)
+      return {
+        icon: "color-palette-outline",
+        label: "Draw",
+        color: "#ec4899",
+        bg: "rgba(236, 72, 153, 0.14)",
+        border: "rgba(236, 72, 153, 0.3)",
+      };
+    if (isVision)
+      return {
+        icon: "eye-outline",
+        label: "Vision",
+        color: "#8b5cf6",
+        bg: "rgba(139, 92, 246, 0.14)",
+        border: "rgba(139, 92, 246, 0.3)",
+      };
+    return {
+      icon: "document-text-outline",
+      label: "Doc",
+      color: theme.primary,
+      bg: theme.primaryLight,
+      border: theme.primaryBorder,
+    };
   };
 
   const modeDetails = getModeDetails();
@@ -186,12 +221,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             size={12}
             color={modeDetails.color}
           />
-          <Text
-            style={[
-              styles.modeChipText,
-              { color: modeDetails.color },
-            ]}
-          >
+          <Text style={[styles.modeChipText, { color: modeDetails.color }]}>
             {modeDetails.label}
           </Text>
         </TouchableOpacity>
@@ -286,7 +316,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                   resizeMode="cover"
                 />
               ) : (
-                <Ionicons name="image-outline" size={14} color={theme.primary} />
+                <Ionicons
+                  name="image-outline"
+                  size={14}
+                  color={theme.primary}
+                />
               )}
               <Text
                 style={[styles.chipText, { color: theme.textMain }]}
@@ -360,12 +394,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             isDraw
               ? "Describe image to generate or remix..."
               : isVision
-              ? "Ask about image, or extract tables/text..."
-              : isDoc
-              ? "Ask questions about documents..."
-              : isWeb
-              ? "Search live web..."
-              : "Ask anything, attach files, or generate images..."
+                ? "Ask about image, or extract tables/text..."
+                : isDoc
+                  ? "Ask questions about documents..."
+                  : isWeb
+                    ? "Search live web..."
+                    : "Ask anything..."
           }
           placeholderTextColor={theme.textMuted}
           multiline

@@ -410,7 +410,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                   ? "Ask a question about your attached image or document..."
                   : currentMode === "DOCUMENT_RAG"
                     ? "Ask questions based on your uploaded document..."
-                    : "Ask anything, attach files, or type 'generate image of...' "
+                    : "Ask anything..."
             }
             rows={1}
             required={attachedMedia.length === 0}

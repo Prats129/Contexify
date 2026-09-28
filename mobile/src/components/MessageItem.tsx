@@ -136,15 +136,23 @@ export const MessageItem: React.FC<MessageItemProps> = ({
       // Heading 3 / 2 / 1
       if (line.startsWith("### ")) {
         return (
-          <Text key={idx} style={[styles.heading3, { color: theme.textMain }]}>
-            {renderInlineSpans(line.substring(4), theme.textMain)}
+          <Text
+            key={idx}
+            selectable
+            style={[styles.heading3, { color: textColor }]}
+          >
+            {renderInlineSpans(line.substring(4), textColor)}
           </Text>
         );
       }
       if (line.startsWith("## ") || line.startsWith("# ")) {
         return (
-          <Text key={idx} style={[styles.heading2, { color: theme.textMain }]}>
-            {renderInlineSpans(line.replace(/^#+\s*/, ""), theme.textMain)}
+          <Text
+            key={idx}
+            selectable
+            style={[styles.heading2, { color: textColor }]}
+          >
+            {renderInlineSpans(line.replace(/^#+\s*/, ""), textColor)}
           </Text>
         );
       }
@@ -154,9 +162,12 @@ export const MessageItem: React.FC<MessageItemProps> = ({
         return (
           <View key={idx} style={styles.bulletRow}>
             <View
-              style={[styles.bulletDot, { backgroundColor: theme.primary }]}
+              style={[
+                styles.bulletDot,
+                { backgroundColor: isUser ? "#ffffff" : theme.primary },
+              ]}
             />
-            <Text style={[styles.bulletText, { color: textColor }]}>
+            <Text selectable style={[styles.bulletText, { color: textColor }]}>
               {renderInlineSpans(trimmed.substring(2), textColor)}
             </Text>
           </View>
@@ -168,10 +179,16 @@ export const MessageItem: React.FC<MessageItemProps> = ({
       if (numMatch) {
         return (
           <View key={idx} style={styles.bulletRow}>
-            <Text style={[styles.numberPrefix, { color: theme.primary }]}>
+            <Text
+              selectable
+              style={[
+                styles.numberPrefix,
+                { color: isUser ? "#ffffff" : theme.primary },
+              ]}
+            >
               {numMatch[1]}.
             </Text>
-            <Text style={[styles.bulletText, { color: textColor }]}>
+            <Text selectable style={[styles.bulletText, { color: textColor }]}>
               {renderInlineSpans(numMatch[2], textColor)}
             </Text>
           </View>
@@ -185,7 +202,11 @@ export const MessageItem: React.FC<MessageItemProps> = ({
 
       // Standard text line with bold parsing
       return (
-        <Text key={idx} style={[styles.messageText, { color: textColor }]}>
+        <Text
+          key={idx}
+          selectable
+          style={[styles.messageText, { color: textColor }]}
+        >
           {renderInlineSpans(line, textColor)}
         </Text>
       );
@@ -236,9 +257,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
         </View>
       )}
 
-      <Pressable
-        onLongPress={handleCopy}
-        delayLongPress={350}
+      <View
         style={[
           styles.bubble,
           isUser
@@ -264,7 +283,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
         ) : (
           renderFormattedContent(content)
         )}
-      </Pressable>
+      </View>
 
       {/* Action Toolbar for User message */}
       {isUser && content.length > 0 && (
