@@ -129,6 +129,7 @@ export const App: React.FC = () => {
   };
 
   const handleToggleTemporaryChat = () => {
+    if (!currentUser) return;
     setIsTemporaryChat((prev) => {
       const next = !prev;
       setActiveSessionId(null);
@@ -202,6 +203,7 @@ export const App: React.FC = () => {
       } else {
         // Ephemeral Guest Mode (No DB Save)
         setCurrentUser(null);
+        setIsTemporaryChat(false);
         localStorage.removeItem("contexify_user");
         localStorage.removeItem("contexify_active_session");
         setSessions([]);
@@ -611,7 +613,8 @@ export const App: React.FC = () => {
       id: `user-${Date.now()}`,
       session_id: targetSessionId,
       role: "user",
-      content: query || (mediaToSend.length > 0 ? "Analyze attached media" : ""),
+      content:
+        query || (mediaToSend.length > 0 ? "Analyze attached media" : ""),
       attachments: mediaToSend.length > 0 ? mediaToSend : null,
       created_at: new Date().toISOString(),
     };
@@ -837,6 +840,7 @@ export const App: React.FC = () => {
     localStorage.removeItem("contexify_user");
     localStorage.removeItem("contexify_active_session");
     setCurrentUser(null);
+    setIsTemporaryChat(false);
     setSessions([]);
     setMessages([]);
     setDocuments([]);
@@ -899,8 +903,10 @@ export const App: React.FC = () => {
         onUseAsReference={handleUseAsReference}
         onClearChat={handleClearMessages}
         onToggleSidebar={handleToggleSidebar}
-        isTemporaryChat={isTemporaryChat}
-        onToggleTemporaryChat={handleToggleTemporaryChat}
+        isTemporaryChat={Boolean(currentUser && isTemporaryChat)}
+        onToggleTemporaryChat={
+          currentUser ? handleToggleTemporaryChat : undefined
+        }
       />
 
       <UserModal

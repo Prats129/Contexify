@@ -54,7 +54,7 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
                 Browsing as Guest
               </p>
               <span className="text-[11px] text-(--text-muted) leading-tight">
-                Chats are temporary. Sign in to save and sync history.
+                Sign in to save and sync chat history.
               </span>
               <button
                 type="button"
@@ -67,7 +67,7 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
           ) : (
             <div
               className="flex justify-center py-2 text-(--text-muted)"
-              title="Guest Mode - Temporary Chats"
+              title="Guest Mode - Sign in to save history"
             >
               <LuCloudUpload size={18} />
             </div>

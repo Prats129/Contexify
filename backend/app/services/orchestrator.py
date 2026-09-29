@@ -24,10 +24,16 @@ class ChatOrchestrator:
         if q.startswith(("/imagine", "/image", "image:", "draw:", "generate:")):
             return True
         patterns = [
-            r"^(generate|create|make|draw|paint|produce|render)\s+(an?|me\s+an?)\s+(image|picture|photo|illustration|artwork|drawing|painting|logo|graphic)",
-            r"^(draw|paint)\s+(a|an|me)\s+",
-            r"^can\s+you\s+(draw|generate|paint|create)\s+(an?|me\s+an?)\s+(image|picture|photo)",
-            r"^(recreate|turn\s+this|transform\s+this|remix\s+this)\s+(image|picture|sketch|photo)",
+            # generate / create / draw / paint / produce / make [an/a] image/picture/photo/etc. [of ...]
+            r"\b(generate|create|make|draw|paint|produce|render)\s+(an?\s+)?(image|picture|photo|illustration|artwork|drawing|painting|logo|graphic|portrait|sketch|wallpaper)\b",
+            # can/could/please draw / generate / paint / create [me] [an/a] [image of] ...
+            r"\b(can|could|please|would\s+you)\s+(you\s+)?(draw|generate|paint|create|make|render)\b",
+            # draw / paint / sketch [me] [a/an] <anything>
+            r"^(draw|paint|sketch|illustrate)\s+",
+            # image of ... / picture of ... / photo of ...
+            r"^(image|picture|photo|drawing|illustration|sketch|wallpaper)\s+of\s+",
+            # transform / turn / remix this into an image
+            r"\b(recreate|turn\s+this|transform\s+this|remix\s+this)\s+(into\s+)?(an?\s+)?(image|picture|sketch|photo)\b",
         ]
         return any(re.search(p, q) for p in patterns)
 
@@ -38,9 +44,9 @@ class ChatOrchestrator:
             if q.lower().startswith(prefix):
                 return q[len(prefix):].strip()
         
-        # Strip common leading patterns like 'generate an image of'
+        # Strip common leading patterns like 'generate an image of', 'draw me a', 'draw', etc.
         cleaned = re.sub(
-            r"^(please\s+)?(generate|create|make|draw|paint|render)\s+(an?|me\s+an?)\s+(image|picture|photo|illustration|artwork)\s+(of|showing|depicting)?\s*",
+            r"^(please\s+)?(can\s+you\s+)?(generate|create|make|draw|paint|render)\s+(me\s+)?(an?\s+)?(image|picture|photo|illustration|artwork|drawing|painting)?\s*(of\s+|showing\s+|depicting\s+)?",
             "",
             q,
             flags=re.IGNORECASE

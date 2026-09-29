@@ -127,6 +127,61 @@ export const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
               8001) so your phone can reach FastAPI.
             </Text>
 
+            {/* Quick Server Presets */}
+            <View style={{ flexDirection: "row", gap: 8 }}>
+              <TouchableOpacity
+                style={[
+                  styles.presetChip,
+                  {
+                    backgroundColor:
+                      inputUrl.includes("10.66.137.54") ||
+                      inputUrl.includes("localhost")
+                        ? `${theme.primary}25`
+                        : theme.borderSubtle,
+                    borderColor:
+                      inputUrl.includes("10.66.137.54") ||
+                      inputUrl.includes("localhost")
+                        ? theme.primary
+                        : "transparent",
+                  },
+                ]}
+                onPress={() => {
+                  setInputUrl("http://10.66.137.54:8001");
+                  setPingStatus("idle");
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                }}
+              >
+                <Feather name="cpu" size={12} color={theme.primary} />
+                <Text style={[styles.presetText, { color: theme.textMain }]}>
+                  Local PC (Dev)
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.presetChip,
+                  {
+                    backgroundColor: inputUrl.includes("onrender.com")
+                      ? `${theme.primary}25`
+                      : theme.borderSubtle,
+                    borderColor: inputUrl.includes("onrender.com")
+                      ? theme.primary
+                      : "transparent",
+                  },
+                ]}
+                onPress={() => {
+                  setInputUrl("https://contexify-backend.onrender.com");
+                  setPingStatus("idle");
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                }}
+              >
+                <Feather name="cloud" size={12} color={theme.primary} />
+                <Text style={[styles.presetText, { color: theme.textMain }]}>
+                  Render Cloud
+                </Text>
+              </TouchableOpacity>
+            </View>
+
             {/* Input URL */}
             <View
               style={[
@@ -144,7 +199,7 @@ export const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
                   setInputUrl(t);
                   setPingStatus("idle");
                 }}
-                placeholder="http://192.168.1.10:8001"
+                placeholder="http://10.66.137.54:8001"
                 placeholderTextColor={theme.textMuted}
                 autoCapitalize="none"
                 autoCorrect={false}
@@ -344,5 +399,19 @@ const styles = StyleSheet.create({
     color: "#ffffff",
     fontSize: 13,
     fontWeight: "700",
+  },
+  presetChip: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingVertical: 7,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  presetText: {
+    fontSize: 11,
+    fontWeight: "600",
   },
 });

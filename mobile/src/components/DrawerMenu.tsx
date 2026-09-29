@@ -269,7 +269,7 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
                 <Text style={[styles.emptyText, { color: theme.textMuted }]}>
                   {currentUser
                     ? "No conversations yet."
-                    : "Temporary guest chats."}
+                    : "Sign in to save chat history."}
                 </Text>
               ) : (
                 sessionList.map((s) => {

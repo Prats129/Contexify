@@ -74,6 +74,7 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [isTemporaryChat, setIsTemporaryChat] = useState(false);
+  const isTempActive = Boolean(currentUser && isTemporaryChat);
   const [currentMode, setCurrentMode] = useState<ChatMode>("AUTO");
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -202,11 +203,14 @@ export default function App() {
   };
 
   const handleToggleTemporaryChat = () => {
-    setIsTemporaryChat((prev) => {
-      const next = !prev;
-      handleNewChat();
-      return next;
-    });
+    if (!currentUser) return;
+    setIsTemporaryChat((prev) => !prev);
+    setActiveSessionId(null);
+    setMessages([]);
+    setDocuments([]);
+    setAttachedMedia([]);
+    setStreamingMessage(null);
+    setQuery("");
   };
 
   // --- 3. New Chat ---
@@ -292,11 +296,11 @@ export default function App() {
           currentUser.id,
           prompt.slice(0, 40),
           currentMode,
-          isTemporaryChat,
+          isTempActive,
         );
         sessionId = newSession.id;
         setActiveSessionId(sessionId);
-        if (!isTemporaryChat) {
+        if (!isTempActive) {
           setSessions((prev) => [newSession, ...prev]);
         }
       } catch {
@@ -447,11 +451,11 @@ export default function App() {
             currentUser.id,
             `File: ${file.name}`.slice(0, 40),
             "DOCUMENT_RAG",
-            isTemporaryChat,
+            isTempActive,
           );
           sessionId = newSession.id;
           setActiveSessionId(sessionId);
-          if (!isTemporaryChat) {
+          if (!isTempActive) {
             setSessions((prev) => [newSession, ...prev]);
           }
         } catch {
@@ -555,6 +559,7 @@ export default function App() {
 
   const handleLogout = async () => {
     setCurrentUser(null);
+    setIsTemporaryChat(false);
     await AsyncStorage.removeItem("contexify_mobile_user");
     setSessions([]);
     handleNewChat();
@@ -575,12 +580,14 @@ export default function App() {
           onToggleTheme={handleToggleTheme}
           isDark={isDark}
           theme={theme}
-          isTemporaryChat={isTemporaryChat}
-          onToggleTemporaryChat={handleToggleTemporaryChat}
+          isTemporaryChat={isTempActive}
+          onToggleTemporaryChat={
+            currentUser ? handleToggleTemporaryChat : undefined
+          }
         />
 
-        {/* Temporary Chat Notice Banner (shown when conversation is active) */}
-        {isTemporaryChat && messages.length > 0 && (
+        {/* Temporary Chat Notice Banner (shown only for logged-in users with temporary chat active) */}
+        {isTempActive && messages.length > 0 && (
           <View
             style={[
               styles.temporaryBanner,
@@ -645,7 +652,7 @@ export default function App() {
         >
           {/* Welcome Screen or ChatGPT Temporary Chat Screen */}
           {messages.length === 0 && !streamingMessage ? (
-            isTemporaryChat ? (
+            isTempActive ? (
               <TouchableWithoutFeedback
                 onPress={Keyboard.dismiss}
                 accessible={false}

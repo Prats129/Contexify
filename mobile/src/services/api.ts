@@ -67,6 +67,24 @@ const getEndpoint = async (path: string): Promise<string> => {
 };
 
 /**
+ * Resolves a ChatMode safely without downgrading user intent.
+ * Auto-escalates to MULTIMODAL if media attachments are present in text-only modes.
+ */
+export const resolveBackendMode = (
+  requestedMode?: ChatMode | string,
+  attachments?: MediaAttachment[]
+): string => {
+  const norm = (requestedMode || 'AUTO').toUpperCase();
+
+  // If attachments are present in text modes, route to MULTIMODAL
+  if (attachments && attachments.length > 0 && (norm === 'WEB_SEARCH' || norm === 'DOCUMENT_RAG')) {
+    return 'MULTIMODAL';
+  }
+
+  return norm;
+};
+
+/**
  * Upload multipart form data using native XMLHttpRequest.
  * Bypasses Expo 57's WinterCG fetch polyfill which throws
  * "Unsupported FormDataPart implementation" when passing React Native's { uri, name, type } object.
@@ -423,13 +441,17 @@ export const apiService = {
     mode: ChatMode,
     isTemporary: boolean = false
   ): Promise<ChatSession> {
+    const backendMode = resolveBackendMode(mode);
     const url = await getEndpoint('/session/create');
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user_id: userId, title, mode, is_temporary: isTemporary }),
+      body: JSON.stringify({ user_id: userId, title, mode: backendMode, is_temporary: isTemporary }),
     });
-    if (!res.ok) throw new Error('Failed to create conversation');
+    if (!res.ok) {
+      const err = await res.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Failed to create conversation'));
+    }
     return res.json();
   },
 
@@ -440,11 +462,12 @@ export const apiService = {
   },
 
   async updateSessionMode(sessionId: string, mode: ChatMode): Promise<void> {
+    const backendMode = resolveBackendMode(mode);
     const url = await getEndpoint(`/session/${encodeURIComponent(sessionId)}/mode`);
     await fetch(url, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode }),
+      body: JSON.stringify({ mode: backendMode }),
     });
   },
 
@@ -521,6 +544,7 @@ export const apiService = {
     getEndpoint('/chat/stream').then(async (url) => {
       if (isAborted || hasEnded) return;
       const host = await getCleanHost();
+      const effectiveMode = resolveBackendMode(mode, attachments);
 
       xhr.open('POST', url, true);
       xhr.setRequestHeader('Content-Type', 'application/json');
@@ -585,7 +609,16 @@ export const apiService = {
       xhr.onload = () => {
         if (isAborted || hasEnded) return;
         if (xhr.status >= 400) {
-          triggerError(`Server error: ${xhr.status}`);
+          let errorMsg = `Server error: ${xhr.status}`;
+          try {
+            const errJson = JSON.parse(xhr.responseText);
+            errorMsg = extractErrorMessage(errJson, errorMsg);
+          } catch {
+            if (xhr.responseText && xhr.responseText.length < 200) {
+              errorMsg = `${errorMsg} (${xhr.responseText})`;
+            }
+          }
+          triggerError(errorMsg);
         } else {
           processChunks();
           triggerComplete();
@@ -604,11 +637,14 @@ export const apiService = {
 
       xhr.send(
         JSON.stringify({
-          session_id: sessionId,
-          message: query,
-          query,
-          mode,
-          attachments: attachments || [],
+          session_id: sessionId || `guest_${Date.now()}`,
+          message: query || '',
+          query: query || '',
+          mode: effectiveMode,
+          attachments: (attachments || []).map((att) => ({
+            ...att,
+            url: att.url || '',
+          })),
         })
       );
     });
