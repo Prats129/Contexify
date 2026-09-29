@@ -47,7 +47,7 @@ console.log('🚀 Publishing new code bundle to channel: preview...\n');
 
 const safeMessage = `"${message.replace(/"/g, '')}"`;
 
-const result = spawnSync('npx', ['eas-cli', 'update', '--channel', 'preview', '--message', safeMessage, '--non-interactive'], {
+const result = spawnSync('npx', ['eas-cli', 'update', '--channel', 'preview', '--environment', 'preview', '--message', safeMessage, '--non-interactive'], {
   cwd: mobileDir,
   stdio: 'inherit',
   shell: true,

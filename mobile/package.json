@@ -31,7 +31,7 @@
     "build:apk": "eas build --platform android --profile preview",
     "build:bundle": "eas build --platform android --profile production",
     "build:ios": "eas build --platform ios --profile production",
-    "update": "eas update --channel preview"
+    "update": "eas update --channel preview --environment preview"
   },
   "private": true
 }
