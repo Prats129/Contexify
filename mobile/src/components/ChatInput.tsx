@@ -56,7 +56,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const theme = customTheme || getAppTheme(isDark);
   const isAuto = currentMode === "AUTO";
   const isWeb = currentMode === "WEB_SEARCH";
-  const isDraw = currentMode === "IMAGE_GENERATION";
+  const isImageGen = currentMode === "IMAGE_GENERATION";
   const isVision = currentMode === "MULTIMODAL";
   const isDoc = currentMode === "DOCUMENT_RAG";
   const canSend =
@@ -172,10 +172,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         bg: theme.emeraldLight,
         border: theme.emeraldBorder,
       };
-    if (isDraw)
+    if (isImageGen)
       return {
         icon: "color-palette-outline",
-        label: "Draw",
+        label: "Image Gen",
         color: "#ec4899",
         bg: "rgba(236, 72, 153, 0.14)",
         border: "rgba(236, 72, 153, 0.3)",
@@ -391,14 +391,14 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             },
           ]}
           placeholder={
-            isDraw
-              ? "Describe image to generate or remix..."
+            isImageGen
+              ? "Describe image..."
               : isVision
-                ? "Ask about image, or extract tables/text..."
+                ? "Ask about image..."
                 : isDoc
-                  ? "Ask questions about documents..."
+                  ? "Ask about docs..."
                   : isWeb
-                    ? "Search live web..."
+                    ? "Search web..."
                     : "Ask anything..."
           }
           placeholderTextColor={theme.textMuted}
@@ -530,14 +530,14 @@ const styles = StyleSheet.create({
   modeChip: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 4,
-    paddingHorizontal: 9,
-    paddingVertical: 5.5,
+    gap: 3.5,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
     borderRadius: 12,
     borderWidth: 1,
   },
   modeChipText: {
-    fontSize: 12,
+    fontSize: 11.5,
     fontWeight: "700",
   },
   sendButton: {
