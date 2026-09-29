@@ -41,11 +41,13 @@ if (fs.existsSync(envFile)) {
 
 console.log(`📝 Update Note: "${message}"`);
 if (apiUrl) {
-  console.log(`📡 Backend Target URL: \x1b[36${apiUrl}\x1b[0m`);
+  console.log(`📡 Backend Target URL: \x1b[36m${apiUrl}\x1b[0m`);
 }
 console.log('🚀 Publishing new code bundle to channel: preview...\n');
 
-const result = spawnSync('npx', ['eas-cli', 'update', '--channel', 'preview', '--message', message, '--non-interactive'], {
+const safeMessage = `"${message.replace(/"/g, '')}"`;
+
+const result = spawnSync('npx', ['eas-cli', 'update', '--channel', 'preview', '--message', safeMessage, '--non-interactive'], {
   cwd: mobileDir,
   stdio: 'inherit',
   shell: true,
