@@ -157,7 +157,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Bottom Section: Logged in User Profile Card */}
       {currentUser && (
-        <div className="mt-auto pt-2 w-full">
+        <div className="mt-auto pt-2 w-full shrink-0">
           <UserProfileCard
             isOpen={isOpen}
             currentUser={currentUser}

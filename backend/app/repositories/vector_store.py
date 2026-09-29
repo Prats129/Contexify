@@ -77,6 +77,26 @@ class VectorStoreRepository:
                 )
                 logger.info(f"Successfully indexed {len(chunk_ids)} chunks in ChromaDB for document_id '{document_id}'")
         except Exception as e:
+            err_msg = str(e)
+            if not self.use_pinecone and "expecting embedding with dimension of" in err_msg:
+                logger.warning(f"ChromaDB dimension mismatch: {err_msg}. Recreating collection for new embedding model...")
+                try:
+                    self.client.delete_collection("document_knowledge_base")
+                except Exception:
+                    pass
+                self.collection = self.client.get_or_create_collection(
+                    name="document_knowledge_base",
+                    metadata={"hnsw:space": "cosine"}
+                )
+                self.collection.add(
+                    ids=chunk_ids,
+                    embeddings=embeddings,
+                    documents=documents,
+                    metadatas=metadatas
+                )
+                logger.info(f"Successfully re-indexed {len(chunk_ids)} chunks in ChromaDB for document_id '{document_id}'")
+                return
+
             logger.error(f"Error indexing chunks in VectorStoreRepository: {str(e)}")
             raise e
 

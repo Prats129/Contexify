@@ -8,10 +8,19 @@ import type {
   StreamHandlers,
   SendOtpResponse,
   GoogleAuthRequest,
+  MediaAttachment,
 } from '../types';
 
 const BACKEND_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
 const API_BASE_URL = `${BACKEND_BASE}/api/v1`;
+
+export const formatMediaUrl = (url?: string): string => {
+  if (!url) return '';
+  if (url.startsWith('/')) {
+    return `${BACKEND_BASE}${url}`;
+  }
+  return url;
+};
 
 const formatUser = (user: User): User => {
   if (user && user.avatar_url && user.avatar_url.startsWith('/')) {
@@ -22,6 +31,24 @@ const formatUser = (user: User): User => {
   }
   return user;
 };
+
+export function extractErrorMessage(errData: any, fallback = 'Operation failed'): string {
+  if (!errData) return fallback;
+  if (typeof errData === 'string') return errData;
+  if (typeof errData.detail === 'string') return errData.detail;
+  if (Array.isArray(errData.detail) && errData.detail.length > 0) {
+    const messages = errData.detail.map((d: any) => {
+      if (typeof d === 'string') return d;
+      if (d && typeof d.msg === 'string') {
+        return d.msg.replace(/^Value error,\s*/i, '');
+      }
+      return JSON.stringify(d);
+    });
+    return messages.join('. ');
+  }
+  if (typeof errData.message === 'string') return errData.message;
+  return fallback;
+}
 
 export const apiService = {
   // --- User Authentication Endpoints ---
@@ -42,8 +69,8 @@ export const apiService = {
       }),
     });
     if (!response.ok) {
-      const err = await response.json().catch(() => ({ detail: 'Registration failed' }));
-      throw new Error(err.detail || 'Registration failed');
+      const err = await response.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Registration failed'));
     }
     return formatUser(await response.json());
   },
@@ -61,8 +88,8 @@ export const apiService = {
       }),
     });
     if (!response.ok) {
-      const err = await response.json().catch(() => ({ detail: 'Authentication failed' }));
-      throw new Error(err.detail || 'Invalid username/email or password');
+      const err = await response.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Invalid username/email or password'));
     }
     return formatUser(await response.json());
   },
@@ -74,8 +101,8 @@ export const apiService = {
       body: JSON.stringify(data),
     });
     if (!response.ok) {
-      const err = await response.json().catch(() => ({ detail: 'Google authentication failed' }));
-      throw new Error(err.detail || 'Google authentication failed');
+      const err = await response.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Google authentication failed'));
     }
     return formatUser(await response.json());
   },
@@ -89,8 +116,8 @@ export const apiService = {
       }),
     });
     if (!response.ok) {
-      const err = await response.json().catch(() => ({ detail: 'Failed to send verification code' }));
-      throw new Error(err.detail || 'Failed to send verification code');
+      const err = await response.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Failed to send verification code'));
     }
     return await response.json();
   },
@@ -108,8 +135,8 @@ export const apiService = {
       }),
     });
     if (!response.ok) {
-      const err = await response.json().catch(() => ({ detail: 'Invalid verification code' }));
-      throw new Error(err.detail || 'Invalid verification code');
+      const err = await response.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Invalid verification code'));
     }
     return formatUser(await response.json());
   },
@@ -123,8 +150,8 @@ export const apiService = {
       }),
     });
     if (!response.ok) {
-      const err = await response.json().catch(() => ({ detail: 'Failed to send password reset code' }));
-      throw new Error(err.detail || 'Failed to send password reset code');
+      const err = await response.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Failed to send password reset code'));
     }
     return await response.json();
   },
@@ -144,8 +171,8 @@ export const apiService = {
       }),
     });
     if (!response.ok) {
-      const err = await response.json().catch(() => ({ detail: 'Failed to reset password' }));
-      throw new Error(err.detail || 'Failed to reset password');
+      const err = await response.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Failed to reset password'));
     }
     return await response.json();
   },
@@ -173,8 +200,8 @@ export const apiService = {
       }),
     });
     if (!response.ok) {
-      const err = await response.json().catch(() => ({ detail: 'Profile update failed' }));
-      throw new Error(err.detail || 'Profile update failed');
+      const err = await response.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Profile update failed'));
     }
     return formatUser(await response.json());
   },
@@ -194,8 +221,8 @@ export const apiService = {
       }),
     });
     if (!response.ok) {
-      const err = await response.json().catch(() => ({ detail: 'Password change failed' }));
-      throw new Error(err.detail || 'Password change failed');
+      const err = await response.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Password change failed'));
     }
     return await response.json();
   },
@@ -253,7 +280,8 @@ export const apiService = {
   async createSession(
     userId: string,
     title: string = 'New Conversation',
-    mode: ChatMode = 'WEB_SEARCH'
+    mode: ChatMode = 'AUTO',
+    isTemporary: boolean = false
   ): Promise<ChatSession> {
     const response = await fetch(`${API_BASE_URL}/session/create`, {
       method: 'POST',
@@ -262,6 +290,7 @@ export const apiService = {
         user_id: userId,
         title,
         mode,
+        is_temporary: isTemporary,
       }),
     });
     if (!response.ok) {
@@ -276,7 +305,40 @@ export const apiService = {
     if (!response.ok) {
       throw new Error('Failed to fetch session history');
     }
-    return await response.json();
+    const data: SessionHistoryResponse = await response.json();
+    if (data && data.messages) {
+      data.messages = data.messages.map((msg) => {
+        if (msg.attachments) {
+          msg.attachments = msg.attachments.map((att) => ({
+            ...att,
+            url: formatMediaUrl(att.url),
+          }));
+        }
+        return msg;
+      });
+    }
+    return data;
+  },
+
+  async uploadMedia(file: File, sessionId?: string, userId?: string): Promise<MediaAttachment> {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (sessionId) formData.append('session_id', sessionId);
+    if (userId) formData.append('user_id', userId);
+
+    const response = await fetch(`${API_BASE_URL}/media/upload`, {
+      method: 'POST',
+      body: formData,
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Media upload failed'));
+    }
+    const attachment: MediaAttachment = await response.json();
+    return {
+      ...attachment,
+      url: formatMediaUrl(attachment.url),
+    };
   },
 
   async updateSessionTitle(sessionId: string, title: string): Promise<{ message: string; title: string }> {
@@ -381,9 +443,10 @@ export const apiService = {
     message: string,
     mode: ChatMode,
     handlers: StreamHandlers,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    attachments?: MediaAttachment[]
   ): Promise<void> {
-    const { onCitations, onToken, onError, onDone } = handlers;
+    const { onCitations, onMedia, onToken, onError, onDone } = handlers;
 
     try {
       const response = await fetch(`${API_BASE_URL}/chat/stream`, {
@@ -393,6 +456,7 @@ export const apiService = {
           session_id: sessionId,
           message,
           mode,
+          attachments: attachments || [],
         }),
         signal,
       });
@@ -445,6 +509,12 @@ export const apiService = {
 
               if (parsed.event === 'citations' && onCitations) {
                 onCitations(parsed.citations);
+              } else if (parsed.event === 'media' && onMedia) {
+                const mediaItem: MediaAttachment = {
+                  ...parsed.media,
+                  url: formatMediaUrl(parsed.media?.url),
+                };
+                onMedia(mediaItem);
               } else if (parsed.event === 'token' && onToken) {
                 onToken(parsed.data);
               } else if (parsed.event === 'error' && onError) {

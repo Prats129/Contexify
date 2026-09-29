@@ -8,6 +8,7 @@ class DocumentMetadata(BaseModel):
     file_type: str
     file_size_bytes: int
     total_chunks: int
+    storage_url: Optional[str] = None
     uploaded_at: str
 
 class DocumentUploadResponse(BaseModel):

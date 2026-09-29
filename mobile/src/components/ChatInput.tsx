@@ -15,7 +15,8 @@ import { Feather, Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import * as DocumentPicker from "expo-document-picker";
 import { getAppTheme, type AppTheme } from "../theme/colors";
-import type { DocumentMetadata, ChatMode } from "../types";
+import type { DocumentMetadata, ChatMode, MediaAttachment } from "../types";
+import { Image } from "react-native";
 
 interface ChatInputProps {
   query: string;
@@ -27,6 +28,8 @@ interface ChatInputProps {
   isUploading: boolean;
   documents: DocumentMetadata[];
   onDeleteDocument: (docId: string) => void;
+  attachedMedia?: MediaAttachment[];
+  onDeleteMedia?: (index: number) => void;
   currentMode: ChatMode;
   onToggleMode?: () => void;
   isDark?: boolean;
@@ -43,16 +46,40 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   isUploading,
   documents,
   onDeleteDocument,
+  attachedMedia = [],
+  onDeleteMedia,
   currentMode,
   onToggleMode,
   isDark = true,
   theme: customTheme,
 }) => {
   const theme = customTheme || getAppTheme(isDark);
+  const isAuto = currentMode === "AUTO";
   const isWeb = currentMode === "WEB_SEARCH";
-  const canSend = query.trim().length > 0 && !isSending;
+  const isImageGen = currentMode === "IMAGE_GENERATION";
+  const isVision = currentMode === "MULTIMODAL";
+  const isDoc = currentMode === "DOCUMENT_RAG";
+  const canSend =
+    (query.trim().length > 0 || attachedMedia.length > 0) && !isSending;
   const insets = useSafeAreaInsets();
   const [isKeyboardOpen, setIsKeyboardOpen] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  const handleContentSizeChange = (e: {
+    nativeEvent: { contentSize: { height: number } };
+  }) => {
+    const height = e.nativeEvent.contentSize.height;
+    if (height > 36 || query.includes("\n")) {
+      if (!isExpanded) setIsExpanded(true);
+    }
+  };
+
+  const handleTextChange = (text: string) => {
+    onChangeQuery(text);
+    if (!text.trim() || (!text.includes("\n") && text.trim().length < 15)) {
+      if (isExpanded) setIsExpanded(false);
+    }
+  };
 
   useEffect(() => {
     const showEvent =
@@ -76,6 +103,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       const res = await DocumentPicker.getDocumentAsync({
         type: [
+          "image/*",
           "application/pdf",
           "text/plain",
           "text/markdown",
@@ -102,6 +130,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const handleSendPress = () => {
     if (canSend) {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      setIsExpanded(false);
       onSend();
     }
   };
@@ -110,6 +139,125 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     onStop();
   };
+
+  const renderAttachButton = () => (
+    <TouchableOpacity
+      style={[styles.attachButton, { backgroundColor: theme.borderSubtle }]}
+      onPress={handlePickDocument}
+      disabled={isUploading}
+      activeOpacity={0.7}
+    >
+      {isUploading ? (
+        <ActivityIndicator size={14} color={theme.primary} />
+      ) : (
+        <Feather name="plus" size={18} color={theme.textMain} />
+      )}
+    </TouchableOpacity>
+  );
+
+  const getModeDetails = () => {
+    if (isAuto)
+      return {
+        icon: "sparkles",
+        label: "Auto",
+        color: "#f59e0b",
+        bg: "rgba(245, 158, 11, 0.14)",
+        border: "rgba(245, 158, 11, 0.3)",
+      };
+    if (isWeb)
+      return {
+        icon: "globe-outline",
+        label: "Web",
+        color: theme.emerald,
+        bg: theme.emeraldLight,
+        border: theme.emeraldBorder,
+      };
+    if (isImageGen)
+      return {
+        icon: "color-palette-outline",
+        label: "Image Gen",
+        color: "#ec4899",
+        bg: "rgba(236, 72, 153, 0.14)",
+        border: "rgba(236, 72, 153, 0.3)",
+      };
+    if (isVision)
+      return {
+        icon: "eye-outline",
+        label: "Vision",
+        color: "#8b5cf6",
+        bg: "rgba(139, 92, 246, 0.14)",
+        border: "rgba(139, 92, 246, 0.3)",
+      };
+    return {
+      icon: "document-text-outline",
+      label: "Doc",
+      color: theme.primary,
+      bg: theme.primaryLight,
+      border: theme.primaryBorder,
+    };
+  };
+
+  const modeDetails = getModeDetails();
+
+  const renderRightActions = () => (
+    <View style={styles.rightActions}>
+      {onToggleMode && (
+        <TouchableOpacity
+          style={[
+            styles.modeChip,
+            {
+              backgroundColor: modeDetails.bg,
+              borderColor: modeDetails.border,
+            },
+          ]}
+          onPress={() => {
+            Haptics.selectionAsync();
+            onToggleMode();
+          }}
+          activeOpacity={0.7}
+        >
+          <Ionicons
+            name={modeDetails.icon as any}
+            size={12}
+            color={modeDetails.color}
+          />
+          <Text style={[styles.modeChipText, { color: modeDetails.color }]}>
+            {modeDetails.label}
+          </Text>
+        </TouchableOpacity>
+      )}
+
+      {/* Action: Send or Stop Button */}
+      {isSending ? (
+        <TouchableOpacity
+          style={[styles.stopButton, { backgroundColor: theme.danger }]}
+          onPress={handleStopPress}
+          activeOpacity={0.8}
+        >
+          <View style={styles.stopSquare} />
+        </TouchableOpacity>
+      ) : (
+        <TouchableOpacity
+          style={[
+            styles.sendButton,
+            {
+              backgroundColor: canSend ? theme.primary : theme.borderSubtle,
+              opacity: canSend ? 1 : 0.4,
+            },
+          ]}
+          onPress={handleSendPress}
+          disabled={!canSend}
+          activeOpacity={0.8}
+        >
+          <Feather
+            name="arrow-up"
+            size={18}
+            color={canSend ? "#ffffff" : theme.textMuted}
+          />
+        </TouchableOpacity>
+      )}
+    </View>
+  );
 
   return (
     <View
@@ -125,8 +273,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         },
       ]}
     >
-      {/* Attached Documents Row */}
-      {(documents.length > 0 || isUploading) && (
+      {/* Attached Documents & Media Row */}
+      {(documents.length > 0 || attachedMedia.length > 0 || isUploading) && (
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
@@ -144,11 +292,54 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             >
               <ActivityIndicator size="small" color={theme.primary} />
               <Text style={[styles.chipText, { color: theme.primary }]}>
-                Vectorizing file...
+                Uploading & processing...
               </Text>
             </View>
           )}
 
+          {/* Image / Media Attachments */}
+          {attachedMedia.map((media, idx) => (
+            <View
+              key={media.url || `media_${idx}`}
+              style={[
+                styles.mediaChip,
+                {
+                  backgroundColor: theme.bgInput,
+                  borderColor: theme.borderSubtle,
+                },
+              ]}
+            >
+              {media.url ? (
+                <Image
+                  source={{ uri: media.url }}
+                  style={styles.mediaThumb}
+                  resizeMode="cover"
+                />
+              ) : (
+                <Ionicons
+                  name="image-outline"
+                  size={14}
+                  color={theme.primary}
+                />
+              )}
+              <Text
+                style={[styles.chipText, { color: theme.textMain }]}
+                numberOfLines={1}
+              >
+                {media.file_name || `Image ${idx + 1}`}
+              </Text>
+              {onDeleteMedia && (
+                <TouchableOpacity
+                  onPress={() => onDeleteMedia(idx)}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Feather name="x" size={12} color={theme.textMuted} />
+                </TouchableOpacity>
+              )}
+            </View>
+          ))}
+
+          {/* Documents */}
           {documents.map((doc) => (
             <View
               key={doc.document_id}
@@ -178,112 +369,55 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         </ScrollView>
       )}
 
-      {/* Main Input Pill Bar */}
+      {/* Main Input Container (Pill when closed, Card when open) */}
       <View
         style={[
-          styles.inputContainer,
+          isExpanded ? styles.cardContainer : styles.pillContainer,
           {
             backgroundColor: theme.bgInput,
             borderColor: theme.borderSubtle,
           },
         ]}
       >
-        {/* Plus Attach File Button */}
-        <TouchableOpacity
-          style={[styles.attachButton, { backgroundColor: theme.borderSubtle }]}
-          onPress={handlePickDocument}
-          disabled={isUploading}
-          activeOpacity={0.7}
-        >
-          {isUploading ? (
-            <ActivityIndicator size={14} color={theme.primary} />
-          ) : (
-            <Feather name="plus" size={18} color={theme.textMain} />
-          )}
-        </TouchableOpacity>
-
-        {/* Mode Switcher Pill */}
-        {onToggleMode && (
-          <TouchableOpacity
-            style={[
-              styles.modeChip,
-              {
-                backgroundColor: isWeb
-                  ? theme.emeraldLight
-                  : theme.primaryLight,
-                borderColor: isWeb ? theme.emeraldBorder : theme.primaryBorder,
-              },
-            ]}
-            onPress={() => {
-              Haptics.selectionAsync();
-              onToggleMode();
-            }}
-            activeOpacity={0.7}
-          >
-            <Ionicons
-              name={isWeb ? "globe-outline" : "document-text-outline"}
-              size={12}
-              color={isWeb ? theme.emerald : theme.primary}
-            />
-            <Text
-              style={[
-                styles.modeChipText,
-                { color: isWeb ? theme.emerald : theme.primary },
-              ]}
-            >
-              {isWeb ? "Web" : "Doc"}
-            </Text>
-          </TouchableOpacity>
-        )}
+        {/* If Collapsed: Attach Button on Left */}
+        {!isExpanded && renderAttachButton()}
 
         {/* Text Input */}
         <TextInput
           style={[
-            styles.textInput,
+            isExpanded ? styles.textInputExpanded : styles.textInputCollapsed,
             {
               color: theme.textMain,
             },
           ]}
           placeholder={
-            currentMode === "WEB_SEARCH"
-              ? "Ask anything"
-              : "Ask questions about documents"
+            isImageGen
+              ? "Describe image..."
+              : isVision
+                ? "Ask about image..."
+                : isDoc
+                  ? "Ask about docs..."
+                  : isWeb
+                    ? "Search web..."
+                    : "Ask anything..."
           }
           placeholderTextColor={theme.textMuted}
           multiline
           value={query}
-          onChangeText={onChangeQuery}
+          onChangeText={handleTextChange}
+          onContentSizeChange={handleContentSizeChange}
           maxLength={4000}
         />
 
-        {/* Action: Send or Stop Button */}
-        {isSending ? (
-          <TouchableOpacity
-            style={[styles.stopButton, { backgroundColor: theme.danger }]}
-            onPress={handleStopPress}
-            activeOpacity={0.8}
-          >
-            <View style={styles.stopSquare} />
-          </TouchableOpacity>
-        ) : (
-          <TouchableOpacity
-            style={[
-              styles.sendButton,
-              {
-                backgroundColor: canSend ? theme.primary : theme.borderSubtle,
-                opacity: canSend ? 1 : 0.4,
-              },
-            ]}
-            onPress={handleSendPress}
-            disabled={!canSend}
-            activeOpacity={0.8}
-          >
-            <Feather
-              name="arrow-up"
-              size={18}
-              color={canSend ? "#ffffff" : theme.textMuted}
-            />
-          </TouchableOpacity>
+        {/* If Collapsed: Right Actions */}
+        {!isExpanded && renderRightActions()}
+
+        {/* If Expanded: Bottom Actions Row */}
+        {isExpanded && (
+          <View style={styles.bottomBar}>
+            {renderAttachButton()}
+            {renderRightActions()}
+          </View>
         )}
       </View>
     </View>
@@ -310,6 +444,21 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     borderWidth: 1,
   },
+  mediaChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+    borderRadius: 14,
+    borderWidth: 1,
+    maxWidth: 180,
+  },
+  mediaThumb: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+  },
   docChip: {
     flexDirection: "row",
     alignItems: "center",
@@ -324,7 +473,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "600",
   },
-  inputContainer: {
+  pillContainer: {
     flexDirection: "row",
     alignItems: "center",
     borderRadius: 24,
@@ -332,6 +481,43 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 4,
     minHeight: 50,
+    gap: 6,
+  },
+  cardContainer: {
+    borderRadius: 24,
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingTop: 8,
+    paddingBottom: 6,
+  },
+  textInputCollapsed: {
+    flex: 1,
+    fontSize: 16,
+    lineHeight: 22,
+    maxHeight: 40,
+    paddingVertical: 4,
+    paddingHorizontal: 4,
+  },
+  textInputExpanded: {
+    width: "100%",
+    fontSize: 16,
+    lineHeight: 22,
+    minHeight: 38,
+    maxHeight: 120,
+    paddingHorizontal: 8,
+    paddingTop: 2,
+    paddingBottom: 4,
+    textAlignVertical: "top",
+  },
+  bottomBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingTop: 4,
+  },
+  rightActions: {
+    flexDirection: "row",
+    alignItems: "center",
     gap: 6,
   },
   attachButton: {
@@ -344,23 +530,15 @@ const styles = StyleSheet.create({
   modeChip: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 4,
-    paddingHorizontal: 9,
-    paddingVertical: 5.5,
+    gap: 3.5,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
     borderRadius: 12,
     borderWidth: 1,
   },
   modeChipText: {
-    fontSize: 12,
+    fontSize: 11.5,
     fontWeight: "700",
-  },
-  textInput: {
-    flex: 1,
-    fontSize: 16,
-    lineHeight: 22,
-    maxHeight: 110,
-    paddingVertical: 6,
-    paddingHorizontal: 4,
   },
   sendButton: {
     width: 34,

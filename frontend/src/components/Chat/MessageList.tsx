@@ -1,14 +1,27 @@
-import React, { useEffect, useRef, useState, useCallback, useMemo } from "react";
+import React, {
+  useEffect,
+  useRef,
+  useState,
+  useCallback,
+  useMemo,
+} from "react";
 import {
   LuSparkles,
   LuListTodo,
   LuCpu,
   LuTarget,
   LuArrowDown,
+  LuGhost,
 } from "react-icons/lu";
 import { MessageItem } from "./MessageItem";
 import { ChatPromptTimeline } from "./ChatPromptTimeline";
-import type { Message, StreamingMessageState, User, Citation } from "../../types";
+import type {
+  Message,
+  StreamingMessageState,
+  User,
+  Citation,
+  MediaAttachment,
+} from "../../types";
 
 interface MessageListProps {
   messages: Message[];
@@ -16,8 +29,15 @@ interface MessageListProps {
   onSelectPrompt: (prompt: string) => void;
   currentUser?: User | null;
   activeSourcesMessageId?: string;
-  onToggleSources?: (msgId: string, citations: Citation[], queryTitle?: string) => void;
+  onToggleSources?: (
+    msgId: string,
+    citations: Citation[],
+    queryTitle?: string,
+  ) => void;
   activeSources?: boolean;
+  isTemporaryChat?: boolean;
+  onToggleTemporaryChat?: () => void;
+  onUseAsReference?: (media: MediaAttachment) => void;
 }
 
 export const MessageList: React.FC<MessageListProps> = ({
@@ -28,6 +48,9 @@ export const MessageList: React.FC<MessageListProps> = ({
   activeSourcesMessageId,
   onToggleSources,
   activeSources,
+  isTemporaryChat = false,
+  onToggleTemporaryChat,
+  onUseAsReference,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollEndRef = useRef<HTMLDivElement>(null);
@@ -35,7 +58,9 @@ export const MessageList: React.FC<MessageListProps> = ({
   const prevMsgCountRef = useRef(messages.length);
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [activePromptId, setActivePromptId] = useState<string | null>(null);
-  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
+  const [highlightedMessageId, setHighlightedMessageId] = useState<
+    string | null
+  >(null);
   const highlightTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Extract all user prompt items for the timeline navigation
@@ -174,10 +199,63 @@ export const MessageList: React.FC<MessageListProps> = ({
         className="flex-1 overflow-y-auto px-2 sm:px-6 py-4 md:py-6 w-full flex flex-col items-center"
       >
         <div
-          className={`w-full flex flex-col gap-5 ${activeSources ? 'max-w-4xl lg:mr-auto lg:ml-4' : 'max-w-3xl'
-            }`}
+          className={`w-full flex flex-col gap-5 ${
+            activeSources ? "max-w-4xl lg:mr-auto lg:ml-4" : "max-w-3xl"
+          }`}
         >
-          {showWelcome && (
+          {/* ChatGPT-style Dedicated Temporary Chat Screen */}
+          {isTemporaryChat && showWelcome ? (
+            <div className="my-auto flex flex-col items-center text-center p-8 sm:p-10 border border-amber-500/30 bg-amber-500/5 rounded-3xl max-w-xl mx-auto shadow-xl animate-in fade-in zoom-in-95">
+              <div className="w-16 h-16 rounded-full bg-amber-500/15 border border-amber-500/40 flex items-center justify-center text-amber-600 text-3xl mb-4 shadow-xs">
+                <LuGhost size={32} className="animate-pulse" />
+              </div>
+              <h2 className="text-xl sm:text-2xl font-bold text-(--text-main) mb-2">
+                Temporary Chat
+              </h2>
+              <p className="text-xs sm:text-sm text-(--text-muted) leading-relaxed mb-5 max-w-md">
+                This chat won&apos;t appear in history, use or create memories,
+                or be used to train our models. All conversation messages and
+                document embeddings are permanently deleted after 3 days.
+              </p>
+
+              {onToggleTemporaryChat && (
+                <button
+                  type="button"
+                  onClick={onToggleTemporaryChat}
+                  className="px-4 py-2 rounded-full text-xs font-semibold bg-(--border-subtle) hover:bg-(--border-hover) text-(--text-main) border border-(--border-subtle) cursor-pointer transition-all hover:scale-105 active:scale-95 shadow-xs mb-6"
+                >
+                  Turn off Temporary Chat
+                </button>
+              )}
+
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                <button
+                  type="button"
+                  className="flex items-center gap-2 px-3 py-2 bg-(--bg-card) hover:bg-(--border-subtle) border border-amber-500/25 text-(--text-main) rounded-xl text-xs cursor-pointer transition-colors shadow-2xs"
+                  onClick={() =>
+                    onSelectPrompt(
+                      "Explain how zero-trust architecture works in modern cloud networks.",
+                    )
+                  }
+                >
+                  <LuSparkles size={13} className="text-amber-600" />
+                  Quick research
+                </button>
+                <button
+                  type="button"
+                  className="flex items-center gap-2 px-3 py-2 bg-(--bg-card) hover:bg-(--border-subtle) border border-amber-500/25 text-(--text-main) rounded-xl text-xs cursor-pointer transition-colors shadow-2xs"
+                  onClick={() =>
+                    onSelectPrompt(
+                      "Review this sensitive text and highlight potential security risks.",
+                    )
+                  }
+                >
+                  <LuSparkles size={13} className="text-amber-600" />
+                  Confidential review
+                </button>
+              </div>
+            </div>
+          ) : showWelcome ? (
             <div className="my-auto flex flex-col items-center text-center p-8 border border-(--border-subtle) bg-(--bg-card) rounded-3xl max-w-2xl mx-auto shadow-xl">
               <div className="w-12 h-12 rounded-2xl bg-primary-light-theme border border-primary-theme flex items-center justify-center text-primary-theme text-2xl mb-4">
                 <LuSparkles size={24} />
@@ -186,8 +264,8 @@ export const MessageList: React.FC<MessageListProps> = ({
                 Welcome to Enterprise Knowledge AI
               </h2>
               <p className="text-xs md:text-sm text-(--text-muted) leading-relaxed mb-6 max-w-lg">
-                Upload documents to ask grounded questions with verifiable source
-                citations, or switch to Live Web Search mode.
+                Upload documents to ask grounded questions with verifiable
+                source citations, or switch to Live Web Search mode.
               </p>
 
               <div className="flex flex-wrap items-center justify-center gap-2">
@@ -212,7 +290,8 @@ export const MessageList: React.FC<MessageListProps> = ({
                     )
                   }
                 >
-                  <LuCpu size={14} className="text-primary-theme" /> Key concepts
+                  <LuCpu size={14} className="text-primary-theme" /> Key
+                  concepts
                 </button>
                 <button
                   type="button"
@@ -228,7 +307,7 @@ export const MessageList: React.FC<MessageListProps> = ({
                 </button>
               </div>
             </div>
-          )}
+          ) : null}
 
           {messages.map((msg, idx) => {
             let precedingUserQuery = "";
@@ -248,18 +327,26 @@ export const MessageList: React.FC<MessageListProps> = ({
                 role={msg.role}
                 content={msg.content}
                 citations={msg.citations}
+                attachments={msg.attachments}
                 isHighlighted={highlightedMessageId === msg.id}
                 userAvatarUrl={currentUser?.avatar_url}
                 userAvatarColor={currentUser?.avatar_color}
-                userDisplayName={currentUser?.display_name || currentUser?.username}
+                userDisplayName={
+                  currentUser?.display_name || currentUser?.username
+                }
                 queryTitle={precedingUserQuery}
                 isSourcesActive={isThisSourceActive}
                 onToggleSources={
                   onToggleSources && msg.citations && msg.citations.length > 0
                     ? () =>
-                      onToggleSources(msg.id, msg.citations!, precedingUserQuery)
+                        onToggleSources(
+                          msg.id,
+                          msg.citations!,
+                          precedingUserQuery,
+                        )
                     : undefined
                 }
+                onUseAsReference={onUseAsReference}
               />
             );
           })}
@@ -270,21 +357,23 @@ export const MessageList: React.FC<MessageListProps> = ({
               isStreaming={true}
               content={streamingMessage.content}
               citations={streamingMessage.citations}
+              attachments={streamingMessage.attachments}
               isHighlighted={false}
               queryTitle={messages[messages.length - 1]?.content || ""}
               isSourcesActive={activeSourcesMessageId === "streaming"}
               onToggleSources={
                 onToggleSources &&
-                  streamingMessage.citations &&
-                  streamingMessage.citations.length > 0
+                streamingMessage.citations &&
+                streamingMessage.citations.length > 0
                   ? (cits) =>
-                    onToggleSources(
-                      "streaming",
-                      cits,
-                      messages[messages.length - 1]?.content || "",
-                    )
+                      onToggleSources(
+                        "streaming",
+                        cits,
+                        messages[messages.length - 1]?.content || "",
+                      )
                   : undefined
               }
+              onUseAsReference={onUseAsReference}
             />
           )}
 
@@ -299,7 +388,9 @@ export const MessageList: React.FC<MessageListProps> = ({
         onNavigateToPrompt={scrollToPrompt}
         onNavigatePrev={handleNavigatePrev}
         onNavigateNext={handleNavigateNext}
-        hasPrev={activeIndex > 0 || (activeIndex === -1 && userPrompts.length > 0)}
+        hasPrev={
+          activeIndex > 0 || (activeIndex === -1 && userPrompts.length > 0)
+        }
         hasNext={activeIndex < userPrompts.length - 1}
       />
 

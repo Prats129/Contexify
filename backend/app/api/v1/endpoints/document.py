@@ -38,14 +38,32 @@ async def upload_document(
             detail=f"Unsupported file type '{ext}'. Allowed formats: {', '.join(ALLOWED_EXTENSIONS)}"
         )
 
-    # Save temp file
+    # Read file content once for disk caching and object storage upload
+    try:
+        content = await file.read()
+    except Exception as e:
+        logger.error(f"Failed to read uploaded file: {e}")
+        raise HTTPException(status_code=500, detail="Failed to read uploaded file.")
+
     temp_file_path = settings.UPLOAD_DIR / f"{session_id}_{filename}"
     try:
         with open(temp_file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+            buffer.write(content)
     except Exception as e:
-        logger.error(f"Failed to save file: {e}")
+        logger.error(f"Failed to save temp file: {e}")
         raise HTTPException(status_code=500, detail="Failed to save uploaded file.")
+
+    storage_url = ""
+    try:
+        from app.services.storage_service import storage_service
+        storage_key = f"documents/{session_id}/{filename}"
+        storage_url, _ = storage_service.upload_file(
+            file_bytes=content,
+            destination_key=storage_key,
+            content_type=file.content_type or "application/octet-stream"
+        )
+    except Exception as e:
+        logger.warning(f"Could not upload raw document to storage service: {e}")
 
     try:
         # Ingest and Index
@@ -53,7 +71,8 @@ async def upload_document(
             file_path=temp_file_path,
             filename=filename,
             session_id=session_id,
-            user_id=user_id
+            user_id=user_id,
+            storage_url=storage_url
         )
 
         return DocumentUploadResponse(

@@ -2,6 +2,7 @@
   "expo": {
     "name": "Contexify AI",
     "slug": "contexify",
+    "scheme": "contexify",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -37,6 +38,10 @@
       "eas": {
         "projectId": "0f030ae9-7389-45b8-962a-8f4c6d73c5b7"
       }
-    }
+    },
+    "plugins": [
+      "expo-web-browser",
+      "@react-native-google-signin/google-signin"
+    ]
   }
 }

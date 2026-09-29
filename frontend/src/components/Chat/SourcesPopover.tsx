@@ -1,4 +1,4 @@
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect } from "react";
 import {
   LuChevronDown,
   LuChevronRight,
@@ -7,8 +7,8 @@ import {
   LuFileText,
   LuLandmark,
   LuX,
-} from 'react-icons/lu';
-import type { Citation } from '../../types';
+} from "react-icons/lu";
+import type { Citation } from "../../types";
 
 interface SourcesPopoverProps {
   isOpen: boolean;
@@ -19,25 +19,33 @@ interface SourcesPopoverProps {
   onToggleCollapse: () => void;
 }
 
-function extractDomainAndUrl(c: Citation): { domain: string; url: string; displaySnippet: string } {
-  let url = '';
-  let domain = '';
+function extractDomainAndUrl(c: Citation): {
+  domain: string;
+  url: string;
+  displaySnippet: string;
+} {
+  let url = "";
+  let domain = "";
   let displaySnippet = c.snippet;
 
-  const lines = c.snippet.split('\n');
-  if (lines[0].startsWith('http://') || lines[0].startsWith('https://')) {
+  const lines = c.snippet.split("\n");
+  if (lines[0].startsWith("http://") || lines[0].startsWith("https://")) {
     url = lines[0].trim();
-    displaySnippet = lines.slice(1).join(' ').trim();
-  } else if (c.document_id && (c.document_id.startsWith('http://') || c.document_id.startsWith('https://'))) {
+    displaySnippet = lines.slice(1).join(" ").trim();
+  } else if (
+    c.document_id &&
+    (c.document_id.startsWith("http://") ||
+      c.document_id.startsWith("https://"))
+  ) {
     url = c.document_id;
   }
 
   if (url) {
     try {
       const parsed = new URL(url);
-      domain = parsed.hostname.replace(/^www\./, '');
+      domain = parsed.hostname.replace(/^www\./, "");
     } catch {
-      domain = 'web';
+      domain = "web";
     }
   }
 
@@ -63,7 +71,7 @@ const CitationCard: React.FC<CitationItemProps> = ({ citation: c }) => {
               alt={domain}
               className="w-4 h-4 rounded-full shrink-0 object-contain"
               onError={(e) => {
-                (e.currentTarget as HTMLElement).style.display = 'none';
+                (e.currentTarget as HTMLElement).style.display = "none";
               }}
             />
           ) : isWeb ? (
@@ -73,9 +81,14 @@ const CitationCard: React.FC<CitationItemProps> = ({ citation: c }) => {
           )}
 
           <span className="font-medium text-(--text-muted) truncate text-xs">
-            {domain || c.filename || 'Source'}
+            {domain || c.filename || "Source"}
           </span>
-          {isWeb && <LuLandmark size={11} className="text-(--text-muted) opacity-60 shrink-0" />}
+          {isWeb && (
+            <LuLandmark
+              size={11}
+              className="text-(--text-muted) opacity-60 shrink-0"
+            />
+          )}
         </div>
 
         {!isWeb && c.page_number && (
@@ -123,12 +136,12 @@ export const SourcesPopover: React.FC<SourcesPopoverProps> = ({
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && isOpen) {
+      if (e.key === "Escape" && isOpen) {
         onHide();
       }
     };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isOpen, onHide]);
 
   if (!isOpen || !citations || citations.length === 0) return null;
@@ -153,7 +166,10 @@ export const SourcesPopover: React.FC<SourcesPopoverProps> = ({
           aria-label="Sources and Citations"
         >
           {/* Pull Handle Indicator */}
-          <div className="pt-3 pb-1 flex justify-center cursor-grab" onClick={onHide}>
+          <div
+            className="pt-3 pb-1 flex justify-center cursor-grab"
+            onClick={onHide}
+          >
             <div className="w-10 h-1 rounded-full bg-(--text-muted)/30" />
           </div>
 
@@ -161,7 +177,9 @@ export const SourcesPopover: React.FC<SourcesPopoverProps> = ({
           <div className="px-5 py-3 border-b border-(--border-subtle) flex items-center justify-between">
             <div className="flex flex-col min-w-0 mr-3">
               <div className="flex items-center gap-2">
-                <span className="text-sm font-bold text-(--text-main)">Sources & Citations</span>
+                <span className="text-sm font-bold text-(--text-main)">
+                  Sources & Citations
+                </span>
                 <span className="text-xs px-2 py-0.5 rounded-full bg-primary-light-theme text-primary-theme font-semibold">
                   {citations.length}
                 </span>
@@ -232,7 +250,8 @@ export const SourcesPopover: React.FC<SourcesPopoverProps> = ({
                           alt=""
                           className="w-3 h-3 object-contain"
                           onError={(e) => {
-                            (e.currentTarget as HTMLElement).style.display = 'none';
+                            (e.currentTarget as HTMLElement).style.display =
+                              "none";
                           }}
                         />
                       ) : (
@@ -252,13 +271,13 @@ export const SourcesPopover: React.FC<SourcesPopoverProps> = ({
           </div>
         ) : (
           /* Expanded State: Full vertical card with sources list */
-          <div
-            className="w-80 sm:w-88 rounded-2xl bg-(--bg-card) border border-(--border-subtle) shadow-2xl overflow-hidden flex flex-col z-20 animate-[fadeIn_0.15s_ease-out]"
-          >
+          <div className="w-80 sm:w-88 rounded-2xl bg-(--bg-card) border border-(--border-subtle) shadow-2xl overflow-hidden flex flex-col z-20 animate-[fadeIn_0.15s_ease-out]">
             {/* Header */}
             <div className="px-4 py-2.5 border-b border-(--border-subtle) flex flex-col">
               <div className="flex items-center justify-between">
-                <span className="text-sm font-bold text-(--text-main)">Sources</span>
+                <span className="text-sm font-bold text-(--text-main)">
+                  Sources
+                </span>
                 <button
                   type="button"
                   onClick={onToggleCollapse}
@@ -271,7 +290,7 @@ export const SourcesPopover: React.FC<SourcesPopoverProps> = ({
               </div>
 
               {queryTitle && (
-                <p className="text-xs text-slate-400 truncate font-normal">
+                <p className="text-xs text-(--text-muted) truncate font-normal">
                   Results for &ldquo;{queryTitle}&rdquo;
                 </p>
               )}

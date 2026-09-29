@@ -2,11 +2,14 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 import type {
   User,
+  GoogleAuthRequest,
   ChatSession,
   ChatMode,
   SessionHistoryResponse,
   DocumentMetadata,
   Citation,
+  MediaAttachment,
+  StreamHandlers,
 } from '../types';
 
 // Default development IP matching your current Wi-Fi network (10.66.137.54:8001)
@@ -52,16 +55,95 @@ export const resetApiBaseUrl = async () => {
   await AsyncStorage.removeItem('contexify_server_url');
 };
 
-const getEndpoint = async (path: string): Promise<string> => {
+const getCleanHost = async (): Promise<string> => {
   const base = await getApiBaseUrl();
-  return `${base}/api/v1${path}`;
+  return base.replace(/\/api\/v1\/?$/, '').replace(/\/+$/, '');
 };
 
-export interface StreamHandlers {
-  onToken: (token: string) => void;
-  onCitations: (citations: Citation[]) => void;
-  onComplete: () => void;
-  onError: (err: string) => void;
+const getEndpoint = async (path: string): Promise<string> => {
+  const host = await getCleanHost();
+  const cleanPath = path.startsWith('/') ? path : `/${path}`;
+  return `${host}/api/v1${cleanPath}`;
+};
+
+/**
+ * Resolves a ChatMode safely without downgrading user intent.
+ * Auto-escalates to MULTIMODAL if media attachments are present in text-only modes.
+ */
+export const resolveBackendMode = (
+  requestedMode?: ChatMode | string,
+  attachments?: MediaAttachment[]
+): string => {
+  const norm = (requestedMode || 'AUTO').toUpperCase();
+
+  // If attachments are present in text modes, route to MULTIMODAL
+  if (attachments && attachments.length > 0 && (norm === 'WEB_SEARCH' || norm === 'DOCUMENT_RAG')) {
+    return 'MULTIMODAL';
+  }
+
+  return norm;
+};
+
+/**
+ * Upload multipart form data using native XMLHttpRequest.
+ * Bypasses Expo 57's WinterCG fetch polyfill which throws
+ * "Unsupported FormDataPart implementation" when passing React Native's { uri, name, type } object.
+ */
+function uploadMultipart<T>(url: string, formData: FormData): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', url, true);
+    xhr.timeout = 60000;
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const data = JSON.parse(xhr.responseText);
+          resolve(data);
+        } catch {
+          resolve(xhr.responseText as any);
+        }
+      } else {
+        let errorDetail = `Upload failed (${xhr.status})`;
+        try {
+          const err = JSON.parse(xhr.responseText);
+          if (err.detail) {
+            errorDetail = typeof err.detail === 'string' ? err.detail : JSON.stringify(err.detail);
+          }
+        } catch {}
+        reject(new Error(errorDetail));
+      }
+    };
+
+    xhr.onerror = () => {
+      reject(new Error('Network error during file upload. Please verify backend connection.'));
+    };
+
+    xhr.ontimeout = () => {
+      reject(new Error('File upload timed out. Please try again.'));
+    };
+
+    xhr.send(formData);
+  });
+}
+
+
+export function extractErrorMessage(errData: any, fallback = 'Operation failed'): string {
+  if (!errData) return fallback;
+  if (typeof errData === 'string') return errData;
+  if (typeof errData.detail === 'string') return errData.detail;
+  if (Array.isArray(errData.detail) && errData.detail.length > 0) {
+    const messages = errData.detail.map((d: any) => {
+      if (typeof d === 'string') return d;
+      if (d && typeof d.msg === 'string') {
+        return d.msg.replace(/^Value error,\s*/i, '');
+      }
+      return JSON.stringify(d);
+    });
+    return messages.join('. ');
+  }
+  if (typeof errData.message === 'string') return errData.message;
+  return fallback;
 }
 
 export const apiService = {
@@ -95,8 +177,8 @@ export const apiService = {
       }),
     });
     if (!res.ok) {
-      const err = await res.json().catch(() => ({ detail: 'Registration failed' }));
-      throw new Error(err.detail || 'Registration failed');
+      const err = await res.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Registration failed'));
     }
     return res.json();
   },
@@ -112,8 +194,22 @@ export const apiService = {
       }),
     });
     if (!res.ok) {
-      const err = await res.json().catch(() => ({ detail: 'Invalid credentials' }));
-      throw new Error(err.detail || 'Invalid credentials');
+      const err = await res.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Invalid credentials'));
+    }
+    return res.json();
+  },
+
+  async loginWithGoogle(data: GoogleAuthRequest): Promise<User> {
+    const url = await getEndpoint('/user/auth/google');
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Google authentication failed'));
     }
     return res.json();
   },
@@ -126,8 +222,8 @@ export const apiService = {
       body: JSON.stringify({ email_or_username: emailOrUsername }),
     });
     if (!res.ok) {
-      const err = await res.json().catch(() => ({ detail: 'Failed to send OTP' }));
-      throw new Error(err.detail || 'Failed to send OTP');
+      const err = await res.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Failed to send OTP'));
     }
     return res.json();
   },
@@ -143,8 +239,8 @@ export const apiService = {
       }),
     });
     if (!res.ok) {
-      const err = await res.json().catch(() => ({ detail: 'Invalid or expired OTP' }));
-      throw new Error(err.detail || 'Invalid or expired OTP');
+      const err = await res.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Invalid or expired OTP'));
     }
     return res.json();
   },
@@ -165,8 +261,8 @@ export const apiService = {
       }),
     });
     if (!res.ok) {
-      const err = await res.json().catch(() => ({ detail: 'Failed to update profile' }));
-      throw new Error(err.detail || 'Failed to update profile');
+      const err = await res.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Failed to update profile'));
     }
     return res.json();
   },
@@ -187,37 +283,53 @@ export const apiService = {
       }),
     });
     if (!res.ok) {
-      const err = await res.json().catch(() => ({ detail: 'Failed to change password' }));
-      throw new Error(err.detail || 'Failed to change password');
+      const err = await res.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Failed to change password'));
     }
     return res.json();
+  },
+
+  async getCurrentUser(userId: string): Promise<User | null> {
+    try {
+      const url = await getEndpoint(`/user/me?user_id=${encodeURIComponent(userId)}`);
+      const res = await fetch(url);
+      if (!res.ok) return null;
+      return res.json();
+    } catch {
+      return null;
+    }
   },
 
   async uploadAvatar(
     userId: string,
     fileUri: string,
     fileName: string,
-    mimeType: string = 'image/png'
+    mimeType: string = 'image/jpeg'
   ): Promise<User> {
+    let safeName = fileName || 'avatar.jpg';
+    if (!/\.(png|jpe?g|webp|gif)$/i.test(safeName)) {
+      const ext = mimeType.includes('png')
+        ? '.png'
+        : mimeType.includes('webp')
+          ? '.webp'
+          : mimeType.includes('gif')
+            ? '.gif'
+            : '.jpg';
+      safeName = `${safeName}${ext}`;
+    }
+
+    // Native XMLHttpRequest multipart upload directly to /user/avatar.
+    // Universally supported by Render and local backends. Bypasses Expo 57 fetch polyfill.
     const url = await getEndpoint('/user/avatar');
     const formData = new FormData();
     formData.append('user_id', userId);
     formData.append('file', {
       uri: fileUri,
-      name: fileName,
-      type: mimeType,
+      name: safeName,
+      type: mimeType || 'image/jpeg',
     } as any);
 
-    const res = await fetch(url, {
-      method: 'POST',
-      body: formData,
-    });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ detail: 'Failed to upload profile photo' }));
-      throw new Error(err.detail || 'Failed to upload profile photo');
-    }
-    return res.json();
+    return uploadMultipart<User>(url, formData);
   },
 
   async deleteAvatar(userId: string): Promise<User> {
@@ -233,10 +345,25 @@ export const apiService = {
   },
 
   async resolveAvatarUrl(avatarUrl?: string | null): Promise<string | null> {
-    if (!avatarUrl) return null;
-    if (avatarUrl.startsWith('http')) return avatarUrl;
-    const base = await getApiBaseUrl();
-    return `${base}${avatarUrl}`;
+    if (!avatarUrl || !avatarUrl.trim()) return null;
+    let clean = avatarUrl.trim();
+
+    // Dicebear SVGs cannot be decoded natively by React Native <Image>.
+    // Convert /svg to /png format supported directly by Dicebear CDN.
+    if (clean.includes('api.dicebear.com') && clean.includes('/svg')) {
+      clean = clean.replace('/svg', '/png');
+    }
+
+    if (clean.startsWith('http://') || clean.startsWith('https://')) {
+      return clean;
+    }
+
+    const host = await getCleanHost();
+    const path = clean.startsWith('/') ? clean : `/${clean}`;
+    if (!path.startsWith('/api/v1')) {
+      return `${host}/api/v1${path}`;
+    }
+    return `${host}${path}`;
   },
 
   // --- Sessions & History ---
@@ -261,9 +388,19 @@ export const apiService = {
         return { session: null as any, messages: [], documents: [] };
       }
       const data = await res.json();
+      const host = await getCleanHost();
+      const messages = (Array.isArray(data?.messages) ? data.messages : []).map((m: any) => {
+        if (m.attachments && Array.isArray(m.attachments)) {
+          m.attachments = m.attachments.map((att: any) => ({
+            ...att,
+            url: att.url?.startsWith('/') ? `${host}${att.url}` : att.url,
+          }));
+        }
+        return m;
+      });
       return {
         session: data?.session || null,
-        messages: Array.isArray(data?.messages) ? data.messages : [],
+        messages,
         documents: Array.isArray(data?.documents) ? data.documents : [],
       };
     } catch {
@@ -271,14 +408,50 @@ export const apiService = {
     }
   },
 
-  async createSession(userId: string, title: string, mode: ChatMode): Promise<ChatSession> {
+  async uploadMedia(
+    sessionId: string,
+    fileUri: string,
+    fileName: string,
+    mimeType: string = 'image/png',
+    userId?: string
+  ): Promise<MediaAttachment> {
+    const url = await getEndpoint('/media/upload');
+    const formData = new FormData();
+    formData.append('session_id', sessionId);
+    if (userId) {
+      formData.append('user_id', userId);
+    }
+    formData.append('file', {
+      uri: fileUri,
+      name: fileName || 'photo.png',
+      type: mimeType || 'image/png',
+    } as any);
+
+    const data = await uploadMultipart<MediaAttachment>(url, formData);
+    const host = await getCleanHost();
+    if (data.url && data.url.startsWith('/')) {
+      data.url = `${host}${data.url}`;
+    }
+    return data;
+  },
+
+  async createSession(
+    userId: string,
+    title: string,
+    mode: ChatMode,
+    isTemporary: boolean = false
+  ): Promise<ChatSession> {
+    const backendMode = resolveBackendMode(mode);
     const url = await getEndpoint('/session/create');
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user_id: userId, title, mode }),
+      body: JSON.stringify({ user_id: userId, title, mode: backendMode, is_temporary: isTemporary }),
     });
-    if (!res.ok) throw new Error('Failed to create conversation');
+    if (!res.ok) {
+      const err = await res.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Failed to create conversation'));
+    }
     return res.json();
   },
 
@@ -289,11 +462,12 @@ export const apiService = {
   },
 
   async updateSessionMode(sessionId: string, mode: ChatMode): Promise<void> {
+    const backendMode = resolveBackendMode(mode);
     const url = await getEndpoint(`/session/${encodeURIComponent(sessionId)}/mode`);
     await fetch(url, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode }),
+      body: JSON.stringify({ mode: backendMode }),
     });
   },
 
@@ -324,20 +498,14 @@ export const apiService = {
     }
     formData.append('file', {
       uri: fileUri,
-      name: fileName,
-      type: mimeType,
+      name: fileName || 'document.pdf',
+      type: mimeType || 'application/octet-stream',
     } as any);
 
-    const res = await fetch(url, {
-      method: 'POST',
-      body: formData,
-    });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ detail: 'Failed to upload document' }));
-      throw new Error(err.detail || 'Failed to upload document');
-    }
-    const data = await res.json();
+    const data = await uploadMultipart<{ document?: DocumentMetadata } & DocumentMetadata>(
+      url,
+      formData
+    );
     return data.document || data;
   },
 
@@ -354,7 +522,8 @@ export const apiService = {
     sessionId: string,
     query: string,
     mode: ChatMode,
-    handlers: StreamHandlers
+    handlers: StreamHandlers,
+    attachments?: MediaAttachment[]
   ): () => void {
     let isAborted = false;
     let hasEnded = false;
@@ -372,8 +541,10 @@ export const apiService = {
       handlers.onError(errMsg);
     };
 
-    getEndpoint('/chat/stream').then((url) => {
+    getEndpoint('/chat/stream').then(async (url) => {
       if (isAborted || hasEnded) return;
+      const host = await getCleanHost();
+      const effectiveMode = resolveBackendMode(mode, attachments);
 
       xhr.open('POST', url, true);
       xhr.setRequestHeader('Content-Type', 'application/json');
@@ -402,6 +573,12 @@ export const apiService = {
             const data = JSON.parse(payload);
             if (data.event === 'citations' && data.citations) {
               handlers.onCitations(data.citations);
+            } else if (data.event === 'media' && data.media && handlers.onMedia) {
+              const m: MediaAttachment = {
+                ...data.media,
+                url: data.media.url?.startsWith('/') ? `${host}${data.media.url}` : data.media.url,
+              };
+              handlers.onMedia(m);
             } else if (data.event === 'token' && typeof data.data === 'string') {
               handlers.onToken(data.data);
             } else if (data.event === 'error') {
@@ -432,7 +609,16 @@ export const apiService = {
       xhr.onload = () => {
         if (isAborted || hasEnded) return;
         if (xhr.status >= 400) {
-          triggerError(`Server error: ${xhr.status}`);
+          let errorMsg = `Server error: ${xhr.status}`;
+          try {
+            const errJson = JSON.parse(xhr.responseText);
+            errorMsg = extractErrorMessage(errJson, errorMsg);
+          } catch {
+            if (xhr.responseText && xhr.responseText.length < 200) {
+              errorMsg = `${errorMsg} (${xhr.responseText})`;
+            }
+          }
+          triggerError(errorMsg);
         } else {
           processChunks();
           triggerComplete();
@@ -451,10 +637,14 @@ export const apiService = {
 
       xhr.send(
         JSON.stringify({
-          session_id: sessionId,
-          message: query,
-          query,
-          mode,
+          session_id: sessionId || `guest_${Date.now()}`,
+          message: query || '',
+          query: query || '',
+          mode: effectiveMode,
+          attachments: (attachments || []).map((att) => ({
+            ...att,
+            url: att.url || '',
+          })),
         })
       );
     });

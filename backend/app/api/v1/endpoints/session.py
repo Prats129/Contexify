@@ -36,9 +36,18 @@ async def create_session(req: ChatSessionCreate):
     session = chat_history_service.create_session(
         user_id=req.user_id,
         title=req.title or "New Conversation",
-        mode=req.mode
+        mode=req.mode,
+        is_temporary=bool(req.is_temporary)
     )
     return session
+
+@router.post("/purge-temporary")
+async def purge_temporary_sessions():
+    """
+    Manually or cron-triggered purge of expired temporary chat sessions.
+    """
+    count = chat_history_service.purge_expired_temporary_sessions()
+    return {"message": f"Purged {count} expired temporary session(s).", "purged_count": count}
 
 @router.get("/list", response_model=List[ChatSessionResponse])
 async def list_sessions(user_id: str):

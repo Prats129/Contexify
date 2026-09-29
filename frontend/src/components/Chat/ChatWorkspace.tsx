@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import { LuCloudUpload } from "react-icons/lu";
+import { LuCloudUpload, LuGhost } from "react-icons/lu";
 import { ChatHeader } from "./ChatHeader";
 import { MessageList } from "./MessageList";
 import { ChatInput } from "./ChatInput";
@@ -11,6 +11,7 @@ import type {
   DocumentMetadata,
   User,
   Citation,
+  MediaAttachment,
 } from "../../types";
 
 interface ChatWorkspaceProps {
@@ -29,10 +30,15 @@ interface ChatWorkspaceProps {
   uploadStatusText?: string;
   documents: DocumentMetadata[];
   onDeleteDocument: (documentId: string) => void;
+  attachedMedia?: MediaAttachment[];
+  onDeleteMedia?: (index: number) => void;
+  onUseAsReference?: (media: MediaAttachment) => void;
   currentUser: User | null;
   onOpenUserModal: (tab?: "login" | "register") => void;
   onClearChat?: () => void;
   onToggleSidebar?: () => void;
+  isTemporaryChat?: boolean;
+  onToggleTemporaryChat?: () => void;
 }
 
 export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
@@ -51,10 +57,15 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
   uploadStatusText,
   documents,
   onDeleteDocument,
+  attachedMedia = [],
+  onDeleteMedia,
+  onUseAsReference,
   currentUser,
   onOpenUserModal,
   onClearChat,
   onToggleSidebar,
+  isTemporaryChat = false,
+  onToggleTemporaryChat,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [activeSources, setActiveSources] = useState<{
@@ -180,7 +191,34 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
         onClearChat={onClearChat}
         hasMessages={messages.length > 0 || !!streamingMessage}
         onToggleSidebar={onToggleSidebar}
+        isTemporaryChat={isTemporaryChat}
+        onToggleTemporaryChat={onToggleTemporaryChat}
       />
+
+      {/* Temporary Chat Notice Banner (ChatGPT style, shown when messages exist) */}
+      {isTemporaryChat && messages.length > 0 && (
+        <div className="w-full bg-amber-500/10 border-b border-amber-500/30 px-3 sm:px-4 py-2 text-xs text-amber-950 flex items-center justify-between gap-3 shrink-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <LuGhost
+              size={15}
+              className="shrink-0 text-amber-600 animate-pulse"
+            />
+            <span className="truncate">
+              <strong>Temporary Chat is on.</strong> Not saved to history.
+              Deleted after 3 days.
+            </span>
+          </div>
+          {onToggleTemporaryChat && (
+            <button
+              type="button"
+              onClick={onToggleTemporaryChat}
+              className="shrink-0 font-semibold underline hover:no-underline text-amber-900 hover:text-amber-950 dark:hover:text-amber-100 cursor-pointer text-xs"
+            >
+              Turn off
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Main Workspace: Chat Column + Sources Card anchored to right */}
       <div
@@ -198,6 +236,9 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
             activeSourcesMessageId={activeSources?.messageId}
             onToggleSources={handleToggleSources}
             activeSources={!!activeSources}
+            isTemporaryChat={isTemporaryChat}
+            onToggleTemporaryChat={onToggleTemporaryChat}
+            onUseAsReference={onUseAsReference}
           />
 
           <div className="w-full shrink-0 px-2 sm:px-6 pb-3.5 sm:pb-4 pb-safe">
@@ -217,6 +258,8 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
                 uploadStatusText={uploadStatusText}
                 documents={documents}
                 onDeleteDocument={onDeleteDocument}
+                attachedMedia={attachedMedia}
+                onDeleteMedia={onDeleteMedia}
               />
             </div>
           </div>

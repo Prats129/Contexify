@@ -22,7 +22,8 @@ from app.schemas.user import (
     SendOtpResponse,
     VerifyOtpLoginRequest,
     ResetPasswordWithOtpRequest,
-    GoogleAuthRequest
+    GoogleAuthRequest,
+    validate_password_strength
 )
 from app.services.email_service import email_service
 from app.core.logging import logger
@@ -91,6 +92,19 @@ class UserService:
         username = req.username.strip().lower()
         email = req.email.strip().lower()
         display_name = req.display_name.strip()
+
+        # Validate password strength and anti-cracking rules
+        is_valid, err_msg = validate_password_strength(
+            req.password,
+            username=username,
+            email=email,
+            display_name=display_name
+        )
+        if not is_valid:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=err_msg
+            )
 
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -350,10 +364,21 @@ class UserService:
                     detail="Current password is incorrect."
                 )
 
-            if len(new_password) < 6:
+            # Prevent reusing current password as new password
+            if verify_password(new_password, stored_salt, stored_hash):
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="New password must be at least 6 characters long."
+                    detail="New password cannot be the same as your current password. Please choose a different password."
+                )
+
+            is_valid, err_msg = validate_password_strength(
+                new_password,
+                username=row["username"]
+            )
+            if not is_valid:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=err_msg
                 )
 
             new_salt = secrets.token_hex(16)
@@ -642,17 +667,11 @@ class UserService:
         clean_otp = req.otp.strip()
         new_password = req.new_password
 
-        if len(new_password) < 6:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="New password must be at least 6 characters long."
-            )
-
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT id, username, email, password_hash, password_salt
+                SELECT id, username, email, display_name, password_hash, password_salt
                 FROM users
                 WHERE username = ? OR email = ?
                 """,
@@ -664,6 +683,19 @@ class UserService:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"No account found matching '{clean_id}'."
+                )
+
+            # Validate password strength against policy and user identity
+            is_valid, err_msg = validate_password_strength(
+                new_password,
+                username=user["username"],
+                email=user["email"],
+                display_name=user["display_name"]
+            )
+            if not is_valid:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=err_msg
                 )
 
             # Prevent using the same existing password
