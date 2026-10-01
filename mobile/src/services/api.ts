@@ -374,7 +374,7 @@ export const apiService = {
       const res = await fetch(url);
       if (!res.ok) return [];
       const data = await res.json();
-      return Array.isArray(data) ? data : [];
+      return Array.isArray(data) ? data : (data?.sessions || []);
     } catch {
       return [];
     }

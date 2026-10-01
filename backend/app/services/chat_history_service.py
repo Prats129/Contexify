@@ -1,7 +1,7 @@
 import json
 import uuid
 from datetime import datetime, timedelta
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from app.core.config import settings
 from app.db.database import get_db_connection
 from app.schemas.chat import ChatMode, Citation, MediaAttachment
@@ -80,23 +80,49 @@ class ChatHistoryService:
                 document_count=row["document_count"]
             )
 
-    def list_user_sessions(self, user_id: str) -> List[ChatSessionResponse]:
+    def list_user_sessions(
+        self,
+        user_id: str,
+        limit: Optional[int] = None,
+        offset: int = 0,
+        search: Optional[str] = None
+    ) -> Tuple[List[ChatSessionResponse], int]:
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                """
+            
+            where_clauses = ["s.user_id = ?", "(s.is_temporary IS NULL OR s.is_temporary = 0)"]
+            params: list = [user_id]
+            
+            if search and search.strip():
+                where_clauses.append("LOWER(s.title) LIKE ?")
+                params.append(f"%{search.strip().lower()}%")
+                
+            where_sql = " AND ".join(where_clauses)
+            
+            # Count total matching sessions
+            cursor.execute(f"SELECT COUNT(*) AS total FROM chat_sessions s WHERE {where_sql}", tuple(params))
+            total_row = cursor.fetchone()
+            total = int(total_row["total"]) if total_row and total_row["total"] is not None else 0
+            
+            query = f"""
                 SELECT 
                     s.id, s.user_id, s.title, s.mode, s.is_temporary, s.expires_at, s.created_at, s.updated_at,
                     (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) AS message_count,
                     (SELECT COUNT(*) FROM documents d WHERE d.session_id = s.id) AS document_count
                 FROM chat_sessions s
-                WHERE s.user_id = ? AND (s.is_temporary IS NULL OR s.is_temporary = 0)
+                WHERE {where_sql}
                 ORDER BY s.updated_at DESC
-                """,
-                (user_id,)
-            )
+            """
+            
+            query_params = list(params)
+            if limit is not None:
+                query += " LIMIT ? OFFSET ?"
+                query_params.extend([max(1, limit), max(0, offset)])
+                
+            cursor.execute(query, tuple(query_params))
             rows = cursor.fetchall()
-            return [
+            
+            sessions = [
                 ChatSessionResponse(
                     id=row["id"],
                     user_id=row["user_id"],
@@ -111,6 +137,7 @@ class ChatHistoryService:
                 )
                 for row in rows
             ]
+            return sessions, total
 
     def update_session_title(self, session_id: str, title: str) -> bool:
         now = datetime.utcnow().isoformat()

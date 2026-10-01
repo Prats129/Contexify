@@ -66,3 +66,10 @@ class SessionHistoryResponse(BaseModel):
     session: ChatSessionResponse
     messages: List[MessageResponse]
     documents: List[DocumentMetadata]
+
+class PaginatedChatSessionsResponse(BaseModel):
+    sessions: List[ChatSessionResponse]
+    total: int
+    has_more: bool
+    limit: Optional[int] = None
+    offset: int = 0

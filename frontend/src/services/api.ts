@@ -9,6 +9,8 @@ import type {
   SendOtpResponse,
   GoogleAuthRequest,
   MediaAttachment,
+  PaginatedChatSessions,
+  SessionListParams,
 } from '../types';
 
 const BACKEND_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
@@ -269,12 +271,39 @@ export const apiService = {
   },
 
   // --- Session Endpoints ---
-  async listSessions(userId: string): Promise<ChatSession[]> {
-    const response = await fetch(`${API_BASE_URL}/session/list?user_id=${encodeURIComponent(userId)}`);
-    if (!response.ok) {
-      throw new Error('Failed to fetch session list');
+  async listSessions(
+    userId: string,
+    params?: SessionListParams
+  ): Promise<PaginatedChatSessions> {
+    const query = new URLSearchParams({ user_id: userId });
+    if (params?.limit !== undefined) {
+      query.set('limit', String(params.limit));
     }
-    return await response.json();
+    if (params?.offset !== undefined) {
+      query.set('offset', String(params.offset));
+    }
+    if (params?.search && params.search.trim()) {
+      query.set('search', params.search.trim());
+    }
+
+    const response = await fetch(`${API_BASE_URL}/session/list?${query.toString()}`, {
+      signal: params?.signal,
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Failed to fetch session list'));
+    }
+    const data = await response.json();
+    if (Array.isArray(data)) {
+      return {
+        sessions: data,
+        total: data.length,
+        has_more: false,
+        limit: params?.limit ?? null,
+        offset: params?.offset ?? 0,
+      };
+    }
+    return data as PaginatedChatSessions;
   },
 
   async createSession(
@@ -348,7 +377,8 @@ export const apiService = {
       body: JSON.stringify({ title }),
     });
     if (!response.ok) {
-      throw new Error('Failed to update session title');
+      const err = await response.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Failed to update session title'));
     }
     return await response.json();
   },

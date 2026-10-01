@@ -18,6 +18,15 @@ interface SidebarProps {
   onSelectSession: (sessionId: string) => void;
   onNewSession: () => void;
   onDeleteSession: (sessionId: string) => void;
+  onRenameSession?: (sessionId: string, newTitle: string) => Promise<void> | void;
+  totalSessions: number;
+  hasMore: boolean;
+  isLoadingInitial?: boolean;
+  isLoadingMore?: boolean;
+  isSearching?: boolean;
+  searchQuery: string;
+  onSearchChange: (query: string) => void;
+  onLoadMore: () => void;
   documents: DocumentMetadata[];
   onDeleteDocument: (documentId: string) => void;
 }
@@ -34,6 +43,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSelectSession,
   onNewSession,
   onDeleteSession,
+  onRenameSession,
+  totalSessions,
+  hasMore,
+  isLoadingInitial,
+  isLoadingMore,
+  isSearching,
+  searchQuery,
+  onSearchChange,
+  onLoadMore,
   documents,
   onDeleteDocument,
 }) => {
@@ -143,8 +161,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
         currentUser={currentUser}
         sessions={sessions}
         activeSessionId={activeSessionId}
+        totalSessions={totalSessions}
+        hasMore={hasMore}
+        isLoadingInitial={isLoadingInitial}
+        isLoadingMore={isLoadingMore}
+        isSearching={isSearching}
+        searchQuery={searchQuery}
+        onSearchChange={onSearchChange}
+        onLoadMore={onLoadMore}
         onSelectSession={onSelectSession}
         onDeleteSession={onDeleteSession}
+        onRenameSession={onRenameSession}
         onOpenUserModal={onOpenUserModal}
       />
 

@@ -3,9 +3,9 @@ import { apiService } from "./services/api";
 import { Sidebar } from "./components/Sidebar/Sidebar";
 import { ChatWorkspace } from "./components/Chat/ChatWorkspace";
 import { UserModal } from "./components/Modals/UserModal";
+import { useChatSessions } from "./hooks/useChatSessions";
 import type {
   User,
-  ChatSession,
   ChatMode,
   DocumentMetadata,
   Message,
@@ -84,8 +84,29 @@ export const App: React.FC = () => {
 
   // --- Global State ---
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+
+  // --- Sessions Management (Pagination, Server-side Debounced Search, Optimistic Updates) ---
+  const {
+    sessions,
+    total: totalSessions,
+    hasMore: hasMoreSessions,
+    isLoadingInitial: isLoadingInitialSessions,
+    isLoadingMore: isLoadingMoreSessions,
+    isSearching: isSearchingSessions,
+    searchQuery: sessionSearchQuery,
+    setSearchQuery: setSessionSearchQuery,
+    loadMore: loadMoreSessions,
+    prependSession,
+    updateSessionTitle,
+    updateSessionMode,
+    removeSession,
+    ensureSessionInList,
+    setSessionsDirect,
+  } = useChatSessions({
+    userId: currentUser?.id ?? null,
+    activeSessionId,
+  });
   const [isTemporaryChat, setIsTemporaryChat] = useState<boolean>(false);
   const [currentMode, setCurrentMode] = useState<ChatMode>("AUTO");
   const [documents, setDocuments] = useState<DocumentMetadata[]>([]);
@@ -206,7 +227,6 @@ export const App: React.FC = () => {
         setIsTemporaryChat(false);
         localStorage.removeItem("contexify_user");
         localStorage.removeItem("contexify_active_session");
-        setSessions([]);
         setMessages([]);
         setDocuments([]);
         setMode("light");
@@ -238,8 +258,12 @@ export const App: React.FC = () => {
   const loadSessions = useCallback(
     async (userId: string) => {
       try {
-        const sessionList = await apiService.listSessions(userId);
-        setSessions(sessionList || []);
+        const paginated = await apiService.listSessions(userId, {
+          limit: 12,
+          offset: 0,
+        });
+        const sessionList = paginated.sessions || [];
+        setSessionsDirect(sessionList);
 
         const { sessionId: urlSessionId, isUnauthenticated } =
           getUrlRouteInfo();
@@ -257,10 +281,7 @@ export const App: React.FC = () => {
           try {
             const hist = await apiService.getSessionHistory(urlSessionId);
             if (hist.session) {
-              setSessions((prev) => [
-                hist.session,
-                ...prev.filter((s) => s.id !== hist.session.id),
-              ]);
+              ensureSessionInList(hist.session);
               await selectSession(hist.session.id, false, false);
               return;
             }
@@ -278,7 +299,7 @@ export const App: React.FC = () => {
         console.error("Failed to load user sessions:", e);
       }
     },
-    [selectSession],
+    [selectSession, ensureSessionInList, setSessionsDirect],
   );
 
   useEffect(() => {
@@ -343,8 +364,7 @@ export const App: React.FC = () => {
 
     try {
       await apiService.deleteSession(sessionId);
-      const updated = sessions.filter((s) => s.id !== sessionId);
-      setSessions(updated);
+      removeSession(sessionId);
 
       if (activeSessionId === sessionId) {
         setActiveSessionId(null);
@@ -363,15 +383,37 @@ export const App: React.FC = () => {
     }
   };
 
-  // --- 6. Mode Switch ---
+  // --- 6. Rename Session ---
+  const handleRenameSession = async (sessionId: string, newTitle: string) => {
+    if (!currentUser?.id) return;
+    const trimmed = newTitle.trim();
+    if (!trimmed) return;
+
+    const currentSession = sessions.find((s) => s.id === sessionId);
+    if (!currentSession || currentSession.title === trimmed) return;
+
+    const prevTitle = currentSession.title;
+    updateSessionTitle(sessionId, trimmed);
+
+    try {
+      await apiService.updateSessionTitle(sessionId, trimmed);
+    } catch (e: unknown) {
+      updateSessionTitle(sessionId, prevTitle);
+      const err = e instanceof Error ? e.message : String(e);
+      await showAlert({
+        title: "Rename Failed",
+        message: `Failed to rename conversation: ${err}`,
+      });
+    }
+  };
+
+  // --- 7. Mode Switch ---
   const handleModeChange = async (mode: ChatMode) => {
     setCurrentMode(mode);
     if (activeSessionId && currentUser?.id) {
       try {
         await apiService.updateSessionMode(activeSessionId, mode);
-        setSessions((prev) =>
-          prev.map((s) => (s.id === activeSessionId ? { ...s, mode } : s)),
-        );
+        updateSessionMode(activeSessionId, mode);
       } catch (err) {
         console.error("Failed to persist session mode switch:", err);
       }
@@ -393,7 +435,7 @@ export const App: React.FC = () => {
           targetSessionId = newSess.id;
           setActiveSessionId(newSess.id);
           if (!isTemporaryChat) {
-            setSessions((prev) => [newSess, ...prev]);
+            prependSession(newSess);
             localStorage.setItem("contexify_active_session", newSess.id);
           }
           updateUrlForSession(newSess.id, false);
@@ -587,7 +629,7 @@ export const App: React.FC = () => {
           targetSessionId = newSess.id;
           setActiveSessionId(newSess.id);
           if (!isTemporaryChat) {
-            setSessions((prev) => [newSess, ...prev]);
+            prependSession(newSess);
             localStorage.setItem("contexify_active_session", newSess.id);
           }
           updateUrlForSession(newSess.id, false);
@@ -710,15 +752,15 @@ export const App: React.FC = () => {
           setMessages((prev) => [...prev, finishedAssistantMsg]);
           setStreamingMessage(null);
 
-          // If logged-in user, refresh sessions list for auto-generated title
-          if (currentUser?.id) {
+          // If logged-in user, refresh active session title if it was generated
+          if (currentUser?.id && targetSessionId) {
             try {
-              const freshSessions = await apiService.listSessions(
-                currentUser.id,
-              );
-              setSessions(freshSessions || []);
+              const hist = await apiService.getSessionHistory(targetSessionId);
+              if (hist?.session?.title) {
+                updateSessionTitle(targetSessionId, hist.session.title);
+              }
             } catch (err) {
-              console.error("Failed to sync sessions list:", err);
+              console.error("Failed to sync session title:", err);
             }
           }
         },
@@ -841,7 +883,6 @@ export const App: React.FC = () => {
     localStorage.removeItem("contexify_active_session");
     setCurrentUser(null);
     setIsTemporaryChat(false);
-    setSessions([]);
     setMessages([]);
     setDocuments([]);
     setActiveSessionId(generateGuestSessionId());
@@ -872,10 +913,19 @@ export const App: React.FC = () => {
         onOpenUserModal={() => handleOpenUserModal("login")}
         onLogout={handleLogout}
         sessions={sessions}
+        totalSessions={totalSessions}
+        hasMore={hasMoreSessions}
+        isLoadingInitial={isLoadingInitialSessions}
+        isLoadingMore={isLoadingMoreSessions}
+        isSearching={isSearchingSessions}
+        searchQuery={sessionSearchQuery}
+        onSearchChange={setSessionSearchQuery}
+        onLoadMore={loadMoreSessions}
         activeSessionId={activeSessionId}
         onSelectSession={selectSession}
         onNewSession={handleNewSession}
         onDeleteSession={handleDeleteSession}
+        onRenameSession={handleRenameSession}
         documents={documents}
         onDeleteDocument={handleDeleteDocument}
       />

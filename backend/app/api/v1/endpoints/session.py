@@ -1,12 +1,13 @@
-from fastapi import APIRouter, HTTPException, status
-from typing import List
+from fastapi import APIRouter, HTTPException, status, Query
+from typing import List, Optional, Union
 from app.schemas.session import (
     ChatSessionCreate,
     ChatSessionResponse,
     ChatSessionUpdate,
     SessionHistoryResponse,
     TitleUpdatePayload,
-    ModeUpdatePayload
+    ModeUpdatePayload,
+    PaginatedChatSessionsResponse
 )
 from app.services.chat_history_service import chat_history_service
 from app.services.user_service import user_service
@@ -49,14 +50,50 @@ async def purge_temporary_sessions():
     count = chat_history_service.purge_expired_temporary_sessions()
     return {"message": f"Purged {count} expired temporary session(s).", "purged_count": count}
 
-@router.get("/list", response_model=List[ChatSessionResponse])
-async def list_sessions(user_id: str):
+@router.get("/list", response_model=Union[PaginatedChatSessionsResponse, List[ChatSessionResponse]])
+async def list_sessions(
+    user_id: str = Query(..., description="ID of the user"),
+    limit: Optional[int] = Query(None, ge=1, le=100, description="Page size limit"),
+    offset: int = Query(0, ge=0, description="Offset for pagination"),
+    search: Optional[str] = Query(None, description="Optional search term to filter chat titles"),
+    paginate: Optional[bool] = Query(None, description="Explicitly request paginated object format")
+):
     """
-    List all chat sessions for a given user ordered by most recently active.
+    List chat sessions for a given user ordered by most recently active.
+    Supports limit/offset pagination and real-time database-level title search.
     """
+    is_paginated_requested = paginate is True or limit is not None or (search is not None and search.strip() != "")
+
     if not user_id or user_id.startswith("guest"):
+        if is_paginated_requested:
+            return PaginatedChatSessionsResponse(
+                sessions=[],
+                total=0,
+                has_more=False,
+                limit=limit,
+                offset=offset
+            )
         return []
-    return chat_history_service.list_user_sessions(user_id)
+
+    sessions, total = chat_history_service.list_user_sessions(
+        user_id=user_id,
+        limit=limit,
+        offset=offset,
+        search=search
+    )
+
+    has_more = (offset + len(sessions)) < total if limit is not None else False
+
+    if is_paginated_requested:
+        return PaginatedChatSessionsResponse(
+            sessions=sessions,
+            total=total,
+            has_more=has_more,
+            limit=limit,
+            offset=offset
+        )
+
+    return sessions
 
 @router.get("/{session_id}/history", response_model=SessionHistoryResponse)
 async def get_session_history(session_id: str):

@@ -284,6 +284,7 @@ def init_db():
 
         # Indexes for fast querying
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON chat_sessions(user_id);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user_updated ON chat_sessions(user_id, updated_at DESC);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_temporary ON chat_sessions(is_temporary, expires_at);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_documents_session_id ON documents(session_id);")
