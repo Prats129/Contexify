@@ -456,19 +456,61 @@ export const apiService = {
   },
 
   async deleteSession(sessionId: string): Promise<void> {
-    const url = await getEndpoint(`/session/${encodeURIComponent(sessionId)}`);
+    if (!sessionId || !sessionId.trim()) {
+      throw new Error('Session ID is required to delete a conversation.');
+    }
+    const url = await getEndpoint(`/session/${encodeURIComponent(sessionId.trim())}`);
     const res = await fetch(url, { method: 'DELETE' });
-    if (!res.ok) throw new Error('Failed to delete session');
+    if (!res.ok) {
+      const err = await res.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Failed to delete conversation'));
+    }
   },
 
   async updateSessionMode(sessionId: string, mode: ChatMode): Promise<void> {
+    if (!sessionId || !sessionId.trim()) {
+      throw new Error('Session ID is required to update conversation mode.');
+    }
     const backendMode = resolveBackendMode(mode);
-    const url = await getEndpoint(`/session/${encodeURIComponent(sessionId)}/mode`);
-    await fetch(url, {
+    const url = await getEndpoint(`/session/${encodeURIComponent(sessionId.trim())}/mode`);
+    const res = await fetch(url, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ mode: backendMode }),
     });
+    if (!res.ok) {
+      const err = await res.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Failed to update conversation mode'));
+    }
+  },
+
+  async updateSessionTitle(
+    sessionId: string,
+    title: string
+  ): Promise<{ message: string; title: string }> {
+    if (!sessionId || !sessionId.trim()) {
+      throw new Error('Session ID is required to rename a conversation.');
+    }
+    const cleanTitle = title.trim();
+    if (!cleanTitle) {
+      throw new Error('Conversation title cannot be empty.');
+    }
+    if (cleanTitle.length > 100) {
+      throw new Error('Conversation title must be 100 characters or fewer.');
+    }
+
+    const url = await getEndpoint(`/session/${encodeURIComponent(sessionId.trim())}/title`);
+    const res = await fetch(url, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: cleanTitle }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Failed to update conversation title'));
+    }
+    return await res.json();
   },
 
   // --- Documents ---

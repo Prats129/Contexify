@@ -248,6 +248,32 @@ export default function App() {
     }
   };
 
+  // --- 4.1 Rename Session ---
+  const handleRenameSession = async (sessionId: string, newTitle: string) => {
+    const trimmed = newTitle.trim();
+    if (!trimmed) return;
+    const currentList = Array.isArray(sessions) ? sessions : [];
+    const current = currentList.find((s) => s.id === sessionId);
+    if (!current || current.title === trimmed) return;
+
+    const prevTitle = current.title;
+    // Optimistic update
+    setSessions((prev) =>
+      prev.map((s) => (s.id === sessionId ? { ...s, title: trimmed } : s))
+    );
+
+    try {
+      await apiService.updateSessionTitle(sessionId, trimmed);
+    } catch (err: unknown) {
+      // Revert on error
+      setSessions((prev) =>
+        prev.map((s) => (s.id === sessionId ? { ...s, title: prevTitle } : s))
+      );
+      const msg = err instanceof Error ? err.message : String(err);
+      Alert.alert("Rename Failed", msg);
+    }
+  };
+
   // --- 5. Toggle Mode ---
   const handleToggleMode = () => {
     const modes: ChatMode[] = [
@@ -969,6 +995,7 @@ export default function App() {
           activeSessionId={activeSessionId}
           onSelectSession={selectSession}
           onDeleteSession={handleDeleteSession}
+          onRenameSession={handleRenameSession}
           onNewChat={handleNewChat}
           documents={documents}
           onDeleteDocument={handleDeleteDocument}

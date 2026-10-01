@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from "react";
 import {
   View,
   Text,
+  TextInput,
+  ActivityIndicator,
   StyleSheet,
   Modal,
   TouchableOpacity,
@@ -28,6 +30,7 @@ interface DrawerMenuProps {
   activeSessionId: string | null;
   onSelectSession: (id: string) => void;
   onDeleteSession: (id: string) => void;
+  onRenameSession?: (id: string, newTitle: string) => Promise<void> | void;
   onNewChat: () => void;
   documents?: DocumentMetadata[];
   onDeleteDocument: (id: string) => void;
@@ -47,6 +50,7 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
   activeSessionId,
   onSelectSession,
   onDeleteSession,
+  onRenameSession,
   onNewChat,
   documents = [],
   onDeleteDocument,
@@ -66,6 +70,17 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
   const [isDocsExpanded, setIsDocsExpanded] = useState(true);
   const [resolvedAvatar, setResolvedAvatar] = useState<string | null>(null);
   const [avatarLoadError, setAvatarLoadError] = useState(false);
+
+  // --- Collapsible Search State ---
+  const [searchQuery, setSearchQuery] = useState("");
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const searchTextInputRef = useRef<TextInput | null>(null);
+
+  // --- Rename State ---
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [isSavingSessionId, setIsSavingSessionId] = useState<string | null>(null);
+  const editInputRef = useRef<TextInput | null>(null);
 
   const translateX = useRef(new Animated.Value(-340)).current;
 
@@ -139,6 +154,105 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
       setResolvedAvatar(null);
     }
   }, [currentUser?.avatar_url, visible]);
+
+  // --- Search and Filter Logic ---
+  const filteredSessions = sessionList.filter((s) => {
+    if (!searchQuery.trim()) return true;
+    return s.title.toLowerCase().includes(searchQuery.trim().toLowerCase());
+  });
+
+  const handleToggleSearch = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    if (isSearchOpen) {
+      setIsSearchOpen(false);
+      setSearchQuery("");
+    } else {
+      setIsSearchOpen(true);
+      if (!isChatsExpanded) {
+        setIsChatsExpanded(true);
+      }
+      setTimeout(() => {
+        searchTextInputRef.current?.focus();
+      }, 100);
+    }
+  };
+
+  const handleSearchBlur = () => {
+    if (searchQuery.trim() === "") {
+      setIsSearchOpen(false);
+    }
+  };
+
+  // --- Session Rename Handlers ---
+  const handleStartRename = (session: ChatSession) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setEditingSessionId(session.id);
+    setEditTitle(session.title);
+    setTimeout(() => {
+      editInputRef.current?.focus();
+    }, 100);
+  };
+
+  const handleCancelRename = () => {
+    setEditingSessionId(null);
+    setEditTitle("");
+  };
+
+  const handleSaveRename = async (sessionId: string) => {
+    const trimmed = editTitle.trim();
+    const currentSession = sessionList.find((s) => s.id === sessionId);
+
+    if (!trimmed || trimmed === currentSession?.title) {
+      handleCancelRename();
+      return;
+    }
+
+    if (trimmed.length > 100) {
+      Alert.alert("Title Too Long", "Session title must be 100 characters or fewer.");
+      return;
+    }
+
+    if (!onRenameSession) {
+      handleCancelRename();
+      return;
+    }
+
+    try {
+      setIsSavingSessionId(sessionId);
+      await onRenameSession(sessionId, trimmed);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setEditingSessionId(null);
+      setEditTitle("");
+    } catch (err: any) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      Alert.alert("Rename Failed", err?.message || "Could not update conversation name.");
+    } finally {
+      setIsSavingSessionId(null);
+    }
+  };
+
+  const handleSessionLongPress = (session: ChatSession) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    Alert.alert(
+      "Conversation Options",
+      session.title,
+      [
+        {
+          text: "Rename",
+          onPress: () => handleStartRename(session),
+        },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: () => handleDeletePress(session.id, session.title),
+        },
+        {
+          text: "Cancel",
+          style: "cancel",
+        },
+      ]
+    );
+  };
 
   const handleSelect = (id: string) => {
     Haptics.selectionAsync();
@@ -240,16 +354,16 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
             contentContainerStyle={styles.scrollContent}
             showsVerticalScrollIndicator={false}
           >
-            {/* Conversation History Section (Collapsible) */}
-            <TouchableOpacity
-              style={styles.sectionHeader}
-              onPress={() => {
-                Haptics.selectionAsync();
-                setIsChatsExpanded(!isChatsExpanded);
-              }}
-              activeOpacity={0.7}
-            >
-              <View style={styles.sectionHeaderLeft}>
+            {/* Conversation History Section Header (Collapsible) */}
+            <View style={styles.sectionHeader}>
+              <TouchableOpacity
+                style={styles.sectionHeaderLeft}
+                onPress={() => {
+                  Haptics.selectionAsync();
+                  setIsChatsExpanded(!isChatsExpanded);
+                }}
+                activeOpacity={0.7}
+              >
                 <Feather
                   name={isChatsExpanded ? "chevron-down" : "chevron-right"}
                   size={14}
@@ -258,12 +372,75 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
                 <Text style={[styles.sectionTitle, { color: theme.textMuted }]}>
                   CHATS
                 </Text>
-              </View>
-              <Text style={[styles.sectionCount, { color: theme.textMuted }]}>
-                {currentUser ? sessionList.length : "Guest"}
-              </Text>
-            </TouchableOpacity>
+              </TouchableOpacity>
 
+              {currentUser ? (
+                <TouchableOpacity
+                  style={[
+                    styles.searchToggleBtn,
+                    isSearchOpen && { backgroundColor: theme.primaryLight },
+                  ]}
+                  onPress={handleToggleSearch}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  accessibilityLabel="Search conversations"
+                >
+                  <Feather
+                    name={isSearchOpen ? "x" : "search"}
+                    size={14}
+                    color={isSearchOpen ? colors.primary : theme.textMuted}
+                  />
+                </TouchableOpacity>
+              ) : (
+                <Text style={[styles.sectionCount, { color: theme.textMuted }]}>
+                  Guest
+                </Text>
+              )}
+            </View>
+
+            {/* Collapsible Real-Time Search Bar */}
+            {isChatsExpanded && currentUser && isSearchOpen && (
+              <View
+                style={[
+                  styles.searchContainer,
+                  {
+                    backgroundColor: theme.bgInput,
+                    borderColor: theme.borderSubtle,
+                  },
+                ]}
+              >
+                <Feather
+                  name="search"
+                  size={13}
+                  color={theme.textMuted}
+                  style={styles.searchIcon}
+                />
+                <TextInput
+                  ref={searchTextInputRef}
+                  style={[styles.searchInput, { color: theme.textMain }]}
+                  placeholder="Search chats..."
+                  placeholderTextColor={theme.textMuted}
+                  value={searchQuery}
+                  onChangeText={setSearchQuery}
+                  onBlur={handleSearchBlur}
+                  returnKeyType="search"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                {searchQuery.length > 0 && (
+                  <TouchableOpacity
+                    onPress={() => {
+                      setSearchQuery("");
+                      searchTextInputRef.current?.focus();
+                    }}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Feather name="x" size={13} color={theme.textMuted} />
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
+
+            {/* Conversation History List */}
             {isChatsExpanded &&
               (sessionList.length === 0 ? (
                 <Text style={[styles.emptyText, { color: theme.textMuted }]}>
@@ -271,10 +448,82 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
                     ? "No conversations yet."
                     : "Sign in to save chat history."}
                 </Text>
+              ) : filteredSessions.length === 0 ? (
+                <View style={styles.searchEmptyContainer}>
+                  <Text style={[styles.emptyText, { color: theme.textMuted, textAlign: "center" }]}>
+                    No conversations matching "{searchQuery}"
+                  </Text>
+                  <TouchableOpacity
+                    onPress={() => setSearchQuery("")}
+                    style={styles.clearSearchBtn}
+                  >
+                    <Text style={[styles.clearSearchText, { color: colors.primary }]}>
+                      Clear Search
+                    </Text>
+                  </TouchableOpacity>
+                </View>
               ) : (
-                sessionList.map((s) => {
+                filteredSessions.map((s) => {
                   const isActive = s.id === activeSessionId;
                   const isWeb = s.mode === "WEB_SEARCH";
+                  const isEditing = editingSessionId === s.id;
+                  const isSaving = isSavingSessionId === s.id;
+
+                  if (isEditing) {
+                    return (
+                      <View
+                        key={s.id}
+                        style={[
+                          styles.sessionItem,
+                          styles.sessionItemEditing,
+                          {
+                            backgroundColor: theme.bgInput,
+                            borderColor: colors.primary,
+                          },
+                        ]}
+                      >
+                        <Ionicons
+                          name={isWeb ? "globe-outline" : "document-text-outline"}
+                          size={14}
+                          color={colors.primary}
+                        />
+                        <TextInput
+                          ref={editInputRef}
+                          style={[styles.editSessionInput, { color: theme.textMain }]}
+                          value={editTitle}
+                          onChangeText={setEditTitle}
+                          maxLength={100}
+                          autoFocus
+                          selectTextOnFocus
+                          returnKeyType="done"
+                          onSubmitEditing={() => handleSaveRename(s.id)}
+                          editable={!isSaving}
+                        />
+                        <View style={styles.editActionButtons}>
+                          {isSaving ? (
+                            <ActivityIndicator size="small" color={colors.primary} />
+                          ) : (
+                            <>
+                              <TouchableOpacity
+                                onPress={() => handleSaveRename(s.id)}
+                                hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                                style={styles.inlineActionBtn}
+                              >
+                                <Feather name="check" size={14} color={colors.primary} />
+                              </TouchableOpacity>
+                              <TouchableOpacity
+                                onPress={handleCancelRename}
+                                hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                                style={styles.inlineActionBtn}
+                              >
+                                <Feather name="x" size={14} color={theme.textMuted} />
+                              </TouchableOpacity>
+                            </>
+                          )}
+                        </View>
+                      </View>
+                    );
+                  }
 
                   return (
                     <TouchableOpacity
@@ -291,6 +540,7 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
                         },
                       ]}
                       onPress={() => handleSelect(s.id)}
+                      onLongPress={() => handleSessionLongPress(s)}
                       activeOpacity={0.7}
                     >
                       <Ionicons
@@ -310,23 +560,39 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
                       >
                         {s.title}
                       </Text>
-                      <TouchableOpacity
-                        onPress={() => handleDeletePress(s.id, s.title)}
-                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                      >
-                        <Feather
-                          name="trash-2"
-                          size={13}
-                          color={theme.textMuted}
-                        />
-                      </TouchableOpacity>
+                      <View style={styles.sessionItemActions}>
+                        <TouchableOpacity
+                          onPress={() => handleStartRename(s)}
+                          hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                          style={styles.inlineActionBtn}
+                          accessibilityLabel="Rename conversation"
+                        >
+                          <Feather
+                            name="edit-2"
+                            size={12}
+                            color={isActive ? colors.primary : theme.textMuted}
+                          />
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          onPress={() => handleDeletePress(s.id, s.title)}
+                          hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                          style={styles.inlineActionBtn}
+                          accessibilityLabel="Delete conversation"
+                        >
+                          <Feather
+                            name="trash-2"
+                            size={12}
+                            color={theme.textMuted}
+                          />
+                        </TouchableOpacity>
+                      </View>
                     </TouchableOpacity>
                   );
                 })
               ))}
 
             {/* Session Documents Section (Collapsible) */}
-            {docList.length > 0 && (
+            {activeSessionId && (
               <>
                 <TouchableOpacity
                   style={[styles.sectionHeader, { marginTop: 16 }]}
@@ -356,39 +622,45 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
                 </TouchableOpacity>
 
                 {isDocsExpanded &&
-                  docList.map((doc) => (
-                    <View
-                      key={doc.document_id}
-                      style={[
-                        styles.docItem,
-                        {
-                          backgroundColor: theme.bgInput,
-                          borderColor: theme.borderSubtle,
-                        },
-                      ]}
-                    >
-                      <Feather name="file" size={13} color={theme.primary} />
-                      <View style={{ flex: 1 }}>
-                        <Text
-                          style={[styles.docName, { color: theme.textMain }]}
-                          numberOfLines={1}
-                        >
-                          {doc.filename}
-                        </Text>
-                        <Text
-                          style={[styles.docMeta, { color: theme.textMuted }]}
-                        >
-                          {doc.total_chunks} chunks •{" "}
-                          {(doc.file_size_bytes / 1024).toFixed(1)} KB
-                        </Text>
-                      </View>
-                      <TouchableOpacity
-                        onPress={() => onDeleteDocument(doc.document_id)}
-                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  (docList.length === 0 ? (
+                    <Text style={[styles.emptyText, { color: theme.textMuted, fontSize: 12 }]}>
+                      No documents attached to this session.
+                    </Text>
+                  ) : (
+                    docList.map((doc) => (
+                      <View
+                        key={doc.document_id}
+                        style={[
+                          styles.docItem,
+                          {
+                            backgroundColor: theme.bgInput,
+                            borderColor: theme.borderSubtle,
+                          },
+                        ]}
                       >
-                        <Feather name="x" size={13} color={theme.textMuted} />
-                      </TouchableOpacity>
-                    </View>
+                        <Feather name="file" size={13} color={theme.primary} />
+                        <View style={{ flex: 1 }}>
+                          <Text
+                            style={[styles.docName, { color: theme.textMain }]}
+                            numberOfLines={1}
+                          >
+                            {doc.filename}
+                          </Text>
+                          <Text
+                            style={[styles.docMeta, { color: theme.textMuted }]}
+                          >
+                            {doc.total_chunks} chunks •{" "}
+                            {(doc.file_size_bytes / 1024).toFixed(1)} KB
+                          </Text>
+                        </View>
+                        <TouchableOpacity
+                          onPress={() => onDeleteDocument(doc.document_id)}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        >
+                          <Feather name="x" size={13} color={theme.textMuted} />
+                        </TouchableOpacity>
+                      </View>
+                    ))
                   ))}
               </>
             )}
@@ -619,6 +891,45 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "600",
   },
+  searchToggleBtn: {
+    padding: 4,
+    borderRadius: 6,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  searchContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: Platform.OS === "ios" ? 6 : 2,
+    marginBottom: 8,
+    marginTop: 2,
+    gap: 6,
+  },
+  searchIcon: {
+    marginRight: 2,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 13,
+    paddingVertical: 2,
+    paddingHorizontal: 0,
+  },
+  searchEmptyContainer: {
+    paddingVertical: 12,
+    alignItems: "center",
+    gap: 6,
+  },
+  clearSearchBtn: {
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+  },
+  clearSearchText: {
+    fontSize: 12,
+    fontWeight: "600",
+  },
   emptyText: {
     fontSize: 13,
     fontStyle: "italic",
@@ -635,9 +946,35 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     marginBottom: 2,
   },
+  sessionItemEditing: {
+    paddingVertical: 3,
+  },
   sessionTitle: {
     flex: 1,
     fontSize: 14.5,
+  },
+  editSessionInput: {
+    flex: 1,
+    fontSize: 14,
+    paddingVertical: 2,
+    paddingHorizontal: 4,
+    borderRadius: 4,
+  },
+  editActionButtons: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  sessionItemActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  inlineActionBtn: {
+    padding: 4,
+    borderRadius: 4,
+    alignItems: "center",
+    justifyContent: "center",
   },
   docItem: {
     flexDirection: "row",
