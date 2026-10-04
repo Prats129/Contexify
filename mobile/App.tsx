@@ -78,6 +78,12 @@ export default function App() {
   const isTempActive = Boolean(currentUser && isTemporaryChat);
   const [currentMode, setCurrentMode] = useState<ChatMode>("AUTO");
   const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [totalSessions, setTotalSessions] = useState<number>(0);
+  const [hasMoreSessions, setHasMoreSessions] = useState<boolean>(false);
+  const [isLoadingMoreSessions, setIsLoadingMoreSessions] =
+    useState<boolean>(false);
+  const [isRefreshingSessions, setIsRefreshingSessions] =
+    useState<boolean>(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [documents, setDocuments] = useState<DocumentMetadata[]>([]);
   const [attachedMedia, setAttachedMedia] = useState<MediaAttachment[]>([]);
@@ -171,17 +177,68 @@ export default function App() {
     AsyncStorage.setItem("contexify_theme_accent", nextAccent);
   };
 
+  const SESSIONS_PAGE_SIZE = 15;
+
   const loadUserSessions = async (userId: string) => {
     try {
-      const list = await apiService.getUserSessions(userId);
-      const safeList = Array.isArray(list) ? list : [];
+      const res = await apiService.getUserSessions(userId, {
+        limit: SESSIONS_PAGE_SIZE,
+        offset: 0,
+      });
+      const safeList = Array.isArray(res.sessions) ? res.sessions : [];
       setSessions(safeList);
+      setTotalSessions(res.total ?? safeList.length);
+      setHasMoreSessions(Boolean(res.has_more));
       // Always start in a fresh new chat on app launch
       handleNewChat();
     } catch (err) {
       console.warn("Failed to load sessions:", err);
       setSessions([]);
+      setTotalSessions(0);
+      setHasMoreSessions(false);
       handleNewChat();
+    }
+  };
+
+  const handleLoadMoreSessions = async () => {
+    if (!currentUser || isLoadingMoreSessions || !hasMoreSessions) return;
+    setIsLoadingMoreSessions(true);
+    try {
+      const res = await apiService.getUserSessions(currentUser.id, {
+        limit: SESSIONS_PAGE_SIZE,
+        offset: sessions.length,
+      });
+      const newSessions = Array.isArray(res.sessions) ? res.sessions : [];
+      setSessions((prev) => {
+        const existingIds = new Set(prev.map((s) => s.id));
+        const filtered = newSessions.filter((s) => !existingIds.has(s.id));
+        return [...prev, ...filtered];
+      });
+      setTotalSessions(res.total ?? sessions.length + newSessions.length);
+      setHasMoreSessions(Boolean(res.has_more));
+    } catch (err) {
+      console.warn("Failed to load more sessions:", err);
+    } finally {
+      setIsLoadingMoreSessions(false);
+    }
+  };
+
+  const handleRefreshSessions = async () => {
+    if (!currentUser || isRefreshingSessions) return;
+    setIsRefreshingSessions(true);
+    try {
+      const res = await apiService.getUserSessions(currentUser.id, {
+        limit: SESSIONS_PAGE_SIZE,
+        offset: 0,
+      });
+      const safeList = Array.isArray(res.sessions) ? res.sessions : [];
+      setSessions(safeList);
+      setTotalSessions(res.total ?? safeList.length);
+      setHasMoreSessions(Boolean(res.has_more));
+    } catch (err) {
+      console.warn("Failed to refresh sessions:", err);
+    } finally {
+      setIsRefreshingSessions(false);
     }
   };
 
@@ -237,6 +294,7 @@ export default function App() {
       const currentList = Array.isArray(sessions) ? sessions : [];
       const updated = currentList.filter((s) => s.id !== sessionId);
       setSessions(updated);
+      setTotalSessions((prev) => Math.max(0, prev - 1));
       if (activeSessionId === sessionId) {
         if (updated.length > 0) {
           selectSession(updated[0].id, updated[0].mode);
@@ -330,6 +388,7 @@ export default function App() {
         setActiveSessionId(sessionId);
         if (!isTempActive) {
           setSessions((prev) => [newSession, ...prev]);
+          setTotalSessions((prev) => prev + 1);
         }
       } catch {
         sessionId = generateGuestSessionId();
@@ -485,6 +544,7 @@ export default function App() {
           setActiveSessionId(sessionId);
           if (!isTempActive) {
             setSessions((prev) => [newSession, ...prev]);
+            setTotalSessions((prev) => prev + 1);
           }
         } catch {
           sessionId = generateGuestSessionId();
@@ -638,6 +698,8 @@ export default function App() {
     setIsTemporaryChat(false);
     await AsyncStorage.removeItem("contexify_mobile_user");
     setSessions([]);
+    setTotalSessions(0);
+    setHasMoreSessions(false);
     handleNewChat();
   };
 
@@ -1045,6 +1107,12 @@ export default function App() {
           onClose={() => setDrawerVisible(false)}
           currentUser={currentUser}
           sessions={sessions}
+          totalSessions={totalSessions}
+          hasMoreSessions={hasMoreSessions}
+          isLoadingMoreSessions={isLoadingMoreSessions}
+          onLoadMoreSessions={handleLoadMoreSessions}
+          onRefreshSessions={handleRefreshSessions}
+          isRefreshingSessions={isRefreshingSessions}
           activeSessionId={activeSessionId}
           onSelectSession={selectSession}
           onDeleteSession={handleDeleteSession}

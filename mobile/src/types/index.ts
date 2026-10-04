@@ -42,6 +42,21 @@ export interface ChatSession {
   updated_at: string;
 }
 
+export interface PaginatedChatSessions {
+  sessions: ChatSession[];
+  total: number;
+  has_more: boolean;
+  limit: number | null;
+  offset: number;
+}
+
+export interface SessionListParams {
+  limit?: number;
+  offset?: number;
+  search?: string;
+  signal?: AbortSignal;
+}
+
 export interface Citation {
   source_id?: number | string;
   document_id?: string;

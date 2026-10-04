@@ -4,6 +4,8 @@ import type {
   User,
   GoogleAuthRequest,
   ChatSession,
+  PaginatedChatSessions,
+  SessionListParams,
   ChatMode,
   SessionHistoryResponse,
   DocumentMetadata,
@@ -369,16 +371,67 @@ export const apiService = {
   },
 
   // --- Sessions & History ---
-  async getUserSessions(userId: string): Promise<ChatSession[]> {
+  async getUserSessions(
+    userId: string,
+    params?: SessionListParams
+  ): Promise<PaginatedChatSessions> {
     try {
-      if (!userId || userId.startsWith('guest')) return [];
-      const url = await getEndpoint(`/session/list?user_id=${encodeURIComponent(userId)}`);
-      const res = await fetch(url);
-      if (!res.ok) return [];
+      if (!userId || userId.startsWith('guest')) {
+        return {
+          sessions: [],
+          total: 0,
+          has_more: false,
+          limit: params?.limit ?? null,
+          offset: params?.offset ?? 0,
+        };
+      }
+      const query = new URLSearchParams({ user_id: userId, paginate: 'true' });
+      if (params?.limit !== undefined) {
+        query.set('limit', String(params.limit));
+      }
+      if (params?.offset !== undefined) {
+        query.set('offset', String(params.offset));
+      }
+      if (params?.search && params.search.trim()) {
+        query.set('search', params.search.trim());
+      }
+
+      const url = await getEndpoint(`/session/list?${query.toString()}`);
+      const res = await fetch(url, { signal: params?.signal });
+      if (!res.ok) {
+        return {
+          sessions: [],
+          total: 0,
+          has_more: false,
+          limit: params?.limit ?? null,
+          offset: params?.offset ?? 0,
+        };
+      }
       const data = await res.json();
-      return Array.isArray(data) ? data : (data?.sessions || []);
+      if (Array.isArray(data)) {
+        return {
+          sessions: data,
+          total: data.length,
+          has_more: false,
+          limit: params?.limit ?? null,
+          offset: params?.offset ?? 0,
+        };
+      }
+      return {
+        sessions: Array.isArray(data?.sessions) ? data.sessions : [],
+        total: typeof data?.total === 'number' ? data.total : (data?.sessions?.length ?? 0),
+        has_more: Boolean(data?.has_more),
+        limit: data?.limit ?? params?.limit ?? null,
+        offset: data?.offset ?? params?.offset ?? 0,
+      };
     } catch {
-      return [];
+      return {
+        sessions: [],
+        total: 0,
+        has_more: false,
+        limit: params?.limit ?? null,
+        offset: params?.offset ?? 0,
+      };
     }
   },
 

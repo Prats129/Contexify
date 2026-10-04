@@ -14,6 +14,9 @@ import {
   Animated,
   PanResponder,
   Platform,
+  RefreshControl,
+  type NativeSyntheticEvent,
+  type NativeScrollEvent,
 } from "react-native";
 import { Feather, Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -27,6 +30,12 @@ interface DrawerMenuProps {
   onClose: () => void;
   currentUser: User | null;
   sessions?: ChatSession[];
+  totalSessions?: number;
+  hasMoreSessions?: boolean;
+  isLoadingMoreSessions?: boolean;
+  onLoadMoreSessions?: () => void;
+  onRefreshSessions?: () => void;
+  isRefreshingSessions?: boolean;
   activeSessionId: string | null;
   onSelectSession: (id: string) => void;
   onDeleteSession: (id: string) => void;
@@ -48,6 +57,12 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
   onClose,
   currentUser,
   sessions = [],
+  totalSessions,
+  hasMoreSessions = false,
+  isLoadingMoreSessions = false,
+  onLoadMoreSessions,
+  onRefreshSessions,
+  isRefreshingSessions = false,
   activeSessionId,
   onSelectSession,
   onDeleteSession,
@@ -291,6 +306,20 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
     });
   };
 
+  const handleScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent;
+    const paddingToBottom = 30;
+    if (
+      contentOffset.y > 0 &&
+      layoutMeasurement.height + contentOffset.y >=
+        contentSize.height - paddingToBottom
+    ) {
+      if (hasMoreSessions && !isLoadingMoreSessions && onLoadMoreSessions) {
+        onLoadMoreSessions();
+      }
+    }
+  };
+
   return (
     <Modal
       visible={visible}
@@ -478,6 +507,20 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
               style={styles.scrollArea}
               contentContainerStyle={styles.scrollContent}
               showsVerticalScrollIndicator={false}
+              scrollEventThrottle={16}
+              onScroll={handleScroll}
+              onMomentumScrollEnd={handleScroll}
+              alwaysBounceVertical={hasMoreSessions}
+              refreshControl={
+                onRefreshSessions ? (
+                  <RefreshControl
+                    refreshing={Boolean(isRefreshingSessions)}
+                    onRefresh={onRefreshSessions}
+                    tintColor={colors.primary}
+                    colors={[colors.primary]}
+                  />
+                ) : undefined
+              }
             >
               {sessionList.length === 0 ? (
                 <Text style={[styles.emptyText, { color: theme.textMuted }]}>
@@ -663,6 +706,36 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
                   );
                 })
               )}
+
+              {/* Seamless Scroll Loading Indicator (Matching Website) */}
+              {isChatsExpanded && isLoadingMoreSessions && (
+                <View style={styles.scrollLoadingContainer}>
+                  <ActivityIndicator size="small" color={colors.primary} />
+                  <Text
+                    style={[
+                      styles.scrollLoadingText,
+                      { color: theme.textMuted },
+                    ]}
+                  >
+                    Loading more chats...
+                  </Text>
+                </View>
+              )}
+
+              {/* End of conversations marker */}
+              {isChatsExpanded &&
+                !hasMoreSessions &&
+                sessionList.length >= 6 &&
+                !searchQuery.trim() && (
+                  <View style={styles.endOfListContainer}>
+                    <Text
+                      style={[styles.endOfListText, { color: theme.textMuted }]}
+                    >
+                      All {totalSessions || sessionList.length} conversations
+                      loaded
+                    </Text>
+                  </View>
+                )}
             </ScrollView>
           ) : (
             <View style={styles.collapsedSpacer} />
@@ -1096,5 +1169,26 @@ const styles = StyleSheet.create({
   serverConfigText: {
     fontSize: 11,
     fontWeight: "500",
+  },
+  scrollLoadingContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 14,
+  },
+  scrollLoadingText: {
+    fontSize: 12,
+    fontWeight: "500",
+  },
+  endOfListContainer: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 10,
+    opacity: 0.6,
+  },
+  endOfListText: {
+    fontSize: 11,
+    fontWeight: "400",
   },
 });
