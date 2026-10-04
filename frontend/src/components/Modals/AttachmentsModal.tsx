@@ -294,7 +294,7 @@ export const AttachmentsModal: React.FC<AttachmentsModalProps> = ({
     return <LuFile className="text-(--text-muted)" size={28} />;
   };
 
-  if (!isOpen) return null;
+  if (!isOpen || !currentUser) return null;
 
   return (
     <div

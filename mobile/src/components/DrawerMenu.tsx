@@ -33,7 +33,8 @@ interface DrawerMenuProps {
   onRenameSession?: (id: string, newTitle: string) => Promise<void> | void;
   onNewChat: () => void;
   documents?: DocumentMetadata[];
-  onDeleteDocument: (id: string) => void;
+  onDeleteDocument?: (id: string) => void;
+  onOpenAttachments?: () => void;
   onOpenAuth: () => void;
   onOpenProfile: () => void;
   onOpenServerConfig: () => void;
@@ -54,6 +55,7 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
   onNewChat,
   documents = [],
   onDeleteDocument,
+  onOpenAttachments,
   onOpenAuth,
   onOpenProfile,
   onOpenServerConfig,
@@ -64,10 +66,8 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
   const insets = useSafeAreaInsets();
   const theme = customTheme || getAppTheme(isDark);
   const sessionList = Array.isArray(sessions) ? sessions : [];
-  const docList = Array.isArray(documents) ? documents : [];
 
   const [isChatsExpanded, setIsChatsExpanded] = useState(true);
-  const [isDocsExpanded, setIsDocsExpanded] = useState(true);
   const [resolvedAvatar, setResolvedAvatar] = useState<string | null>(null);
   const [avatarLoadError, setAvatarLoadError] = useState(false);
 
@@ -79,7 +79,9 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
   // --- Rename State ---
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState("");
-  const [isSavingSessionId, setIsSavingSessionId] = useState<string | null>(null);
+  const [isSavingSessionId, setIsSavingSessionId] = useState<string | null>(
+    null,
+  );
   const editInputRef = useRef<TextInput | null>(null);
 
   const translateX = useRef(new Animated.Value(-340)).current;
@@ -208,7 +210,10 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
     }
 
     if (trimmed.length > 100) {
-      Alert.alert("Title Too Long", "Session title must be 100 characters or fewer.");
+      Alert.alert(
+        "Title Too Long",
+        "Session title must be 100 characters or fewer.",
+      );
       return;
     }
 
@@ -225,7 +230,10 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
       setEditTitle("");
     } catch (err: any) {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      Alert.alert("Rename Failed", err?.message || "Could not update conversation name.");
+      Alert.alert(
+        "Rename Failed",
+        err?.message || "Could not update conversation name.",
+      );
     } finally {
       setIsSavingSessionId(null);
     }
@@ -233,25 +241,21 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
 
   const handleSessionLongPress = (session: ChatSession) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    Alert.alert(
-      "Conversation Options",
-      session.title,
-      [
-        {
-          text: "Rename",
-          onPress: () => handleStartRename(session),
-        },
-        {
-          text: "Delete",
-          style: "destructive",
-          onPress: () => handleDeletePress(session.id, session.title),
-        },
-        {
-          text: "Cancel",
-          style: "cancel",
-        },
-      ]
-    );
+    Alert.alert("Conversation Options", session.title, [
+      {
+        text: "Rename",
+        onPress: () => handleStartRename(session),
+      },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: () => handleDeletePress(session.id, session.title),
+      },
+      {
+        text: "Cancel",
+        style: "cancel",
+      },
+    ]);
   };
 
   const handleSelect = (id: string) => {
@@ -348,13 +352,40 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
             <Text style={styles.newChatText}>New Conversation</Text>
           </TouchableOpacity>
 
-          {/* Scrollable Collapsible Conversations and Documents */}
-          <ScrollView
-            style={styles.scrollArea}
-            contentContainerStyle={styles.scrollContent}
-            showsVerticalScrollIndicator={false}
-          >
-            {/* Conversation History Section Header (Collapsible) */}
+          {/* Media & Files Library Button (Logged-in users only) */}
+          {currentUser && onOpenAttachments && (
+            <TouchableOpacity
+              style={[
+                styles.mediaFilesBtn,
+                {
+                  backgroundColor: theme.bgInput,
+                  borderColor: theme.borderSubtle,
+                },
+              ]}
+              onPress={() => {
+                Haptics.selectionAsync();
+                handleClose(() => onOpenAttachments());
+              }}
+              activeOpacity={0.7}
+              accessibilityLabel="Media and Files Library"
+            >
+              <Feather name="paperclip" size={15} color={colors.primary} />
+              <Text
+                style={[styles.mediaFilesBtnText, { color: theme.textMain }]}
+              >
+                Media & Files
+              </Text>
+              <Feather
+                name="chevron-right"
+                size={14}
+                color={theme.textMuted}
+                style={{ marginLeft: "auto" }}
+              />
+            </TouchableOpacity>
+          )}
+
+          {/* Fixed Pinned Conversation History Section Header & Search */}
+          <View style={styles.sectionHeaderPinned}>
             <View style={styles.sectionHeader}>
               <TouchableOpacity
                 style={styles.sectionHeaderLeft}
@@ -439,10 +470,16 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
                 )}
               </View>
             )}
+          </View>
 
-            {/* Conversation History List */}
-            {isChatsExpanded &&
-              (sessionList.length === 0 ? (
+          {/* Scrollable Conversation History (Only the chats scroll) */}
+          {isChatsExpanded && (
+            <ScrollView
+              style={styles.scrollArea}
+              contentContainerStyle={styles.scrollContent}
+              showsVerticalScrollIndicator={false}
+            >
+              {sessionList.length === 0 ? (
                 <Text style={[styles.emptyText, { color: theme.textMuted }]}>
                   {currentUser
                     ? "No conversations yet."
@@ -450,14 +487,24 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
                 </Text>
               ) : filteredSessions.length === 0 ? (
                 <View style={styles.searchEmptyContainer}>
-                  <Text style={[styles.emptyText, { color: theme.textMuted, textAlign: "center" }]}>
+                  <Text
+                    style={[
+                      styles.emptyText,
+                      { color: theme.textMuted, textAlign: "center" },
+                    ]}
+                  >
                     No conversations matching "{searchQuery}"
                   </Text>
                   <TouchableOpacity
                     onPress={() => setSearchQuery("")}
                     style={styles.clearSearchBtn}
                   >
-                    <Text style={[styles.clearSearchText, { color: colors.primary }]}>
+                    <Text
+                      style={[
+                        styles.clearSearchText,
+                        { color: colors.primary },
+                      ]}
+                    >
                       Clear Search
                     </Text>
                   </TouchableOpacity>
@@ -483,13 +530,18 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
                         ]}
                       >
                         <Ionicons
-                          name={isWeb ? "globe-outline" : "document-text-outline"}
+                          name={
+                            isWeb ? "globe-outline" : "document-text-outline"
+                          }
                           size={14}
                           color={colors.primary}
                         />
                         <TextInput
                           ref={editInputRef}
-                          style={[styles.editSessionInput, { color: theme.textMain }]}
+                          style={[
+                            styles.editSessionInput,
+                            { color: theme.textMain },
+                          ]}
                           value={editTitle}
                           onChangeText={setEditTitle}
                           maxLength={100}
@@ -501,22 +553,43 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
                         />
                         <View style={styles.editActionButtons}>
                           {isSaving ? (
-                            <ActivityIndicator size="small" color={colors.primary} />
+                            <ActivityIndicator
+                              size="small"
+                              color={colors.primary}
+                            />
                           ) : (
                             <>
                               <TouchableOpacity
                                 onPress={() => handleSaveRename(s.id)}
-                                hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                                hitSlop={{
+                                  top: 8,
+                                  bottom: 8,
+                                  left: 6,
+                                  right: 6,
+                                }}
                                 style={styles.inlineActionBtn}
                               >
-                                <Feather name="check" size={14} color={colors.primary} />
+                                <Feather
+                                  name="check"
+                                  size={14}
+                                  color={colors.primary}
+                                />
                               </TouchableOpacity>
                               <TouchableOpacity
                                 onPress={handleCancelRename}
-                                hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                                hitSlop={{
+                                  top: 8,
+                                  bottom: 8,
+                                  left: 6,
+                                  right: 6,
+                                }}
                                 style={styles.inlineActionBtn}
                               >
-                                <Feather name="x" size={14} color={theme.textMuted} />
+                                <Feather
+                                  name="x"
+                                  size={14}
+                                  color={theme.textMuted}
+                                />
                               </TouchableOpacity>
                             </>
                           )}
@@ -589,82 +662,9 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
                     </TouchableOpacity>
                   );
                 })
-              ))}
-
-            {/* Session Documents Section (Collapsible) */}
-            {activeSessionId && (
-              <>
-                <TouchableOpacity
-                  style={[styles.sectionHeader, { marginTop: 16 }]}
-                  onPress={() => {
-                    Haptics.selectionAsync();
-                    setIsDocsExpanded(!isDocsExpanded);
-                  }}
-                  activeOpacity={0.7}
-                >
-                  <View style={styles.sectionHeaderLeft}>
-                    <Feather
-                      name={isDocsExpanded ? "chevron-down" : "chevron-right"}
-                      size={14}
-                      color={theme.textMuted}
-                    />
-                    <Text
-                      style={[styles.sectionTitle, { color: theme.textMuted }]}
-                    >
-                      ATTACHED DOCUMENTS
-                    </Text>
-                  </View>
-                  <Text
-                    style={[styles.sectionCount, { color: theme.textMuted }]}
-                  >
-                    {docList.length}
-                  </Text>
-                </TouchableOpacity>
-
-                {isDocsExpanded &&
-                  (docList.length === 0 ? (
-                    <Text style={[styles.emptyText, { color: theme.textMuted, fontSize: 12 }]}>
-                      No documents attached to this session.
-                    </Text>
-                  ) : (
-                    docList.map((doc) => (
-                      <View
-                        key={doc.document_id}
-                        style={[
-                          styles.docItem,
-                          {
-                            backgroundColor: theme.bgInput,
-                            borderColor: theme.borderSubtle,
-                          },
-                        ]}
-                      >
-                        <Feather name="file" size={13} color={theme.primary} />
-                        <View style={{ flex: 1 }}>
-                          <Text
-                            style={[styles.docName, { color: theme.textMain }]}
-                            numberOfLines={1}
-                          >
-                            {doc.filename}
-                          </Text>
-                          <Text
-                            style={[styles.docMeta, { color: theme.textMuted }]}
-                          >
-                            {doc.total_chunks} chunks •{" "}
-                            {(doc.file_size_bytes / 1024).toFixed(1)} KB
-                          </Text>
-                        </View>
-                        <TouchableOpacity
-                          onPress={() => onDeleteDocument(doc.document_id)}
-                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                        >
-                          <Feather name="x" size={13} color={theme.textMuted} />
-                        </TouchableOpacity>
-                      </View>
-                    ))
-                  ))}
-              </>
-            )}
-          </ScrollView>
+              )}
+            </ScrollView>
+          )}
 
           {/* Bottom Pinned Area: User Profile & Server Config */}
           <View
@@ -861,9 +861,30 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "600",
   },
+  mediaFilesBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginHorizontal: 16,
+    marginTop: 8,
+    marginBottom: 4,
+    height: 40,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  mediaFilesBtnText: {
+    fontSize: 14,
+    fontWeight: "500",
+  },
+  sectionHeaderPinned: {
+    paddingHorizontal: 12,
+    marginTop: 10,
+    marginBottom: 2,
+  },
   scrollArea: {
     flex: 1,
-    marginTop: 10,
+    marginTop: 4,
   },
   scrollContent: {
     paddingHorizontal: 14,

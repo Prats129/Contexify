@@ -159,8 +159,8 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
           </button>
         )}
 
-        {/* Attachments & Media Library Button */}
-        {onOpenAttachmentsModal && (
+        {/* Attachments & Media Library Button (Logged-in users only) */}
+        {Boolean(currentUser && onOpenAttachmentsModal) && (
           <button
             type="button"
             onClick={onOpenAttachmentsModal}

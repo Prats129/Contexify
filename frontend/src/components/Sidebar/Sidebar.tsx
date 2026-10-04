@@ -57,7 +57,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   return (
     <aside
-      className={`h-full max-h-dvh bg-(--bg-sidebar) border-r border-(--border-subtle) flex flex-col gap-3 shrink-0 overflow-y-auto overflow-x-hidden transition-[transform,width] duration-200 ease-in-out
+      className={`h-full max-h-dvh bg-(--bg-sidebar) border-r border-(--border-subtle) flex flex-col gap-3 shrink-0 overflow-hidden transition-[transform,width] duration-200 ease-in-out
         max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-50 max-md:w-72 max-md:p-3.5 max-md:shadow-2xl
         ${isOpen ? "max-md:translate-x-0" : "max-md:-translate-x-full max-md:pointer-events-none"}
         md:relative md:translate-x-0 md:pointer-events-auto md:shadow-none
@@ -66,7 +66,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     >
       {/* Brand & Toggle Sidebar Button */}
       <div
-        className={`flex items-center pb-2.5 border-b border-(--border-subtle) w-full ${
+        className={`flex items-center pb-2.5 border-b border-(--border-subtle) w-full shrink-0 ${
           isOpen ? "justify-between gap-2" : "justify-center"
         }`}
       >
@@ -140,7 +140,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* New Conversation Button (Logged-in users only) */}
       {currentUser && (
-        <div className={`${isOpen ? "w-full" : "w-10"} flex justify-center`}>
+        <div
+          className={`${isOpen ? "w-full" : "w-10"} flex justify-center shrink-0`}
+        >
           <button
             type="button"
             className={`w-full flex items-center justify-center gap-2 bg-primary-theme hover:opacity-90 text-white font-semibold rounded-lg cursor-pointer ${
@@ -155,9 +157,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
       )}
 
-      {/* Attachments & Media Button */}
-      {onOpenAttachmentsModal && (
-        <div className={`${isOpen ? "w-full" : "w-10"} flex justify-center`}>
+      {/* Attachments & Media Button (Logged-in users only) */}
+      {currentUser && onOpenAttachmentsModal && (
+        <div
+          className={`${isOpen ? "w-full" : "w-10"} flex justify-center shrink-0`}
+        >
           <button
             type="button"
             className={`w-full flex items-center justify-center gap-2 bg-(--border-subtle) hover:bg-(--border-hover) text-(--text-main) border border-(--border-subtle) font-medium rounded-lg cursor-pointer transition-colors ${
@@ -172,25 +176,27 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
       )}
 
-      {/* Conversation History */}
-      <SessionHistory
-        isOpen={isOpen}
-        currentUser={currentUser}
-        sessions={sessions}
-        activeSessionId={activeSessionId}
-        totalSessions={totalSessions}
-        hasMore={hasMore}
-        isLoadingInitial={isLoadingInitial}
-        isLoadingMore={isLoadingMore}
-        isSearching={isSearching}
-        searchQuery={searchQuery}
-        onSearchChange={onSearchChange}
-        onLoadMore={onLoadMore}
-        onSelectSession={onSelectSession}
-        onDeleteSession={onDeleteSession}
-        onRenameSession={onRenameSession}
-        onOpenUserModal={onOpenUserModal}
-      />
+      {/* Conversation History (Scrolls internally) */}
+      <div className="flex-1 min-h-0 w-full flex flex-col overflow-hidden">
+        <SessionHistory
+          isOpen={isOpen}
+          currentUser={currentUser}
+          sessions={sessions}
+          activeSessionId={activeSessionId}
+          totalSessions={totalSessions}
+          hasMore={hasMore}
+          isLoadingInitial={isLoadingInitial}
+          isLoadingMore={isLoadingMore}
+          isSearching={isSearching}
+          searchQuery={searchQuery}
+          onSearchChange={onSearchChange}
+          onLoadMore={onLoadMore}
+          onSelectSession={onSelectSession}
+          onDeleteSession={onDeleteSession}
+          onRenameSession={onRenameSession}
+          onOpenUserModal={onOpenUserModal}
+        />
+      </div>
 
       {/* Bottom Section: Logged in User Profile Card */}
       {currentUser && (

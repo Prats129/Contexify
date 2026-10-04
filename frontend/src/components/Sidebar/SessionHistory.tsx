@@ -315,9 +315,9 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
   };
 
   return (
-    <div className="flex flex-col gap-1.5 w-full">
+    <div className="flex flex-col gap-1.5 w-full flex-1 min-h-0 overflow-hidden">
       {isOpen && (
-        <div className="flex items-center justify-between px-1 select-none">
+        <div className="flex items-center justify-between px-1 select-none shrink-0">
           {/* Collapsible Section Header Trigger */}
           <button
             type="button"
@@ -367,7 +367,7 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
       {isOpen && !isGuest && (
         <div
           ref={searchContainerRef}
-          className={`grid transition-[grid-template-rows,opacity,margin] duration-200 ease-in-out ${
+          className={`shrink-0 grid transition-[grid-template-rows,opacity,margin] duration-200 ease-in-out ${
             isSearchOpen
               ? "grid-rows-[1fr] opacity-100 mt-0.5 mb-1"
               : "grid-rows-[0fr] opacity-0 m-0 pointer-events-none"
@@ -428,16 +428,16 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
       {/* Collapsible History Body */}
       {isOpen ? (
         <div
-          className={`grid transition-[grid-template-rows,opacity] duration-200 ease-in-out w-full ${
+          className={`flex-1 min-h-0 w-full flex flex-col overflow-hidden transition-opacity duration-200 ${
             isSectionCollapsed
-              ? "grid-rows-[0fr] opacity-0 pointer-events-none"
-              : "grid-rows-[1fr] opacity-100"
+              ? "hidden opacity-0 pointer-events-none"
+              : "opacity-100"
           }`}
         >
-          <div className="overflow-hidden min-h-0">
+          <div className="flex-1 min-h-0 w-full flex flex-col overflow-hidden">
             <div
               onScroll={handleScroll}
-              className="flex flex-col gap-1.5 w-full max-h-60 overflow-y-auto pr-0.5"
+              className="flex flex-col gap-1.5 w-full flex-1 min-h-0 overflow-y-auto pr-0.5"
             >
               {isGuest ? (
                 <div className="p-3 border border-(--border-subtle) bg-(--border-subtle)/50 rounded-xl text-center flex flex-col items-center gap-1.5">
@@ -684,7 +684,7 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
         </div>
       ) : (
         /* Compact Sidebar Icon Mode */
-        <div className="flex flex-col gap-1.5 w-full items-center">
+        <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden w-full flex flex-col gap-2 items-center py-1">
           {isGuest ? (
             <div
               className="flex justify-center py-2 text-(--text-muted)"

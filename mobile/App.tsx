@@ -51,6 +51,7 @@ import { CitationsSheet } from "./src/components/CitationsSheet";
 import { AuthModal } from "./src/components/AuthModal";
 import { ProfileModal } from "./src/components/ProfileModal";
 import { ServerConfigModal } from "./src/components/ServerConfigModal";
+import { AttachmentsModal } from "./src/components/AttachmentsModal";
 
 function generateGuestSessionId(): string {
   return (
@@ -97,6 +98,7 @@ export default function App() {
   const [citationsVisible, setCitationsVisible] = useState(false);
   const [activeCitations, setActiveCitations] = useState<Citation[]>([]);
   const [serverConfigVisible, setServerConfigVisible] = useState(false);
+  const [attachmentsVisible, setAttachmentsVisible] = useState(false);
 
   const flatListRef = useRef<FlatList<Message>>(null);
 
@@ -259,7 +261,7 @@ export default function App() {
     const prevTitle = current.title;
     // Optimistic update
     setSessions((prev) =>
-      prev.map((s) => (s.id === sessionId ? { ...s, title: trimmed } : s))
+      prev.map((s) => (s.id === sessionId ? { ...s, title: trimmed } : s)),
     );
 
     try {
@@ -267,7 +269,7 @@ export default function App() {
     } catch (err: unknown) {
       // Revert on error
       setSessions((prev) =>
-        prev.map((s) => (s.id === sessionId ? { ...s, title: prevTitle } : s))
+        prev.map((s) => (s.id === sessionId ? { ...s, title: prevTitle } : s)),
       );
       const msg = err instanceof Error ? err.message : String(err);
       Alert.alert("Rename Failed", msg);
@@ -576,7 +578,55 @@ export default function App() {
     setCitationsVisible(true);
   };
 
-  // --- 9. Auth Success / Logout ---
+  // --- 9. Attachments & Media Handlers ---
+  const activeSessionTitle = useMemo(() => {
+    return sessions.find((s) => s.id === activeSessionId)?.title;
+  }, [sessions, activeSessionId]);
+
+  const handleAttachMediaFromModal = (media: MediaAttachment) => {
+    setAttachedMedia((prev) => {
+      const matchId = media.id || media.media_id;
+      if (
+        prev.some(
+          (m) =>
+            (matchId && (m.id === matchId || m.media_id === matchId)) ||
+            m.url === media.url,
+        )
+      ) {
+        return prev;
+      }
+      return [...prev, media];
+    });
+    if (currentMode !== "IMAGE_GENERATION" && currentMode !== "AUTO") {
+      setCurrentMode("MULTIMODAL");
+    }
+  };
+
+  const handleAttachDocumentFromModal = (doc: DocumentMetadata) => {
+    setDocuments((prev) => {
+      const arr = Array.isArray(prev) ? prev : [];
+      if (arr.some((d) => d.document_id === doc.document_id)) {
+        return arr;
+      }
+      return [...arr, doc];
+    });
+    if (currentMode !== "DOCUMENT_RAG" && currentMode !== "AUTO") {
+      setCurrentMode("DOCUMENT_RAG");
+    }
+  };
+
+  const handleAssetDeletedFromModal = (assetId: string) => {
+    setDocuments((prev) =>
+      (Array.isArray(prev) ? prev : []).filter(
+        (d) => d.document_id !== assetId,
+      ),
+    );
+    setAttachedMedia((prev) =>
+      prev.filter((m) => m.id !== assetId && m.media_id !== assetId),
+    );
+  };
+
+  // --- 10. Auth Success / Logout ---
   const handleAuthSuccess = async (user: User) => {
     setCurrentUser(user);
     await AsyncStorage.setItem("contexify_mobile_user", JSON.stringify(user));
@@ -609,6 +659,9 @@ export default function App() {
           isTemporaryChat={isTempActive}
           onToggleTemporaryChat={
             currentUser ? handleToggleTemporaryChat : undefined
+          }
+          onOpenAttachments={
+            currentUser ? () => setAttachmentsVisible(true) : undefined
           }
         />
 
@@ -999,6 +1052,9 @@ export default function App() {
           onNewChat={handleNewChat}
           documents={documents}
           onDeleteDocument={handleDeleteDocument}
+          onOpenAttachments={
+            currentUser ? () => setAttachmentsVisible(true) : undefined
+          }
           onOpenAuth={() => setAuthVisible(true)}
           onOpenProfile={() => setProfileVisible(true)}
           onOpenServerConfig={() => setServerConfigVisible(true)}
@@ -1052,6 +1108,20 @@ export default function App() {
         <ServerConfigModal
           visible={serverConfigVisible}
           onClose={() => setServerConfigVisible(false)}
+          isDark={isDark}
+          theme={theme}
+        />
+
+        {/* Attachments & Media Library Modal */}
+        <AttachmentsModal
+          visible={attachmentsVisible}
+          onClose={() => setAttachmentsVisible(false)}
+          currentUser={currentUser}
+          activeSessionId={activeSessionId}
+          activeSessionTitle={activeSessionTitle}
+          onAttachMedia={handleAttachMediaFromModal}
+          onAttachDocument={handleAttachDocumentFromModal}
+          onAssetDeleted={handleAssetDeletedFromModal}
           isDark={isDark}
           theme={theme}
         />

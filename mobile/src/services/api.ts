@@ -10,6 +10,8 @@ import type {
   Citation,
   MediaAttachment,
   StreamHandlers,
+  PaginatedAssetsResponse,
+  AssetQueryParams,
 } from '../types';
 
 // Default development IP matching your current Wi-Fi network (10.66.137.54:8001)
@@ -433,6 +435,43 @@ export const apiService = {
       data.url = `${host}${data.url}`;
     }
     return data;
+  },
+
+  async getAssets(params?: AssetQueryParams): Promise<PaginatedAssetsResponse> {
+    const query = new URLSearchParams();
+    if (params?.userId) query.append('user_id', params.userId);
+    if (params?.sessionId) query.append('session_id', params.sessionId);
+    if (params?.origin && params.origin !== 'all') query.append('origin', params.origin);
+    if (params?.fileType && params.fileType !== 'all') query.append('file_type', params.fileType);
+    if (params?.search?.trim()) query.append('search', params.search.trim());
+    if (params?.limit) query.append('limit', String(params.limit));
+    if (params?.offset !== undefined) query.append('offset', String(params.offset));
+
+    const url = await getEndpoint(`/media/assets?${query.toString()}`);
+    const res = await fetch(url);
+    if (!res.ok) {
+      const err = await res.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Failed to fetch media assets'));
+    }
+    const data: PaginatedAssetsResponse = await res.json();
+    const host = await getCleanHost();
+    return {
+      ...data,
+      items: (data.items || []).map((item) => ({
+        ...item,
+        url: item.url?.startsWith('/') ? `${host}${item.url}` : item.url,
+      })),
+    };
+  },
+
+  async deleteAsset(assetId: string): Promise<{ message: string; id: string }> {
+    const url = await getEndpoint(`/media/assets/${encodeURIComponent(assetId)}`);
+    const res = await fetch(url, { method: 'DELETE' });
+    if (!res.ok) {
+      const err = await res.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Failed to delete asset'));
+    }
+    return res.json();
   },
 
   async createSession(

@@ -144,8 +144,9 @@ export const App: React.FC = () => {
   };
 
   const handleOpenAttachmentsModal = useCallback(() => {
+    if (!currentUser) return;
     setIsAttachmentsModalOpen(true);
-  }, []);
+  }, [currentUser]);
 
   const handleAttachMediaFromModal = useCallback((media: MediaAttachment) => {
     setAttachedMedia((prev) => {
@@ -957,7 +958,9 @@ export const App: React.FC = () => {
         onNewSession={handleNewSession}
         onDeleteSession={handleDeleteSession}
         onRenameSession={handleRenameSession}
-        onOpenAttachmentsModal={handleOpenAttachmentsModal}
+        onOpenAttachmentsModal={
+          currentUser ? handleOpenAttachmentsModal : undefined
+        }
       />
 
       <ChatWorkspace
@@ -987,7 +990,9 @@ export const App: React.FC = () => {
         onToggleTemporaryChat={
           currentUser ? handleToggleTemporaryChat : undefined
         }
-        onOpenAttachmentsModal={handleOpenAttachmentsModal}
+        onOpenAttachmentsModal={
+          currentUser ? handleOpenAttachmentsModal : undefined
+        }
       />
 
       <UserModal
