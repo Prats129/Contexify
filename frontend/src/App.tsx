@@ -3,6 +3,7 @@ import { apiService } from "./services/api";
 import { Sidebar } from "./components/Sidebar/Sidebar";
 import { ChatWorkspace } from "./components/Chat/ChatWorkspace";
 import { UserModal } from "./components/Modals/UserModal";
+import { AttachmentsModal } from "./components/Modals/AttachmentsModal";
 import { useChatSessions } from "./hooks/useChatSessions";
 import type {
   User,
@@ -125,6 +126,7 @@ export const App: React.FC = () => {
   const [userModalTab, setUserModalTab] = useState<"login" | "register">(
     "login",
   );
+  const [isAttachmentsModalOpen, setIsAttachmentsModalOpen] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(() => {
     if (typeof window !== "undefined" && window.innerWidth < 768) {
       return false;
@@ -140,6 +142,35 @@ export const App: React.FC = () => {
     setUserModalTab(tab);
     setIsUserModalOpen(true);
   };
+
+  const handleOpenAttachmentsModal = useCallback(() => {
+    setIsAttachmentsModalOpen(true);
+  }, []);
+
+  const handleAttachMediaFromModal = useCallback((media: MediaAttachment) => {
+    setAttachedMedia((prev) => {
+      if (
+        prev.some((m) => (m.id && m.id === media.id) || m.url === media.url)
+      ) {
+        return prev;
+      }
+      return [...prev, media];
+    });
+  }, []);
+
+  const handleAttachDocumentFromModal = useCallback((doc: DocumentMetadata) => {
+    setDocuments((prev) => {
+      if (prev.some((d) => d.document_id === doc.document_id)) {
+        return prev;
+      }
+      return [...prev, doc];
+    });
+  }, []);
+
+  const handleAssetDeletedFromModal = useCallback((assetId: string) => {
+    setAttachedMedia((prev) => prev.filter((m) => m.id !== assetId));
+    setDocuments((prev) => prev.filter((d) => d.document_id !== assetId));
+  }, []);
 
   const handleToggleSidebar = () => {
     setIsSidebarOpen((prev) => {
@@ -926,8 +957,7 @@ export const App: React.FC = () => {
         onNewSession={handleNewSession}
         onDeleteSession={handleDeleteSession}
         onRenameSession={handleRenameSession}
-        documents={documents}
-        onDeleteDocument={handleDeleteDocument}
+        onOpenAttachmentsModal={handleOpenAttachmentsModal}
       />
 
       <ChatWorkspace
@@ -957,6 +987,7 @@ export const App: React.FC = () => {
         onToggleTemporaryChat={
           currentUser ? handleToggleTemporaryChat : undefined
         }
+        onOpenAttachmentsModal={handleOpenAttachmentsModal}
       />
 
       <UserModal
@@ -977,6 +1008,19 @@ export const App: React.FC = () => {
         onChangePassword={handleChangePassword}
         onUploadAvatar={handleUploadAvatar}
         onDeleteAvatar={handleDeleteAvatar}
+      />
+
+      <AttachmentsModal
+        isOpen={isAttachmentsModalOpen}
+        onClose={() => setIsAttachmentsModalOpen(false)}
+        currentUser={currentUser}
+        activeSessionId={activeSessionId}
+        activeSessionTitle={
+          sessions.find((s) => s.id === activeSessionId)?.title || undefined
+        }
+        onAttachMedia={handleAttachMediaFromModal}
+        onAttachDocument={handleAttachDocumentFromModal}
+        onAssetDeleted={handleAssetDeletedFromModal}
       />
     </div>
   );

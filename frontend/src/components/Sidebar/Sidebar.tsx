@@ -1,10 +1,9 @@
 import React from "react";
-import { LuPlus, LuX } from "react-icons/lu";
+import { LuPlus, LuX, LuPaperclip } from "react-icons/lu";
 import { FiSidebar } from "react-icons/fi";
 import { UserProfileCard } from "./UserProfileCard";
 import { SessionHistory } from "./SessionHistory";
-import { DocumentList } from "./DocumentList";
-import type { User, ChatSession, DocumentMetadata } from "../../types";
+import type { User, ChatSession } from "../../types";
 
 interface SidebarProps {
   isOpen: boolean;
@@ -18,7 +17,10 @@ interface SidebarProps {
   onSelectSession: (sessionId: string) => void;
   onNewSession: () => void;
   onDeleteSession: (sessionId: string) => void;
-  onRenameSession?: (sessionId: string, newTitle: string) => Promise<void> | void;
+  onRenameSession?: (
+    sessionId: string,
+    newTitle: string,
+  ) => Promise<void> | void;
   totalSessions: number;
   hasMore: boolean;
   isLoadingInitial?: boolean;
@@ -27,8 +29,7 @@ interface SidebarProps {
   searchQuery: string;
   onSearchChange: (query: string) => void;
   onLoadMore: () => void;
-  documents: DocumentMetadata[];
-  onDeleteDocument: (documentId: string) => void;
+  onOpenAttachmentsModal?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -52,8 +53,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   searchQuery,
   onSearchChange,
   onLoadMore,
-  documents,
-  onDeleteDocument,
+  onOpenAttachmentsModal,
 }) => {
   return (
     <aside
@@ -155,6 +155,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
       )}
 
+      {/* Attachments & Media Button */}
+      {onOpenAttachmentsModal && (
+        <div className={`${isOpen ? "w-full" : "w-10"} flex justify-center`}>
+          <button
+            type="button"
+            className={`w-full flex items-center justify-center gap-2 bg-(--border-subtle) hover:bg-(--border-hover) text-(--text-main) border border-(--border-subtle) font-medium rounded-lg cursor-pointer transition-colors ${
+              isOpen ? "py-2 px-3 text-xs" : "h-9 w-9 p-0 text-sm"
+            }`}
+            onClick={onOpenAttachmentsModal}
+            title="Attachments & Media Library"
+          >
+            <LuPaperclip size={15} />
+            {isOpen && <span>Media & Files</span>}
+          </button>
+        </div>
+      )}
+
       {/* Conversation History */}
       <SessionHistory
         isOpen={isOpen}
@@ -173,13 +190,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
         onDeleteSession={onDeleteSession}
         onRenameSession={onRenameSession}
         onOpenUserModal={onOpenUserModal}
-      />
-
-      {/* Document List */}
-      <DocumentList
-        isOpen={isOpen}
-        documents={documents}
-        onDeleteDocument={onDeleteDocument}
       />
 
       {/* Bottom Section: Logged in User Profile Card */}

@@ -39,6 +39,7 @@ interface ChatWorkspaceProps {
   onToggleSidebar?: () => void;
   isTemporaryChat?: boolean;
   onToggleTemporaryChat?: () => void;
+  onOpenAttachmentsModal?: () => void;
 }
 
 export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
@@ -66,6 +67,7 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
   onToggleSidebar,
   isTemporaryChat = false,
   onToggleTemporaryChat,
+  onOpenAttachmentsModal,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [activeSources, setActiveSources] = useState<{
@@ -193,6 +195,7 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
         onToggleSidebar={onToggleSidebar}
         isTemporaryChat={isTemporaryChat}
         onToggleTemporaryChat={onToggleTemporaryChat}
+        onOpenAttachmentsModal={onOpenAttachmentsModal}
       />
 
       {/* Temporary Chat Notice Banner (ChatGPT style, shown when messages exist) */}

@@ -288,7 +288,11 @@ def init_db():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_temporary ON chat_sessions(is_temporary, expires_at);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_documents_session_id ON documents(session_id);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_documents_user_id ON documents(user_id);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_documents_created ON documents(created_at DESC);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_media_session_id ON media_assets(session_id);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_media_user_id ON media_assets(user_id);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_media_created ON media_assets(created_at DESC);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_email_otps_email ON email_otps(email);")
         
         logger.info("Database schema initialized successfully.")

@@ -1,9 +1,10 @@
 from pathlib import Path
 from typing import Optional, List
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status, Query
 from app.core.config import settings
 from app.core.logging import logger
 from app.schemas.chat import MediaAttachment
+from app.schemas.media import AssetItem, PaginatedAssetsResponse, AssetDeleteResponse
 from app.services.media_service import media_service, ALLOWED_IMAGE_EXTENSIONS, MAX_FILE_SIZE_BYTES
 from app.db.database import get_db_connection
 
@@ -70,17 +71,66 @@ async def get_session_media(session_id: str):
             rows = cursor.fetchall()
             return [
                 MediaAttachment(
-                    id=row["id"],
-                    url=row["file_url"],
-                    file_type="image",
-                    file_name=row["filename"],
-                    mime_type=row["mime_type"],
-                    file_size_bytes=row["file_size_bytes"],
-                    media_type=row["media_type"],
-                    prompt=row["prompt"]
-                )
-                for row in rows
-            ]
+                id=row["id"],
+                url=row["file_url"],
+                file_type="image",
+                file_name=row["filename"],
+                mime_type=row["mime_type"],
+                file_size_bytes=row["file_size_bytes"],
+                media_type=row["media_type"],
+                prompt=row["prompt"]
+            )
+            for row in rows
+        ]
     except Exception as e:
         logger.error(f"Error fetching session media: {e}")
         return []
+
+@router.get("/assets", response_model=PaginatedAssetsResponse)
+async def list_unified_assets(
+    user_id: Optional[str] = Query(None, description="Filter by user ID"),
+    session_id: Optional[str] = Query(None, description="Filter by session ID"),
+    origin: Optional[str] = Query(None, description="Filter by origin: 'upload' | 'generated' | 'all'"),
+    file_type: Optional[str] = Query(None, description="Filter by type: 'image' | 'document' | 'all'"),
+    search: Optional[str] = Query(None, description="Search by filename or prompt"),
+    limit: int = Query(50, ge=1, le=100, description="Items per page"),
+    offset: int = Query(0, ge=0, description="Pagination offset")
+):
+    """
+    Unified Attachments & Media library endpoint.
+    Retrieves user uploads and AI generated media with high performance indexing.
+    """
+    items, total = media_service.list_assets(
+        user_id=user_id,
+        session_id=session_id,
+        origin=origin,
+        file_type=file_type,
+        search=search,
+        limit=limit,
+        offset=offset
+    )
+
+    has_more = (offset + len(items)) < total
+    return PaginatedAssetsResponse(
+        items=[AssetItem(**item) for item in items],
+        total=total,
+        has_more=has_more,
+        limit=limit,
+        offset=offset
+    )
+
+@router.delete("/assets/{asset_id}", response_model=AssetDeleteResponse)
+async def delete_unified_asset(asset_id: str):
+    """
+    Delete an asset (uploaded image, document, or generated media) and purge from storage.
+    """
+    success = media_service.delete_asset(asset_id)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Asset with ID '{asset_id}' not found"
+        )
+    return AssetDeleteResponse(
+        message=f"Asset '{asset_id}' deleted successfully",
+        id=asset_id
+    )

@@ -12,6 +12,7 @@ import {
   LuFileText,
   LuImage,
   LuPalette,
+  LuPaperclip,
 } from "react-icons/lu";
 import { useTheme } from "../../context/ThemeContext";
 import type { ChatMode, User } from "../../types";
@@ -25,6 +26,7 @@ interface ChatHeaderProps {
   onToggleSidebar?: () => void;
   isTemporaryChat?: boolean;
   onToggleTemporaryChat?: () => void;
+  onOpenAttachmentsModal?: () => void;
 }
 
 export const ChatHeader: React.FC<ChatHeaderProps> = ({
@@ -36,6 +38,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   onToggleSidebar,
   isTemporaryChat = false,
   onToggleTemporaryChat,
+  onOpenAttachmentsModal,
 }) => {
   const { mode, toggleMode } = useTheme();
 
@@ -153,6 +156,19 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
             <span className="sm:hidden">
               {isTemporaryChat ? "Turn off" : "Temp"}
             </span>
+          </button>
+        )}
+
+        {/* Attachments & Media Library Button */}
+        {onOpenAttachmentsModal && (
+          <button
+            type="button"
+            onClick={onOpenAttachmentsModal}
+            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-medium rounded-lg cursor-pointer transition-colors text-(--text-muted) hover:text-(--text-main) bg-(--border-subtle) hover:bg-(--border-hover) border border-(--border-subtle)"
+            title="Open Attachments & Media Library"
+          >
+            <LuPaperclip size={14} className="shrink-0" />
+            <span className="hidden sm:inline">Attachments</span>
           </button>
         )}
 

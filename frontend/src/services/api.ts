@@ -11,6 +11,8 @@ import type {
   MediaAttachment,
   PaginatedChatSessions,
   SessionListParams,
+  PaginatedAssetsResponse,
+  AssetQueryParams,
 } from '../types';
 
 const BACKEND_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
@@ -368,6 +370,42 @@ export const apiService = {
       ...attachment,
       url: formatMediaUrl(attachment.url),
     };
+  },
+
+  async getAssets(params?: AssetQueryParams): Promise<PaginatedAssetsResponse> {
+    const query = new URLSearchParams();
+    if (params?.userId) query.append('user_id', params.userId);
+    if (params?.sessionId) query.append('session_id', params.sessionId);
+    if (params?.origin && params.origin !== 'all') query.append('origin', params.origin);
+    if (params?.fileType && params.fileType !== 'all') query.append('file_type', params.fileType);
+    if (params?.search?.trim()) query.append('search', params.search.trim());
+    if (params?.limit) query.append('limit', String(params.limit));
+    if (params?.offset !== undefined) query.append('offset', String(params.offset));
+
+    const response = await fetch(`${API_BASE_URL}/media/assets?${query.toString()}`);
+    if (!response.ok) {
+      const err = await response.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Failed to fetch assets'));
+    }
+    const data: PaginatedAssetsResponse = await response.json();
+    return {
+      ...data,
+      items: (data.items || []).map((item) => ({
+        ...item,
+        url: formatMediaUrl(item.url),
+      })),
+    };
+  },
+
+  async deleteAsset(assetId: string): Promise<{ message: string; id: string }> {
+    const response = await fetch(`${API_BASE_URL}/media/assets/${encodeURIComponent(assetId)}`, {
+      method: 'DELETE',
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Failed to delete asset'));
+    }
+    return await response.json();
   },
 
   async updateSessionTitle(sessionId: string, title: string): Promise<{ message: string; title: string }> {
