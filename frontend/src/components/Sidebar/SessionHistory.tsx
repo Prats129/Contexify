@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import {
-  LuMessageSquare,
+  LuMessageCircle,
   LuCloudUpload,
   LuGlobe,
   LuFileText,
@@ -63,6 +63,8 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
   onRenameSession,
   onOpenUserModal,
 }) => {
+  if (!isOpen) return null;
+
   const isGuest = !currentUser;
 
   // --- Collapsible Section State (persisted in localStorage) ---
@@ -336,7 +338,7 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
                 isSectionCollapsed ? "-rotate-90" : "rotate-0"
               }`}
             />
-            <LuMessageSquare size={13} className="shrink-0" />
+            <LuMessageCircle size={14} className="shrink-0" />
             <span>Chat History</span>
           </button>
 
@@ -426,299 +428,259 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
       )}
 
       {/* Collapsible History Body */}
-      {isOpen ? (
-        <div
-          className={`flex-1 min-h-0 w-full flex flex-col overflow-hidden transition-opacity duration-200 ${
-            isSectionCollapsed
-              ? "hidden opacity-0 pointer-events-none"
-              : "opacity-100"
-          }`}
-        >
-          <div className="flex-1 min-h-0 w-full flex flex-col overflow-hidden">
-            <div
-              onScroll={handleScroll}
-              className="flex flex-col gap-1.5 w-full flex-1 min-h-0 overflow-y-auto pr-0.5"
-            >
-              {isGuest ? (
-                <div className="p-3 border border-(--border-subtle) bg-(--border-subtle)/50 rounded-xl text-center flex flex-col items-center gap-1.5">
-                  <LuCloudUpload size={20} className="text-primary-theme" />
-                  <p className="text-xs font-semibold text-(--text-main)">
-                    Browsing as Guest
-                  </p>
-                  <span className="text-[11px] text-(--text-muted) leading-tight">
-                    Sign in to save and sync chat history.
-                  </span>
-                  <button
-                    type="button"
-                    className="mt-1 flex items-center justify-center gap-1.5 w-full py-1.5 px-2 bg-primary-theme hover:opacity-90 text-white rounded-lg text-xs font-medium cursor-pointer"
-                    onClick={onOpenUserModal}
-                  >
-                    <FaGoogle size={12} /> Sign In
-                  </button>
-                </div>
-              ) : isLoadingInitial && sessions.length === 0 ? (
-                /* Initial loading skeletons */
-                <div className="flex flex-col gap-1.5 w-full py-1">
-                  {[1, 2, 3].map((n) => (
-                    <div
-                      key={n}
-                      className="h-11 rounded-lg bg-(--border-subtle)/40 animate-pulse w-full"
-                    />
-                  ))}
-                </div>
-              ) : sessions.length === 0 && !searchQuery ? (
-                <div className="text-center py-4 text-(--text-muted) text-xs">
-                  <LuMessageSquare
-                    size={18}
-                    className="mx-auto mb-1 opacity-50"
+      <div
+        className={`flex-1 min-h-0 w-full flex flex-col overflow-hidden transition-opacity duration-200 ${
+          isSectionCollapsed
+            ? "hidden opacity-0 pointer-events-none"
+            : "opacity-100"
+        }`}
+      >
+        <div className="flex-1 min-h-0 w-full flex flex-col overflow-hidden">
+          <div
+            onScroll={handleScroll}
+            className="flex flex-col gap-1.5 w-full flex-1 min-h-0 overflow-y-auto pr-0.5"
+          >
+            {isGuest ? (
+              <div className="p-3 border border-(--border-subtle) bg-(--border-subtle)/50 rounded-xl text-center flex flex-col items-center gap-1.5">
+                <LuCloudUpload size={20} className="text-primary-theme" />
+                <p className="text-xs font-semibold text-(--text-main)">
+                  Browsing as Guest
+                </p>
+                <span className="text-[11px] text-(--text-muted) leading-tight">
+                  Sign in to save and sync chat history.
+                </span>
+                <button
+                  type="button"
+                  className="mt-1 flex items-center justify-center gap-1.5 w-full py-1.5 px-2 bg-primary-theme hover:opacity-90 text-white rounded-lg text-xs font-medium cursor-pointer"
+                  onClick={onOpenUserModal}
+                >
+                  <FaGoogle size={12} /> Sign In
+                </button>
+              </div>
+            ) : isLoadingInitial && sessions.length === 0 ? (
+              /* Initial loading skeletons */
+              <div className="flex flex-col gap-1.5 w-full py-1">
+                {[1, 2, 3].map((n) => (
+                  <div
+                    key={n}
+                    className="h-11 rounded-lg bg-(--border-subtle)/40 animate-pulse w-full"
                   />
-                  <p>No conversations yet.</p>
-                </div>
-              ) : sessions.length === 0 && searchQuery ? (
-                /* Search results empty state */
-                <div className="text-center py-4 px-2 text-(--text-muted) text-xs flex flex-col items-center gap-1.5 bg-(--border-subtle)/30 rounded-xl border border-dashed border-(--border-subtle)">
-                  <LuSearchX
-                    size={18}
-                    className="opacity-50 text-(--text-muted)"
-                  />
-                  <p className="font-semibold text-(--text-main)">
-                    No chats found
-                  </p>
-                  <span className="text-[11px] text-(--text-muted) leading-tight">
-                    No chats match &ldquo;{searchQuery}&rdquo;
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => onSearchChange("")}
-                    className="mt-1 text-[11px] text-primary-theme hover:underline font-medium cursor-pointer"
-                  >
-                    Clear search
-                  </button>
-                </div>
-              ) : (
-                <>
-                  {sessions.map((s) => {
-                    const isActive = s.id === activeSessionId;
-                    const isWeb = s.mode === "WEB_SEARCH";
-                    const isEditing = editingSessionId === s.id;
+                ))}
+              </div>
+            ) : sessions.length === 0 && !searchQuery ? (
+              <div className="text-center py-4 text-(--text-muted) text-xs">
+                <LuMessageCircle
+                  size={18}
+                  className="mx-auto mb-1 opacity-50"
+                />
+                <p>No conversations yet.</p>
+              </div>
+            ) : sessions.length === 0 && searchQuery ? (
+              /* Search results empty state */
+              <div className="text-center py-4 px-2 text-(--text-muted) text-xs flex flex-col items-center gap-1.5 bg-(--border-subtle)/30 rounded-xl border border-dashed border-(--border-subtle)">
+                <LuSearchX
+                  size={18}
+                  className="opacity-50 text-(--text-muted)"
+                />
+                <p className="font-semibold text-(--text-main)">
+                  No chats found
+                </p>
+                <span className="text-[11px] text-(--text-muted) leading-tight">
+                  No chats match &ldquo;{searchQuery}&rdquo;
+                </span>
+                <button
+                  type="button"
+                  onClick={() => onSearchChange("")}
+                  className="mt-1 text-[11px] text-primary-theme hover:underline font-medium cursor-pointer"
+                >
+                  Clear search
+                </button>
+              </div>
+            ) : (
+              <>
+                {sessions.map((s) => {
+                  const isActive = s.id === activeSessionId;
+                  const isWeb = s.mode === "WEB_SEARCH";
+                  const isEditing = editingSessionId === s.id;
 
-                    if (isEditing) {
-                      return (
-                        <div
-                          key={s.id}
-                          className="flex items-center p-1.5 rounded-lg border-2 border-primary-theme bg-(--bg-card) shadow-md w-full animate-[fadeIn_0.15s_ease-out]"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <form
-                            onSubmit={(e) => {
-                              e.preventDefault();
-                              handleSaveRename(s.id);
-                            }}
-                            className="flex items-center gap-1.5 w-full min-w-0"
-                          >
-                            <div className="shrink-0 text-primary-theme pl-1">
-                              {isWeb ? (
-                                <LuGlobe size={13} />
-                              ) : (
-                                <LuFileText size={13} />
-                              )}
-                            </div>
-                            <input
-                              ref={editInputRef}
-                              type="text"
-                              value={editTitle}
-                              maxLength={100}
-                              disabled={isSavingId === s.id}
-                              onChange={(e) => setEditTitle(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === "Escape") {
-                                  e.stopPropagation();
-                                  handleCancelRename(e);
-                                }
-                              }}
-                              onBlur={() => {
-                                if (
-                                  editingSessionId === s.id &&
-                                  !isCancelingRef.current
-                                ) {
-                                  handleSaveRename(s.id);
-                                }
-                              }}
-                              className="flex-1 min-w-0 bg-transparent border-0 px-1 py-0.5 text-xs font-semibold text-(--text-main) focus:outline-none focus:ring-0"
-                              placeholder="Enter chat title..."
-                              aria-label="Rename conversation"
-                            />
-                            <button
-                              type="submit"
-                              onMouseDown={(e) => e.preventDefault()}
-                              disabled={
-                                !editTitle.trim() || isSavingId === s.id
-                              }
-                              className="p-1 text-emerald-600 hover:text-emerald-500 hover:bg-emerald-500/15 disabled:opacity-30 rounded-md cursor-pointer transition-colors shrink-0"
-                              title="Save title (Enter)"
-                              aria-label="Save title"
-                            >
-                              {isSavingId === s.id ? (
-                                <LuLoader size={13} className="icon-spin" />
-                              ) : (
-                                <LuCheck size={13} />
-                              )}
-                            </button>
-                            <button
-                              type="button"
-                              onMouseDown={(e) => {
-                                e.preventDefault();
-                                handleCancelRename(e);
-                              }}
-                              disabled={isSavingId === s.id}
-                              className="p-1 text-(--text-muted) hover:text-(--text-main) hover:bg-(--border-subtle) rounded-md cursor-pointer transition-colors shrink-0"
-                              title="Cancel (Esc)"
-                              aria-label="Cancel editing"
-                            >
-                              <LuX size={13} />
-                            </button>
-                          </form>
-                        </div>
-                      );
-                    }
-
+                  if (isEditing) {
                     return (
                       <div
                         key={s.id}
-                        tabIndex={0}
-                        className={`group relative flex items-center justify-between p-2 rounded-lg border cursor-pointer w-full transition-all select-none ${
-                          isActive
-                            ? "bg-primary-light-theme border-primary-theme text-primary-theme font-semibold shadow-2xs"
-                            : "bg-transparent hover:bg-(--border-subtle) border-(--border-subtle) text-(--text-main)"
-                        }`}
-                        onClick={() => onSelectSession(s.id)}
-                        onDoubleClick={(e) => handleStartRename(s, e)}
-                        onContextMenu={(e) => handleContextMenu(e, s)}
-                        onKeyDown={(e) => {
-                          if (e.key === "F2") {
-                            handleStartRename(s, e);
-                          }
-                        }}
-                        title={`${s.title} (${isWeb ? "Web Search" : "Document RAG"}) - Double-click or click pencil to rename`}
+                        className="flex items-center p-1.5 rounded-lg border-2 border-primary-theme bg-(--bg-card) shadow-md w-full animate-[fadeIn_0.15s_ease-out]"
+                        onClick={(e) => e.stopPropagation()}
                       >
-                        <div className="flex flex-col min-w-0 overflow-hidden mr-1 flex-1">
-                          <span className="text-xs truncate font-medium">
-                            {s.title}
-                          </span>
-                          <div className="flex items-center gap-1.5 text-[10px] text-(--text-muted)">
-                            <span className="bg-(--border-subtle) px-1.5 py-0.5 rounded text-[9px] flex items-center gap-1 font-normal">
-                              {isWeb ? (
-                                <LuGlobe size={10} />
-                              ) : (
-                                <LuFileText size={10} />
-                              )}
-                              {isWeb ? "Web" : "RAG"}
-                            </span>
-                            <span className="font-normal">
-                              {s.message_count || 0} msgs
-                            </span>
-                          </div>
-                        </div>
-
-                        {/* Actions: Always visible on active session, visible on hover for others */}
-                        <div
-                          className={`flex items-center gap-0.5 shrink-0 transition-opacity ${
-                            isActive
-                              ? "opacity-100"
-                              : "opacity-0 group-hover:opacity-100"
-                          }`}
+                        <form
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            handleSaveRename(s.id);
+                          }}
+                          className="flex items-center gap-1.5 w-full min-w-0"
                         >
-                          <button
-                            type="button"
-                            className="p-1.5 text-(--text-muted) hover:text-primary-theme hover:bg-primary-light-theme rounded-md cursor-pointer transition-colors"
-                            onClick={(e) => handleStartRename(s, e)}
-                            title="Rename Chat (or double-click)"
-                            aria-label="Rename Chat"
-                          >
-                            <LuPencil size={13} />
-                          </button>
-                          <button
-                            type="button"
-                            className="p-1.5 text-(--text-muted) hover:text-red-500 hover:bg-red-500/15 rounded-md cursor-pointer transition-colors"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onDeleteSession(s.id);
+                          <div className="shrink-0 text-primary-theme pl-1">
+                            {isWeb ? (
+                              <LuGlobe size={13} />
+                            ) : (
+                              <LuFileText size={13} />
+                            )}
+                          </div>
+                          <input
+                            ref={editInputRef}
+                            type="text"
+                            value={editTitle}
+                            maxLength={100}
+                            disabled={isSavingId === s.id}
+                            onChange={(e) => setEditTitle(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Escape") {
+                                e.stopPropagation();
+                                handleCancelRename(e);
+                              }
                             }}
-                            title="Delete Conversation"
-                            aria-label="Delete Conversation"
+                            onBlur={() => {
+                              if (
+                                editingSessionId === s.id &&
+                                !isCancelingRef.current
+                              ) {
+                                handleSaveRename(s.id);
+                              }
+                            }}
+                            className="flex-1 min-w-0 bg-transparent border-0 px-1 py-0.5 text-xs font-semibold text-(--text-main) focus:outline-none focus:ring-0"
+                            placeholder="Enter chat title..."
+                            aria-label="Rename conversation"
+                          />
+                          <button
+                            type="submit"
+                            onMouseDown={(e) => e.preventDefault()}
+                            disabled={!editTitle.trim() || isSavingId === s.id}
+                            className="p-1 text-emerald-600 hover:text-emerald-500 hover:bg-emerald-500/15 disabled:opacity-30 rounded-md cursor-pointer transition-colors shrink-0"
+                            title="Save title (Enter)"
+                            aria-label="Save title"
                           >
-                            <LuTrash2 size={13} />
+                            {isSavingId === s.id ? (
+                              <LuLoader size={13} className="icon-spin" />
+                            ) : (
+                              <LuCheck size={13} />
+                            )}
                           </button>
-                        </div>
+                          <button
+                            type="button"
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              handleCancelRename(e);
+                            }}
+                            disabled={isSavingId === s.id}
+                            className="p-1 text-(--text-muted) hover:text-(--text-main) hover:bg-(--border-subtle) rounded-md cursor-pointer transition-colors shrink-0"
+                            title="Cancel (Esc)"
+                            aria-label="Cancel editing"
+                          >
+                            <LuX size={13} />
+                          </button>
+                        </form>
                       </div>
                     );
-                  })}
+                  }
 
-                  {/* Infinite Scroll Sentinel element */}
-                  <div
-                    ref={sentinelRef}
-                    className="h-1 w-full shrink-0 pointer-events-none"
-                  />
+                  return (
+                    <div
+                      key={s.id}
+                      tabIndex={0}
+                      className={`group relative flex items-center justify-between p-2 rounded-lg border cursor-pointer w-full transition-all select-none ${
+                        isActive
+                          ? "bg-primary-light-theme border-primary-theme text-primary-theme font-semibold shadow-2xs"
+                          : "bg-transparent hover:bg-(--border-subtle) border-(--border-subtle) text-(--text-main)"
+                      }`}
+                      onClick={() => onSelectSession(s.id)}
+                      onDoubleClick={(e) => handleStartRename(s, e)}
+                      onContextMenu={(e) => handleContextMenu(e, s)}
+                      onKeyDown={(e) => {
+                        if (e.key === "F2") {
+                          handleStartRename(s, e);
+                        }
+                      }}
+                      title={`${s.title} (${isWeb ? "Web Search" : "Document RAG"}) - Double-click or click pencil to rename`}
+                    >
+                      <div className="flex flex-col min-w-0 overflow-hidden mr-1 flex-1">
+                        <span className="text-xs truncate font-medium">
+                          {s.title}
+                        </span>
+                        <div className="flex items-center gap-1.5 text-[10px] text-(--text-muted)">
+                          <span className="bg-(--border-subtle) px-1.5 py-0.5 rounded text-[9px] flex items-center gap-1 font-normal">
+                            {isWeb ? (
+                              <LuGlobe size={10} />
+                            ) : (
+                              <LuFileText size={10} />
+                            )}
+                            {isWeb ? "Web" : "RAG"}
+                          </span>
+                          <span className="font-normal">
+                            {s.message_count || 0} msgs
+                          </span>
+                        </div>
+                      </div>
 
-                  {/* Bottom Loading Indicator for Infinite Scroll */}
-                  {isLoadingMore && (
-                    <div className="flex items-center justify-center py-2.5 gap-2 text-xs text-(--text-muted)">
-                      <LuLoader
-                        size={13}
-                        className="icon-spin text-primary-theme"
-                      />
-                      <span className="text-[11px]">Loading more chats...</span>
+                      {/* Actions: Always visible on active session, visible on hover for others */}
+                      <div
+                        className={`flex items-center gap-0.5 shrink-0 transition-opacity ${
+                          isActive
+                            ? "opacity-100"
+                            : "opacity-0 group-hover:opacity-100"
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          className="p-1.5 text-(--text-muted) hover:text-primary-theme hover:bg-primary-light-theme rounded-md cursor-pointer transition-colors"
+                          onClick={(e) => handleStartRename(s, e)}
+                          title="Rename Chat (or double-click)"
+                          aria-label="Rename Chat"
+                        >
+                          <LuPencil size={13} />
+                        </button>
+                        <button
+                          type="button"
+                          className="p-1.5 text-(--text-muted) hover:text-red-500 hover:bg-red-500/15 rounded-md cursor-pointer transition-colors"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onDeleteSession(s.id);
+                          }}
+                          title="Delete Conversation"
+                          aria-label="Delete Conversation"
+                        >
+                          <LuTrash2 size={13} />
+                        </button>
+                      </div>
                     </div>
-                  )}
+                  );
+                })}
 
-                  {/* End of list note when user has scrolled through many chats */}
-                  {!hasMore && sessions.length >= 12 && !searchQuery && (
-                    <div className="text-center py-2 text-[10px] text-(--text-muted) opacity-50">
-                      All {totalSessions} chats loaded
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
+                {/* Infinite Scroll Sentinel element */}
+                <div
+                  ref={sentinelRef}
+                  className="h-1 w-full shrink-0 pointer-events-none"
+                />
+
+                {/* Bottom Loading Indicator for Infinite Scroll */}
+                {isLoadingMore && (
+                  <div className="flex items-center justify-center py-2.5 gap-2 text-xs text-(--text-muted)">
+                    <LuLoader
+                      size={13}
+                      className="icon-spin text-primary-theme"
+                    />
+                    <span className="text-[11px]">Loading more chats...</span>
+                  </div>
+                )}
+
+                {/* End of list note when user has scrolled through many chats */}
+                {!hasMore && sessions.length >= 12 && !searchQuery && (
+                  <div className="text-center py-2 text-[10px] text-(--text-muted) opacity-50">
+                    All {totalSessions} chats loaded
+                  </div>
+                )}
+              </>
+            )}
           </div>
         </div>
-      ) : (
-        /* Compact Sidebar Icon Mode */
-        <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden w-full flex flex-col gap-2 items-center py-1">
-          {isGuest ? (
-            <div
-              className="flex justify-center py-2 text-(--text-muted)"
-              title="Guest Mode - Sign in to save history"
-            >
-              <LuCloudUpload size={18} />
-            </div>
-          ) : (
-            sessions.map((s) => {
-              const isActive = s.id === activeSessionId;
-              const isWeb = s.mode === "WEB_SEARCH";
-              return (
-                <div
-                  key={s.id}
-                  className={`group flex items-center justify-center w-10 h-10 rounded-lg border cursor-pointer p-0 ${
-                    isActive
-                      ? "bg-primary-light-theme border-primary-theme text-primary-theme font-semibold"
-                      : "bg-transparent hover:bg-(--border-subtle) border-(--border-subtle) text-(--text-main)"
-                  }`}
-                  onClick={() => onSelectSession(s.id)}
-                  onContextMenu={(e) => handleContextMenu(e, s)}
-                  title={`${s.title} (${isWeb ? "Web Search" : "Document RAG"})`}
-                >
-                  {isWeb ? (
-                    <LuGlobe size={16} />
-                  ) : (
-                    <LuMessageSquare size={16} />
-                  )}
-                </div>
-              );
-            })
-          )}
-        </div>
-      )}
+      </div>
 
       {/* Right-click Floating Context Menu */}
       {contextMenu &&

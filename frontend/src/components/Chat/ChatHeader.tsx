@@ -177,10 +177,10 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
           <button
             type="button"
             onClick={onClearChat}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-(--text-muted) hover:text-red-500 hover:bg-red-500/10 rounded-lg cursor-pointer transition-colors"
+            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-medium text-(--text-muted) hover:text-red-500 bg-(--border-subtle) hover:bg-red-500/10 border border-(--border-subtle) hover:border-red-500/30 rounded-lg cursor-pointer transition-colors"
             title="Clear message history (keeps documents)"
           >
-            <LuEraser size={14} />
+            <LuEraser size={14} className="shrink-0" />
             <span className="hidden sm:inline">Clear Chat</span>
           </button>
         )}

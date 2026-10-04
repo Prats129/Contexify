@@ -311,7 +311,7 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
               borderColor: theme.borderSubtle,
               paddingTop:
                 Math.max(insets.top, Platform.OS === "ios" ? 20 : 16) + 4,
-              paddingBottom: Math.max(insets.bottom, 12),
+              paddingBottom: Math.max(insets.bottom, 6),
               transform: [{ translateX }],
             },
           ]}
@@ -473,7 +473,7 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
           </View>
 
           {/* Scrollable Conversation History (Only the chats scroll) */}
-          {isChatsExpanded && (
+          {isChatsExpanded ? (
             <ScrollView
               style={styles.scrollArea}
               contentContainerStyle={styles.scrollContent}
@@ -664,6 +664,8 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
                 })
               )}
             </ScrollView>
+          ) : (
+            <View style={styles.collapsedSpacer} />
           )}
 
           {/* Bottom Pinned Area: User Profile & Server Config */}
@@ -899,9 +901,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
   },
   sectionHeaderLeft: {
+    flex: 1,
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
+    paddingVertical: 6,
   },
   sectionTitle: {
     fontSize: 12,
@@ -1015,12 +1019,16 @@ const styles = StyleSheet.create({
     fontSize: 11,
     marginTop: 2,
   },
+  collapsedSpacer: {
+    flex: 1,
+  },
   bottomContainer: {
+    marginTop: "auto",
     paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 24,
+    paddingTop: 10,
+    paddingBottom: 4,
     borderTopWidth: 1,
-    gap: 10,
+    gap: 8,
   },
   userPill: {
     flexDirection: "row",
