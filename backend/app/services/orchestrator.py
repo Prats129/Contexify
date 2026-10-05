@@ -162,6 +162,23 @@ class ChatOrchestrator:
 
     async def route_and_stream(self, request: ChatRequest) -> AsyncGenerator[str, None]:
         session_id = request.session_id
+
+        # Self-healing defense-in-depth: if an authenticated user_id is provided and the session doesn't exist in DB,
+        # create it immediately so all messages are 100% persisted and foreign key constraints are met.
+        if request.user_id and not request.user_id.startswith("guest"):
+            existing_db_session = chat_history_service.get_session(session_id)
+            if not existing_db_session:
+                first_msg = (request.message or "New Conversation").strip().replace("\n", " ")
+                initial_title = (first_msg[:32] + "...") if len(first_msg) > 35 else (first_msg or "New Conversation")
+                chat_history_service.create_session(
+                    user_id=request.user_id,
+                    session_id=session_id,
+                    title=initial_title,
+                    mode=request.mode or ChatMode.AUTO,
+                    is_temporary=False
+                )
+                logger.info(f"Self-healed: auto-created session '{session_id}' for user '{request.user_id}' in DB.")
+
         session = session_store_repo.get_or_create_session(session_id)
         
         # Enforce Mode Selection if client passed an explicit mode

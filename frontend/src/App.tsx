@@ -85,6 +85,13 @@ export const App: React.FC = () => {
 
   // --- Global State ---
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const currentUserRef = useRef<User | null>(null);
+  const [isAuthReady, setIsAuthReady] = useState<boolean>(false);
+
+  useEffect(() => {
+    currentUserRef.current = currentUser;
+  }, [currentUser]);
+
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
 
   // --- Sessions Management (Pagination, Server-side Debounced Search, Optimistic Updates) ---
@@ -244,17 +251,30 @@ export const App: React.FC = () => {
     try {
       const savedUserStr = localStorage.getItem("contexify_user");
       let user: User | null = null;
+      let parsedUser: User | null = null;
       if (savedUserStr) {
-        const parsed = JSON.parse(savedUserStr);
-        user = await apiService.getCurrentUser(parsed.id).catch(() => null);
+        try {
+          parsedUser = JSON.parse(savedUserStr);
+          if (parsedUser?.id) {
+            user = await apiService.getCurrentUser(parsedUser.id).catch(() => null);
+            // Retain cached credentials if backend cold start or temporary offline occurred
+            if (!user && parsedUser) {
+              user = parsedUser;
+            }
+          }
+        } catch {
+          user = null;
+        }
       }
 
       if (user) {
         // Logged-in user found
+        currentUserRef.current = user;
         setCurrentUser(user);
         localStorage.setItem("contexify_user", JSON.stringify(user));
       } else {
         // Ephemeral Guest Mode (No DB Save)
+        currentUserRef.current = null;
         setCurrentUser(null);
         setIsTemporaryChat(false);
         localStorage.removeItem("contexify_user");
@@ -281,8 +301,11 @@ export const App: React.FC = () => {
       }
     } catch (e) {
       console.error("Failed to initialize user:", e);
+      currentUserRef.current = null;
       setCurrentUser(null);
       setActiveSessionId(null);
+    } finally {
+      setIsAuthReady(true);
     }
   };
 
@@ -454,15 +477,18 @@ export const App: React.FC = () => {
 
   // --- 7. Document & Media Upload / Delete ---
   const handleFileUpload = async (file: File) => {
+    const userToUse = currentUserRef.current || currentUser;
     let targetSessionId = activeSessionId;
     if (!targetSessionId) {
-      if (currentUser?.id) {
+      if (userToUse?.id) {
+        const clientSessionId = generateGuestSessionId();
         try {
           const newSess = await apiService.createSession(
-            currentUser.id,
+            userToUse.id,
             "New Conversation",
             currentMode,
             isTemporaryChat,
+            clientSessionId,
           );
           targetSessionId = newSess.id;
           setActiveSessionId(newSess.id);
@@ -472,8 +498,10 @@ export const App: React.FC = () => {
           }
           updateUrlForSession(newSess.id, false);
         } catch (err) {
-          console.error("Failed to create session on file upload:", err);
-          return;
+          console.warn("Failed to create session explicitly on file upload, using clientSessionId for self-healing:", err);
+          targetSessionId = clientSessionId;
+          setActiveSessionId(targetSessionId);
+          updateUrlForSession(targetSessionId, false);
         }
       } else {
         targetSessionId = generateGuestSessionId();
@@ -639,6 +667,7 @@ export const App: React.FC = () => {
   // --- 8. Send Chat Message & SSE Stream ---
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
+    if (!isAuthReady) return;
     const query = inputQuery.trim();
     if ((!query && attachedMedia.length === 0) || isSending) return;
 
@@ -648,15 +677,19 @@ export const App: React.FC = () => {
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
 
+    const userToUse = currentUserRef.current || currentUser;
+
     let targetSessionId = activeSessionId;
     if (!targetSessionId) {
-      if (currentUser?.id) {
+      if (userToUse?.id) {
+        const clientSessionId = generateGuestSessionId();
         try {
           const newSess = await apiService.createSession(
-            currentUser.id,
+            userToUse.id,
             "New Conversation",
             currentMode,
             isTemporaryChat,
+            clientSessionId,
           );
           targetSessionId = newSess.id;
           setActiveSessionId(newSess.id);
@@ -666,8 +699,13 @@ export const App: React.FC = () => {
           }
           updateUrlForSession(newSess.id, false);
         } catch (err) {
-          console.error("Failed to create session on message send:", err);
-          return;
+          console.warn(
+            "Failed to create session explicitly, relying on backend self-healing with user_id:",
+            err,
+          );
+          targetSessionId = clientSessionId;
+          setActiveSessionId(targetSessionId);
+          updateUrlForSession(targetSessionId, false);
         }
       } else {
         targetSessionId = generateGuestSessionId();
@@ -799,6 +837,7 @@ export const App: React.FC = () => {
       },
       abortController.signal,
       mediaToSend,
+      userToUse?.id,
     );
   };
 
@@ -810,6 +849,7 @@ export const App: React.FC = () => {
   // --- 9. User Authentication & Guest Handlers ---
   const handleLogin = async (usernameOrEmail: string, password: string) => {
     const user = await apiService.login(usernameOrEmail, password);
+    currentUserRef.current = user;
     setCurrentUser(user);
     localStorage.setItem("contexify_user", JSON.stringify(user));
     setIsUserModalOpen(false);
@@ -819,6 +859,7 @@ export const App: React.FC = () => {
 
   const handleLoginWithOtp = async (usernameOrEmail: string, otp: string) => {
     const user = await apiService.loginWithOtp(usernameOrEmail, otp);
+    currentUserRef.current = user;
     setCurrentUser(user);
     localStorage.setItem("contexify_user", JSON.stringify(user));
     setIsUserModalOpen(false);
@@ -828,6 +869,7 @@ export const App: React.FC = () => {
 
   const handleGoogleAuth = async (data: GoogleAuthRequest) => {
     const user = await apiService.loginWithGoogle(data);
+    currentUserRef.current = user;
     setCurrentUser(user);
     localStorage.setItem("contexify_user", JSON.stringify(user));
     setIsUserModalOpen(false);
@@ -867,6 +909,7 @@ export const App: React.FC = () => {
       email,
       password,
     );
+    currentUserRef.current = user;
     setCurrentUser(user);
     localStorage.setItem("contexify_user", JSON.stringify(user));
     setIsUserModalOpen(false);
@@ -884,6 +927,7 @@ export const App: React.FC = () => {
       displayName,
       avatarColor,
     );
+    currentUserRef.current = updated;
     setCurrentUser(updated);
     localStorage.setItem("contexify_user", JSON.stringify(updated));
   };
@@ -899,6 +943,7 @@ export const App: React.FC = () => {
   const handleUploadAvatar = async (file: File) => {
     if (!currentUser?.id) return;
     const updated = await apiService.uploadAvatar(currentUser.id, file);
+    currentUserRef.current = updated;
     setCurrentUser(updated);
     localStorage.setItem("contexify_user", JSON.stringify(updated));
   };
@@ -906,6 +951,7 @@ export const App: React.FC = () => {
   const handleDeleteAvatar = async () => {
     if (!currentUser?.id) return;
     const updated = await apiService.deleteAvatar(currentUser.id);
+    currentUserRef.current = updated;
     setCurrentUser(updated);
     localStorage.setItem("contexify_user", JSON.stringify(updated));
   };
@@ -913,6 +959,7 @@ export const App: React.FC = () => {
   const handleLogout = () => {
     localStorage.removeItem("contexify_user");
     localStorage.removeItem("contexify_active_session");
+    currentUserRef.current = null;
     setCurrentUser(null);
     setIsTemporaryChat(false);
     setMessages([]);

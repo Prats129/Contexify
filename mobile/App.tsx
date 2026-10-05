@@ -73,6 +73,12 @@ export default function App() {
 
   // Global State
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const currentUserRef = useRef<User | null>(null);
+  const [isAuthReady, setIsAuthReady] = useState(false);
+
+  useEffect(() => {
+    currentUserRef.current = currentUser;
+  }, [currentUser]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [isTemporaryChat, setIsTemporaryChat] = useState(false);
   const isTempActive = Boolean(currentUser && isTemporaryChat);
@@ -141,14 +147,16 @@ export default function App() {
       const savedUserStr = await AsyncStorage.getItem("contexify_mobile_user");
       if (savedUserStr) {
         const user: User = JSON.parse(savedUserStr);
+        currentUserRef.current = user;
         setCurrentUser(user);
-        await loadUserSessions(user.id);
+        await loadUserSessions(user.id, user);
 
         // Refresh profile in background to fetch latest avatar / settings from server
         apiService
           .getCurrentUser(user.id)
           .then((fresh) => {
             if (fresh) {
+              currentUserRef.current = fresh;
               setCurrentUser(fresh);
               AsyncStorage.setItem(
                 "contexify_mobile_user",
@@ -158,11 +166,16 @@ export default function App() {
           })
           .catch(() => {});
       } else {
-        // Guest mode default session
-        setActiveSessionId(generateGuestSessionId());
+        currentUserRef.current = null;
+        setCurrentUser(null);
+        handleNewChat(null);
       }
     } catch {
-      setActiveSessionId(generateGuestSessionId());
+      currentUserRef.current = null;
+      setCurrentUser(null);
+      handleNewChat(null);
+    } finally {
+      setIsAuthReady(true);
     }
   };
 
@@ -179,7 +192,7 @@ export default function App() {
 
   const SESSIONS_PAGE_SIZE = 15;
 
-  const loadUserSessions = async (userId: string) => {
+  const loadUserSessions = async (userId: string, userOverride?: User | null) => {
     try {
       const res = await apiService.getUserSessions(userId, {
         limit: SESSIONS_PAGE_SIZE,
@@ -190,13 +203,13 @@ export default function App() {
       setTotalSessions(res.total ?? safeList.length);
       setHasMoreSessions(Boolean(res.has_more));
       // Always start in a fresh new chat on app launch
-      handleNewChat();
+      handleNewChat(userOverride);
     } catch (err) {
       console.warn("Failed to load sessions:", err);
       setSessions([]);
       setTotalSessions(0);
       setHasMoreSessions(false);
-      handleNewChat();
+      handleNewChat(userOverride);
     }
   };
 
@@ -273,9 +286,14 @@ export default function App() {
   };
 
   // --- 3. New Chat ---
-  const handleNewChat = () => {
+  const handleNewChat = (userOverride?: User | null) => {
     setIsTemporaryChat(false);
-    if (currentUser) {
+    const effectiveUser =
+      userOverride !== undefined
+        ? userOverride
+        : currentUserRef.current || currentUser;
+    if (effectiveUser) {
+      // Authenticated users start with null session ID (ready for new persistent thread)
       setActiveSessionId(null);
     } else {
       setActiveSessionId(generateGuestSessionId());
@@ -375,14 +393,18 @@ export default function App() {
         ? "Generate a creative variation of this image"
         : "Analyze this image and describe what you see in detail.");
 
+    const userToUse = currentUserRef.current || currentUser;
+
     // Create session in backend if user is logged in and no session is active yet
-    if (!sessionId && currentUser) {
+    if (!sessionId && userToUse) {
+      const clientSessionId = generateGuestSessionId();
       try {
         const newSession = await apiService.createSession(
-          currentUser.id,
+          userToUse.id,
           prompt.slice(0, 40),
           currentMode,
           isTempActive,
+          clientSessionId,
         );
         sessionId = newSession.id;
         setActiveSessionId(sessionId);
@@ -390,8 +412,12 @@ export default function App() {
           setSessions((prev) => [newSession, ...prev]);
           setTotalSessions((prev) => prev + 1);
         }
-      } catch {
-        sessionId = generateGuestSessionId();
+      } catch (err) {
+        console.warn(
+          "Explicit createSession failed; relying on backend self-healing with user_id:",
+          err,
+        );
+        sessionId = clientSessionId;
         setActiveSessionId(sessionId);
       }
     } else if (!sessionId) {
@@ -498,6 +524,7 @@ export default function App() {
         },
       },
       mediaToSend.length > 0 ? mediaToSend : undefined,
+      userToUse ? userToUse.id : null,
     );
 
     streamAbortRef.current = cancel;
@@ -530,15 +557,18 @@ export default function App() {
     name: string;
     mimeType: string;
   }) => {
+    const userToUse = currentUserRef.current || currentUser;
     let sessionId = activeSessionId;
     if (!sessionId) {
-      if (currentUser) {
+      if (userToUse) {
+        const clientSessionId = generateGuestSessionId();
         try {
           const newSession = await apiService.createSession(
-            currentUser.id,
+            userToUse.id,
             `File: ${file.name}`.slice(0, 40),
             "DOCUMENT_RAG",
             isTempActive,
+            clientSessionId,
           );
           sessionId = newSession.id;
           setActiveSessionId(sessionId);
@@ -546,8 +576,12 @@ export default function App() {
             setSessions((prev) => [newSession, ...prev]);
             setTotalSessions((prev) => prev + 1);
           }
-        } catch {
-          sessionId = generateGuestSessionId();
+        } catch (err) {
+          console.warn(
+            "Session creation on file attach failed; using clientSessionId for self-healing:",
+            err,
+          );
+          sessionId = clientSessionId;
           setActiveSessionId(sessionId);
         }
       } else {
@@ -688,19 +722,21 @@ export default function App() {
 
   // --- 10. Auth Success / Logout ---
   const handleAuthSuccess = async (user: User) => {
+    currentUserRef.current = user;
     setCurrentUser(user);
     await AsyncStorage.setItem("contexify_mobile_user", JSON.stringify(user));
-    await loadUserSessions(user.id);
+    await loadUserSessions(user.id, user);
   };
 
   const handleLogout = async () => {
+    currentUserRef.current = null;
     setCurrentUser(null);
     setIsTemporaryChat(false);
     await AsyncStorage.removeItem("contexify_mobile_user");
     setSessions([]);
     setTotalSessions(0);
     setHasMoreSessions(false);
-    handleNewChat();
+    handleNewChat(null);
   };
 
   return (

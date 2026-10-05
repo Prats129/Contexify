@@ -36,6 +36,7 @@ async def create_session(req: ChatSessionCreate):
 
     session = chat_history_service.create_session(
         user_id=req.user_id,
+        session_id=req.session_id,
         title=req.title or "New Conversation",
         mode=req.mode,
         is_temporary=bool(req.is_temporary)

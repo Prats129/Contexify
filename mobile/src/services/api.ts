@@ -531,14 +531,21 @@ export const apiService = {
     userId: string,
     title: string,
     mode: ChatMode,
-    isTemporary: boolean = false
+    isTemporary: boolean = false,
+    sessionId?: string
   ): Promise<ChatSession> {
     const backendMode = resolveBackendMode(mode);
     const url = await getEndpoint('/session/create');
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user_id: userId, title, mode: backendMode, is_temporary: isTemporary }),
+      body: JSON.stringify({
+        user_id: userId,
+        session_id: sessionId || undefined,
+        title,
+        mode: backendMode,
+        is_temporary: isTemporary,
+      }),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => null);
@@ -657,7 +664,8 @@ export const apiService = {
     query: string,
     mode: ChatMode,
     handlers: StreamHandlers,
-    attachments?: MediaAttachment[]
+    attachments?: MediaAttachment[],
+    userId?: string | null
   ): () => void {
     let isAborted = false;
     let hasEnded = false;
@@ -772,6 +780,7 @@ export const apiService = {
       xhr.send(
         JSON.stringify({
           session_id: sessionId || `guest_${Date.now()}`,
+          user_id: userId || undefined,
           message: query || '',
           query: query || '',
           mode: effectiveMode,

@@ -56,6 +56,7 @@ class MediaAttachment(BaseModel):
 
 class ChatRequest(BaseModel):
     session_id: str = Field(default_factory=lambda: f"guest_{uuid.uuid4().hex[:12]}", description="Unique identifier for chat thread")
+    user_id: Optional[str] = Field(default=None, description="Optional ID of authenticated user")
     message: Optional[str] = Field(default="", description="User question or query")
     query: Optional[str] = Field(default="", description="Alternative field for user query")
     mode: Optional[ChatMode] = Field(default=ChatMode.AUTO)
@@ -75,12 +76,17 @@ class ChatRequest(BaseModel):
             # 2. Case-insensitive mode resolution and aliases
             data["mode"] = normalize_chat_mode(data.get("mode"), default=ChatMode.AUTO)
 
-            # 3. Resolve message or query
+            # 3. Resolve user_id if provided
+            uid = data.get("user_id")
+            if uid:
+                data["user_id"] = str(uid).strip()
+
+            # 4. Resolve message or query
             msg = data.get("message") or data.get("query") or ""
             data["message"] = str(msg)
             data["query"] = str(msg)
 
-            # 4. Clean attachments
+            # 5. Clean attachments
             raw_att = data.get("attachments")
             if isinstance(raw_att, list):
                 clean_att = []

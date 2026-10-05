@@ -5,6 +5,7 @@ from app.schemas.document import DocumentMetadata
 
 class ChatSessionCreate(BaseModel):
     user_id: str
+    session_id: Optional[str] = None
     title: Optional[str] = "New Conversation"
     mode: Optional[ChatMode] = ChatMode.AUTO
     is_temporary: Optional[bool] = False

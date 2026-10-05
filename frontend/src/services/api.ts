@@ -312,13 +312,15 @@ export const apiService = {
     userId: string,
     title: string = 'New Conversation',
     mode: ChatMode = 'AUTO',
-    isTemporary: boolean = false
+    isTemporary: boolean = false,
+    sessionId?: string
   ): Promise<ChatSession> {
     const response = await fetch(`${API_BASE_URL}/session/create`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         user_id: userId,
+        session_id: sessionId || undefined,
         title,
         mode,
         is_temporary: isTemporary,
@@ -512,7 +514,8 @@ export const apiService = {
     mode: ChatMode,
     handlers: StreamHandlers,
     signal?: AbortSignal,
-    attachments?: MediaAttachment[]
+    attachments?: MediaAttachment[],
+    userId?: string | null
   ): Promise<void> {
     const { onCitations, onMedia, onToken, onError, onDone } = handlers;
 
@@ -522,6 +525,7 @@ export const apiService = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           session_id: sessionId,
+          user_id: userId || undefined,
           message,
           mode,
           attachments: attachments || [],
