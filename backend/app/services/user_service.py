@@ -26,6 +26,7 @@ from app.schemas.user import (
     validate_password_strength
 )
 from app.services.email_service import email_service
+from app.services.storage_service import storage_service
 from app.core.logging import logger
 
 AVATAR_COLORS = [
@@ -283,11 +284,11 @@ class UserService:
                 detail=f"Invalid image format '{ext}'. Allowed formats: PNG, JPG, JPEG, WEBP, GIF."
             )
 
-        # 3. Save to storage
+        # 3. Save locally
         avatars_dir = settings.DATA_DIR / "avatars"
         avatars_dir.mkdir(parents=True, exist_ok=True)
 
-        # Remove previous avatar files for this user
+        # Remove previous avatar files for this user locally
         for old_file in avatars_dir.glob(f"{user_id}.*"):
             try:
                 old_file.unlink()
@@ -297,16 +298,43 @@ class UserService:
         target_file = avatars_dir / f"{user_id}{ext}"
         target_file.write_bytes(file_bytes)
 
-        avatar_url = f"/api/v1/user/avatar/{user_id}?v={int(time.time())}"
+        # 4. Upload to persistent cloud storage (Cloudflare R2 if configured)
+        storage_key = f"avatars/{user_id}{ext}"
+        if storage_service.is_r2_active:
+            for old_ext in ALLOWED_AVATAR_EXTENSIONS:
+                if old_ext != ext:
+                    try:
+                        storage_service.delete_file(f"avatars/{user_id}{old_ext}")
+                    except Exception:
+                        pass
+
+        media_map = {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".webp": "image/webp",
+            ".gif": "image/gif"
+        }
+        content_type = media_map.get(ext, "image/jpeg")
+
+        public_url, _ = storage_service.upload_file(
+            file_bytes=file_bytes,
+            destination_key=storage_key,
+            content_type=content_type
+        )
+
+        # Append cache buster parameter to bust browser caches upon update
+        cache_buster = f"v={int(time.time())}"
+        avatar_url = f"{public_url}&{cache_buster}" if "?" in public_url else f"{public_url}?{cache_buster}"
 
         with get_db_connection() as conn:
             conn.execute("UPDATE users SET avatar_url = ? WHERE id = ?", (avatar_url, user_id))
 
-        logger.info(f"Saved custom avatar image for user '{user.username}' ({user_id})")
+        logger.info(f"Saved custom avatar image for user '{user.username}' ({user_id}) -> {avatar_url}")
         return self.get_user_by_id(user_id)
 
     def delete_user_avatar(self, user_id: str) -> UserResponse:
-        """Delete custom avatar image and reset to default avatar color."""
+        """Delete custom avatar image from disk and cloud storage, resetting to default avatar color."""
         user = self.get_user_by_id(user_id)
         if not user:
             raise HTTPException(
@@ -314,12 +342,22 @@ class UserService:
                 detail="User account not found."
             )
 
+        # Remove local files
         avatars_dir = settings.DATA_DIR / "avatars"
-        for old_file in avatars_dir.glob(f"{user_id}.*"):
-            try:
-                old_file.unlink()
-            except Exception:
-                pass
+        if avatars_dir.exists():
+            for old_file in avatars_dir.glob(f"{user_id}.*"):
+                try:
+                    old_file.unlink()
+                except Exception:
+                    pass
+
+        # Remove from cloud storage
+        if storage_service.is_r2_active:
+            for ext in ALLOWED_AVATAR_EXTENSIONS:
+                try:
+                    storage_service.delete_file(f"avatars/{user_id}{ext}")
+                except Exception:
+                    pass
 
         with get_db_connection() as conn:
             conn.execute("UPDATE users SET avatar_url = '' WHERE id = ?", (user_id,))
@@ -328,11 +366,40 @@ class UserService:
         return self.get_user_by_id(user_id)
 
     def get_user_avatar_path(self, user_id: str) -> Optional[Path]:
-        """Find the avatar image file path for a user."""
+        """
+        Find the avatar image file path for a user.
+        If missing locally (e.g. after container restart), attempts to self-heal
+        and restore from persistent object storage (Cloudflare R2).
+        """
         avatars_dir = settings.DATA_DIR / "avatars"
+        avatars_dir.mkdir(parents=True, exist_ok=True)
+
+        # 1. Fast path: check local disk cache
         for f in avatars_dir.glob(f"{user_id}.*"):
-            if f.is_file():
+            if f.is_file() and f.stat().st_size > 0:
                 return f
+
+        # 2. Resilient path: check Cloudflare R2 and self-heal local cache
+        if storage_service.is_r2_active and storage_service._s3_client:
+            try:
+                resp = storage_service._s3_client.list_objects_v2(
+                    Bucket=settings.CLOUDFLARE_R2_BUCKET_NAME,
+                    Prefix=f"avatars/{user_id}.",
+                    MaxKeys=1
+                )
+                contents = resp.get("Contents", [])
+                if contents:
+                    found_key = contents[0]["Key"]
+                    data = storage_service.download_file(found_key)
+                    if data:
+                        ext = Path(found_key).suffix.lower()
+                        cached_file = avatars_dir / f"{user_id}{ext}"
+                        cached_file.write_bytes(data)
+                        logger.info(f"Self-healed missing local avatar for user {user_id} from R2 ({found_key})")
+                        return cached_file
+            except Exception as e:
+                logger.warning(f"Failed to query R2 storage for avatar of user {user_id}: {e}")
+
         return None
 
     def change_user_password(

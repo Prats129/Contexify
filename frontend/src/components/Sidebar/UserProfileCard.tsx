@@ -30,6 +30,11 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
   const popoverRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const { currentAccent } = useTheme();
+  const [avatarLoadError, setAvatarLoadError] = useState(false);
+
+  useEffect(() => {
+    setAvatarLoadError(false);
+  }, [currentUser?.avatar_url]);
 
   // Close menu when sidebar isOpen state changes or window resizes
   useEffect(() => {
@@ -136,10 +141,11 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
             }}
           >
             <div className="flex items-center gap-2.5 p-2 border-b border-(--border-subtle)">
-              {currentUser.avatar_url ? (
+              {currentUser.avatar_url && !avatarLoadError ? (
                 <img
                   src={currentUser.avatar_url}
                   alt={currentUser.display_name}
+                  onError={() => setAvatarLoadError(true)}
                   className="w-9 h-9 aspect-square rounded-full object-cover shrink-0 border border-(--border-subtle)"
                 />
               ) : (
@@ -198,10 +204,11 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
         onClick={handleToggleMenu}
         title="Account & Settings"
       >
-        {currentUser.avatar_url ? (
+        {currentUser.avatar_url && !avatarLoadError ? (
           <img
             src={currentUser.avatar_url}
             alt={currentUser.display_name}
+            onError={() => setAvatarLoadError(true)}
             className={`${
               isOpen ? "w-8 h-8" : "w-7 h-7"
             } aspect-square rounded-full object-cover shrink-0 border border-(--border-subtle)`}

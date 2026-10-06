@@ -75,13 +75,20 @@ class StorageService:
             base = settings.CLOUDFLARE_R2_PUBLIC_URL.strip().rstrip("/")
             return f"{base}/{clean_key}"
 
-        # 2. If R2 is active but no public URL is provided, build direct endpoint URL
+        # 2. If clean_key is an avatar and no custom CDN domain is configured,
+        # route to backend endpoint so the backend proxies/serves the avatar
+        if clean_key.startswith("avatars/"):
+            filename = clean_key.split("avatars/")[-1]
+            user_id = Path(filename).stem
+            return f"/api/v1/user/avatar/{user_id}"
+
+        # 3. If R2 is active but no public URL is provided, build direct endpoint URL
         if self.is_r2_active and settings.r2_endpoint_url:
             base = settings.r2_endpoint_url.rstrip("/")
             bucket = settings.CLOUDFLARE_R2_BUCKET_NAME
             return f"{base}/{bucket}/{clean_key}"
 
-        # 3. Local URL fallback
+        # 4. Local URL fallback
         if clean_key.startswith("media/uploads/"):
             filename = clean_key.split("media/uploads/")[-1]
             return f"/api/v1/media/uploads/{filename}"
@@ -188,6 +195,7 @@ class StorageService:
             Path(clean_path),
             settings.DATA_DIR / rel_key,
             settings.DATA_DIR / clean_path.lstrip("/"),
+            settings.DATA_DIR / "avatars" / Path(clean_path).name,
             settings.MEDIA_DIR / rel_key,
             settings.UPLOAD_IMAGE_DIR / Path(clean_path).name,
             settings.GENERATED_IMAGE_DIR / Path(clean_path).name,
@@ -258,6 +266,9 @@ class StorageService:
         elif "/api/v1/media/documents/" in clean:
             doc_rel = clean.split("/api/v1/media/documents/")[-1]
             return f"documents/{doc_rel}"
+        elif "/api/v1/user/avatar/" in clean:
+            user_id = clean.split("/api/v1/user/avatar/")[-1]
+            return f"avatars/{user_id}"
 
         return None
 
