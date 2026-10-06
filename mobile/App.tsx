@@ -17,6 +17,8 @@ import {
   Image,
   Keyboard,
   TouchableWithoutFeedback,
+  type NativeSyntheticEvent,
+  type NativeScrollEvent,
 } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
@@ -113,20 +115,40 @@ export default function App() {
   const [attachmentsVisible, setAttachmentsVisible] = useState(false);
 
   const flatListRef = useRef<FlatList<Message>>(null);
+  const isAtBottomRef = useRef(true);
+
+  const handleScroll = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const { layoutMeasurement, contentOffset, contentSize } =
+        event.nativeEvent;
+      const paddingToBottom = 60;
+      const isClose =
+        layoutMeasurement.height + contentOffset.y >=
+        contentSize.height - paddingToBottom;
+      isAtBottomRef.current = isClose;
+    },
+    [],
+  );
 
   // --- 1. App Initialization ---
   useEffect(() => {
     initApp();
   }, []);
 
-  // --- Keyboard Auto-scroll (ChatGPT behavior: scroll messages when keyboard appears) ---
+  // --- Keyboard Auto-scroll (Preserves reading position if scrolled up) ---
   useEffect(() => {
     const showEvent =
       Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
     const sub = Keyboard.addListener(showEvent, () => {
-      setTimeout(() => {
-        flatListRef.current?.scrollToEnd({ animated: true });
-      }, 100);
+      // Only auto-scroll to bottom if the user was already at/near the bottom.
+      // If the user scrolled up to read earlier messages, do not force them down!
+      if (isAtBottomRef.current) {
+        setTimeout(() => {
+          if (isAtBottomRef.current) {
+            flatListRef.current?.scrollToEnd({ animated: true });
+          }
+        }, 100);
+      }
     });
     return () => sub.remove();
   }, []);
@@ -192,7 +214,10 @@ export default function App() {
 
   const SESSIONS_PAGE_SIZE = 15;
 
-  const loadUserSessions = async (userId: string, userOverride?: User | null) => {
+  const loadUserSessions = async (
+    userId: string,
+    userOverride?: User | null,
+  ) => {
     try {
       const res = await apiService.getUserSessions(userId, {
         limit: SESSIONS_PAGE_SIZE,
@@ -261,6 +286,7 @@ export default function App() {
     setActiveSessionId(sessionId);
     setStreamingMessage(null);
     setAttachedMedia([]);
+    isAtBottomRef.current = true;
     if (sessionMode) setCurrentMode(sessionMode);
 
     try {
@@ -288,6 +314,7 @@ export default function App() {
   // --- 3. New Chat ---
   const handleNewChat = (userOverride?: User | null) => {
     setIsTemporaryChat(false);
+    isAtBottomRef.current = true;
     const effectiveUser =
       userOverride !== undefined
         ? userOverride
@@ -437,6 +464,10 @@ export default function App() {
 
     setMessages((prev) => [...prev, userMsg]);
     setStreamingMessage({ content: "", citations: [], attachments: [] });
+    isAtBottomRef.current = true;
+    setTimeout(() => {
+      flatListRef.current?.scrollToEnd({ animated: true });
+    }, 60);
 
     // Stream SSE Response
     let streamedContent = "";
@@ -823,7 +854,7 @@ export default function App() {
 
         {/* Main Chat Workspace */}
         <KeyboardAvoidingView
-          behavior="padding"
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
           style={styles.workspace}
           keyboardVerticalOffset={Platform.OS === "ios" ? 54 : 0}
         >
@@ -1080,11 +1111,17 @@ export default function App() {
               data={messages}
               keyExtractor={(item) => item.id}
               contentContainerStyle={styles.messageListContent}
-              keyboardDismissMode="on-drag"
-              keyboardShouldPersistTaps="handled"
-              onContentSizeChange={() =>
-                flatListRef.current?.scrollToEnd({ animated: true })
+              keyboardDismissMode={
+                Platform.OS === "ios" ? "interactive" : "none"
               }
+              keyboardShouldPersistTaps="handled"
+              onScroll={handleScroll}
+              scrollEventThrottle={16}
+              onContentSizeChange={() => {
+                if (isAtBottomRef.current) {
+                  flatListRef.current?.scrollToEnd({ animated: true });
+                }
+              }}
               showsVerticalScrollIndicator={false}
               renderItem={({ item }) => (
                 <MessageItem
