@@ -218,16 +218,19 @@ def init_db():
                 content TEXT NOT NULL,
                 citations_json TEXT,
                 attachments_json TEXT DEFAULT '[]',
+                reply_to_json TEXT DEFAULT NULL,
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
             );
         """)
         
-        # Schema migration check: ensure attachments_json column exists if table was previously created
+        # Schema migration check: ensure attachments_json & reply_to_json columns exist if table was previously created
         cursor.execute("PRAGMA table_info(messages);")
         message_columns = [row["name"] for row in cursor.fetchall()]
         if "attachments_json" not in message_columns:
             cursor.execute("ALTER TABLE messages ADD COLUMN attachments_json TEXT DEFAULT '[]';")
+        if "reply_to_json" not in message_columns:
+            cursor.execute("ALTER TABLE messages ADD COLUMN reply_to_json TEXT DEFAULT NULL;")
         
         # 4. Documents Table
         cursor.execute("""

@@ -14,7 +14,11 @@ import { Feather, Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import * as Clipboard from "expo-clipboard";
 import { getAppTheme, type AppTheme } from "../theme/colors";
-import type { Citation, MediaAttachment } from "../types";
+import type {
+  Citation,
+  MediaAttachment,
+  MessageReplyReference,
+} from "../types";
 
 interface MessageItemProps {
   id?: string;
@@ -22,21 +26,30 @@ interface MessageItemProps {
   content: string;
   citations?: Citation[] | null;
   attachments?: MediaAttachment[] | null;
+  reply_to?: MessageReplyReference | null;
   isStreaming?: boolean;
   onOpenCitations?: (citations: Citation[]) => void;
   onUseAsReference?: (media: MediaAttachment) => void;
+  onReply?: (message: {
+    id?: string;
+    role: "user" | "assistant";
+    content: string;
+  }) => void;
   isDark?: boolean;
   theme?: AppTheme;
 }
 
 export const MessageItem: React.FC<MessageItemProps> = ({
+  id,
   role,
   content,
   citations,
   attachments,
+  reply_to,
   isStreaming = false,
   onOpenCitations,
   onUseAsReference,
+  onReply,
   isDark = true,
   theme: customTheme,
 }) => {
@@ -235,7 +248,10 @@ export const MessageItem: React.FC<MessageItemProps> = ({
               activeOpacity={0.85}
               style={[
                 styles.mediaCard,
-                { borderColor: theme.borderSubtle, backgroundColor: theme.bgCard },
+                {
+                  borderColor: theme.borderSubtle,
+                  backgroundColor: theme.bgCard,
+                },
               ]}
             >
               <Image
@@ -271,6 +287,51 @@ export const MessageItem: React.FC<MessageItemProps> = ({
               ],
         ]}
       >
+        {reply_to && (
+          <View
+            style={[
+              styles.quoteContainer,
+              isUser
+                ? styles.userQuoteContainer
+                : [
+                    styles.assistantQuoteContainer,
+                    {
+                      backgroundColor: theme.bgApp,
+                      borderLeftColor: theme.primary,
+                    },
+                  ],
+            ]}
+          >
+            <View style={styles.quoteHeaderRow}>
+              <Feather
+                name="corner-up-left"
+                size={11}
+                color={isUser ? "rgba(255, 255, 255, 0.85)" : theme.primary}
+                style={{ marginRight: 4 }}
+              />
+              <Text
+                style={[
+                  styles.quoteSender,
+                  { color: isUser ? "#ffffff" : theme.primary },
+                ]}
+              >
+                {reply_to.role === "user" ? "You" : "Contexify AI"}
+              </Text>
+            </View>
+            <Text
+              style={[
+                styles.quoteText,
+                {
+                  color: isUser ? "rgba(255, 255, 255, 0.78)" : theme.textMuted,
+                },
+              ]}
+              numberOfLines={2}
+            >
+              {reply_to.content.replace(/\s+/g, " ").trim()}
+            </Text>
+          </View>
+        )}
+
         {isStreaming && !content?.trim() ? (
           <View style={styles.thinkingRow}>
             <View
@@ -288,6 +349,30 @@ export const MessageItem: React.FC<MessageItemProps> = ({
       {/* Action Toolbar for User message */}
       {isUser && content.length > 0 && (
         <View style={[styles.toolbarRow, styles.userToolbarRow]}>
+          {onReply && (
+            <TouchableOpacity
+              style={[
+                styles.actionBtn,
+                {
+                  backgroundColor: theme.bgCard,
+                  borderColor: theme.borderSubtle,
+                },
+              ]}
+              onPress={() => {
+                Haptics.selectionAsync();
+                onReply({ id, role, content });
+              }}
+              activeOpacity={0.7}
+              accessibilityLabel="Reply to this message"
+            >
+              <Feather
+                name="corner-up-left"
+                size={13}
+                color={theme.textMuted}
+              />
+            </TouchableOpacity>
+          )}
+
           <TouchableOpacity
             style={[
               styles.actionBtn,
@@ -311,6 +396,30 @@ export const MessageItem: React.FC<MessageItemProps> = ({
       {/* Action Toolbar for AI message */}
       {!isUser && content.length > 0 && !isStreaming && (
         <View style={styles.toolbarRow}>
+          {onReply && (
+            <TouchableOpacity
+              style={[
+                styles.actionBtn,
+                {
+                  backgroundColor: theme.bgCard,
+                  borderColor: theme.borderSubtle,
+                },
+              ]}
+              onPress={() => {
+                Haptics.selectionAsync();
+                onReply({ id, role, content });
+              }}
+              activeOpacity={0.7}
+              accessibilityLabel="Reply to this message"
+            >
+              <Feather
+                name="corner-up-left"
+                size={13}
+                color={theme.textMuted}
+              />
+            </TouchableOpacity>
+          )}
+
           {/* Copy Button */}
           <TouchableOpacity
             style={[
@@ -573,5 +682,34 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
     paddingVertical: 1.5,
     borderRadius: 4,
+  },
+  quoteContainer: {
+    borderLeftWidth: 3,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    marginBottom: 8,
+  },
+  userQuoteContainer: {
+    backgroundColor: "rgba(255, 255, 255, 0.12)",
+    borderLeftColor: "rgba(255, 255, 255, 0.75)",
+  },
+  assistantQuoteContainer: {
+    // Background and border set inline dynamically via theme
+  },
+  quoteHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 2,
+  },
+  quoteSender: {
+    fontSize: 11,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+  },
+  quoteText: {
+    fontSize: 12.5,
+    lineHeight: 16,
   },
 });

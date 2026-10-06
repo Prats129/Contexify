@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field, model_validator
 from typing import List, Optional, Any
-from app.schemas.chat import ChatMode, Citation, MediaAttachment, normalize_chat_mode
+from app.schemas.chat import ChatMode, Citation, MediaAttachment, MessageReplyReference, normalize_chat_mode
 from app.schemas.document import DocumentMetadata
 
 class ChatSessionCreate(BaseModel):
@@ -61,6 +61,7 @@ class MessageResponse(BaseModel):
     content: str
     citations: Optional[List[Citation]] = None
     attachments: Optional[List[MediaAttachment]] = None
+    reply_to: Optional[MessageReplyReference] = None
     created_at: str
 
 class SessionHistoryResponse(BaseModel):

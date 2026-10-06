@@ -14,6 +14,7 @@ import type {
   StreamHandlers,
   PaginatedAssetsResponse,
   AssetQueryParams,
+  MessageReplyReference,
 } from '../types';
 
 // Default development IP matching your current Wi-Fi network (10.66.137.54:8001)
@@ -665,7 +666,8 @@ export const apiService = {
     mode: ChatMode,
     handlers: StreamHandlers,
     attachments?: MediaAttachment[],
-    userId?: string | null
+    userId?: string | null,
+    reply_to?: MessageReplyReference | null
   ): () => void {
     let isAborted = false;
     let hasEnded = false;
@@ -784,6 +786,7 @@ export const apiService = {
           message: query || '',
           query: query || '',
           mode: effectiveMode,
+          reply_to: reply_to || undefined,
           attachments: (attachments || []).map((att) => ({
             ...att,
             url: att.url || '',

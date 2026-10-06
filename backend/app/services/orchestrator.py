@@ -138,12 +138,13 @@ class ChatOrchestrator:
         self,
         query: str,
         session_id: str,
-        chat_history: Optional[List[Dict[str, Any]]] = None
+        chat_history: Optional[List[Dict[str, Any]]] = None,
+        reply_to: Optional[Any] = None
     ) -> AsyncGenerator[str, None]:
-        """Direct conversational response with full multi-turn chat memory."""
+        """Direct conversational response with full multi-turn chat memory and reply reference."""
         full_answer = ""
         try:
-            async for token in llm_service.stream_conversational_answer(query, chat_history):
+            async for token in llm_service.stream_conversational_answer(query, chat_history, reply_to=reply_to):
                 full_answer += token
                 yield f"data: {json.dumps({'event': 'token', 'data': token})}\n\n"
         except Exception as e:
@@ -191,14 +192,21 @@ class ChatOrchestrator:
         # 0. Retrieve Pre-existing Conversation History for this chat thread
         chat_history = session_store_repo.get_history_messages(session_id)
 
-        # 1. Persist User Prompt to database & in-memory store with attachments
+        # 1. Persist User Prompt to database & in-memory store with attachments and reply reference
         chat_history_service.save_message(
             session_id=session_id,
             role="user",
             content=request.message or "",
-            attachments=request.attachments
+            attachments=request.attachments,
+            reply_to=request.reply_to
         )
-        session_store_repo.record_message(session_id, "user", request.message or "", attachments=request.attachments)
+        session_store_repo.record_message(
+            session_id,
+            "user",
+            request.message or "",
+            attachments=request.attachments,
+            reply_to=request.reply_to
+        )
 
         # 2. Auto-generate title if session is brand new / "New Conversation"
         existing_session = chat_history_service.get_session(session_id)
@@ -218,7 +226,7 @@ class ChatOrchestrator:
         # 3a. Explicit IMAGE_GENERATION Mode
         if session.mode == ChatMode.IMAGE_GENERATION:
             if self._is_conversational_query(query, chat_history) and not self._is_image_gen_intent(query):
-                async for chunk in self._execute_conversational(query, session_id, chat_history):
+                async for chunk in self._execute_conversational(query, session_id, chat_history, reply_to=request.reply_to):
                     yield chunk
                 return
             async for chunk in self._execute_image_generation(request, session_id):
@@ -240,7 +248,7 @@ class ChatOrchestrator:
                 return
             # If conversational query or greeting
             if self._is_conversational_query(query, chat_history):
-                async for chunk in self._execute_conversational(query, session_id, chat_history):
+                async for chunk in self._execute_conversational(query, session_id, chat_history, reply_to=request.reply_to):
                     yield chunk
                 return
             msg = "Please attach an image or document to analyze with Vision & OCR, or ask any general question."
@@ -252,16 +260,16 @@ class ChatOrchestrator:
         if session.mode == ChatMode.DOCUMENT_RAG:
             # If conversational greeting or general follow-up without document query
             if self._is_conversational_query(query, chat_history):
-                async for chunk in self._execute_conversational(query, session_id, chat_history):
+                async for chunk in self._execute_conversational(query, session_id, chat_history, reply_to=request.reply_to):
                     yield chunk
                 return
-            async for chunk in self._execute_document_rag(query, session_id, chat_history, allow_fallback=False):
+            async for chunk in self._execute_document_rag(query, session_id, chat_history, allow_fallback=False, reply_to=request.reply_to):
                 yield chunk
             return
 
         # 3d. Explicit WEB_SEARCH Mode
         if session.mode == ChatMode.WEB_SEARCH:
-            async for chunk in self._execute_web_search(query, session_id, chat_history):
+            async for chunk in self._execute_web_search(query, session_id, chat_history, reply_to=request.reply_to):
                 yield chunk
             return
 
@@ -290,7 +298,7 @@ class ChatOrchestrator:
 
         # Case D: Conversational greeting or short follow-up
         if self._is_conversational_query(query, chat_history):
-            async for chunk in self._execute_conversational(query, session_id, chat_history):
+            async for chunk in self._execute_conversational(query, session_id, chat_history, reply_to=request.reply_to):
                 yield chunk
             return
 
@@ -298,18 +306,18 @@ class ChatOrchestrator:
         if session.document_ids and len(session.document_ids) > 0:
             chunks = rag_service.retrieve_context_for_query(query, session_id)
             if chunks:
-                async for chunk in self._execute_document_rag(query, session_id, chat_history, context_chunks=chunks, allow_fallback=True):
+                async for chunk in self._execute_document_rag(query, session_id, chat_history, context_chunks=chunks, allow_fallback=True, reply_to=request.reply_to):
                     yield chunk
                 return
 
         # Case F: Query requires real-time web search
         if self._needs_web_search(query):
-            async for chunk in self._execute_web_search(query, session_id, chat_history):
+            async for chunk in self._execute_web_search(query, session_id, chat_history, reply_to=request.reply_to):
                 yield chunk
             return
 
         # Case G: Default general knowledge / reasoning / coding / conversation
-        async for chunk in self._execute_conversational(query, session_id, chat_history):
+        async for chunk in self._execute_conversational(query, session_id, chat_history, reply_to=request.reply_to):
             yield chunk
 
     async def _execute_document_rag(
@@ -318,13 +326,14 @@ class ChatOrchestrator:
         session_id: str,
         chat_history: Optional[List[Dict[str, Any]]] = None,
         context_chunks: Optional[List[Dict[str, Any]]] = None,
-        allow_fallback: bool = True
+        allow_fallback: bool = True,
+        reply_to: Optional[Any] = None
     ) -> AsyncGenerator[str, None]:
         session = session_store_repo.get_or_create_session(session_id)
         
         if not session.document_ids:
             if allow_fallback:
-                async for chunk in self._execute_conversational(query, session_id, chat_history):
+                async for chunk in self._execute_conversational(query, session_id, chat_history, reply_to=reply_to):
                     yield chunk
                 return
             msg = "⚠️ No documents uploaded to this chat session yet! Please upload a PDF or text file first to ask document-based questions, or switch to Auto / Web Search mode."
@@ -338,7 +347,7 @@ class ChatOrchestrator:
         
         if not context_chunks:
             if allow_fallback:
-                async for chunk in self._execute_conversational(query, session_id, chat_history):
+                async for chunk in self._execute_conversational(query, session_id, chat_history, reply_to=reply_to):
                     yield chunk
                 return
             msg = "I searched your uploaded document(s), but could not find matching information relevant to your question."
@@ -365,7 +374,7 @@ class ChatOrchestrator:
         # 3. Stream answer token by token with chat history & accumulate
         full_answer = ""
         try:
-            async for token in llm_service.stream_rag_answer(query, context_chunks, chat_history):
+            async for token in llm_service.stream_rag_answer(query, context_chunks, chat_history, reply_to=reply_to):
                 full_answer += token
                 yield f"data: {json.dumps({'event': 'token', 'data': token})}\n\n"
         except Exception as e:
@@ -389,7 +398,8 @@ class ChatOrchestrator:
         self,
         query: str,
         session_id: str,
-        chat_history: Optional[List[Dict[str, Any]]] = None
+        chat_history: Optional[List[Dict[str, Any]]] = None,
+        reply_to: Optional[Any] = None
     ) -> AsyncGenerator[str, None]:
         full_answer = ""
         citations_data = []
@@ -397,7 +407,7 @@ class ChatOrchestrator:
         # 1. Handle Conversational Greetings & Continuity Follow-ups directly
         if self._is_conversational_query(query, chat_history):
             logger.info(f"Routing query '{query}' to conversational assistant with chat history")
-            async for chunk in self._execute_conversational(query, session_id, chat_history):
+            async for chunk in self._execute_conversational(query, session_id, chat_history, reply_to=reply_to):
                 yield chunk
             return
 
@@ -421,7 +431,7 @@ class ChatOrchestrator:
                 yield f"data: {json.dumps({'event': 'citations', 'data': '', 'citations': citations_data})}\n\n"
 
         try:
-            async for token in llm_service.stream_web_search_answer(query, results, chat_history):
+            async for token in llm_service.stream_web_search_answer(query, results, chat_history, reply_to=reply_to):
                 full_answer += token
                 yield f"data: {json.dumps({'event': 'token', 'data': token})}\n\n"
         except Exception as e:
@@ -516,7 +526,8 @@ class ChatOrchestrator:
             async for token in llm_service.stream_multimodal_answer(
                 query=request.message or "",
                 attachments=request.attachments or [],
-                chat_history=chat_history
+                chat_history=chat_history,
+                reply_to=request.reply_to
             ):
                 full_answer += token
                 yield f"data: {json.dumps({'event': 'token', 'data': token})}\n\n"

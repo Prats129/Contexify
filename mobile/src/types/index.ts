@@ -67,6 +67,13 @@ export interface Citation {
   snippet: string;
 }
 
+export interface MessageReplyReference {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  sender_name?: string;
+}
+
 export interface Message {
   id: string;
   session_id?: string;
@@ -74,6 +81,7 @@ export interface Message {
   content: string;
   citations?: Citation[] | null;
   attachments?: MediaAttachment[] | null;
+  reply_to?: MessageReplyReference | null;
   created_at?: string;
 }
 

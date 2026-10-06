@@ -14,6 +14,7 @@ import type {
   Citation,
   GoogleAuthRequest,
   MediaAttachment,
+  MessageReplyReference,
 } from "./types";
 import { useTheme } from "./context/ThemeContext";
 import { useConfirm } from "./context/ConfirmContext";
@@ -120,6 +121,9 @@ export const App: React.FC = () => {
   const [documents, setDocuments] = useState<DocumentMetadata[]>([]);
   const [attachedMedia, setAttachedMedia] = useState<MediaAttachment[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [replyingTo, setReplyingTo] = useState<MessageReplyReference | null>(
+    null,
+  );
 
   // --- Interaction States ---
   const [inputQuery, setInputQuery] = useState("");
@@ -196,6 +200,7 @@ export const App: React.FC = () => {
       setMessages([]);
       setDocuments([]);
       setStreamingMessage(null);
+      setReplyingTo(null);
       setInputQuery("");
       updateUrlForSession(null);
       localStorage.removeItem("contexify_active_session");
@@ -217,6 +222,7 @@ export const App: React.FC = () => {
       setIsTemporaryChat(false);
       setActiveSessionId(sessionId);
       setStreamingMessage(null);
+      setReplyingTo(null);
 
       if (currentUser?.id && !isUnauthenticated) {
         localStorage.setItem("contexify_active_session", sessionId);
@@ -256,7 +262,9 @@ export const App: React.FC = () => {
         try {
           parsedUser = JSON.parse(savedUserStr);
           if (parsedUser?.id) {
-            user = await apiService.getCurrentUser(parsedUser.id).catch(() => null);
+            user = await apiService
+              .getCurrentUser(parsedUser.id)
+              .catch(() => null);
             // Retain cached credentials if backend cold start or temporary offline occurred
             if (!user && parsedUser) {
               user = parsedUser;
@@ -397,10 +405,22 @@ export const App: React.FC = () => {
     setMessages([]);
     setDocuments([]);
     setStreamingMessage(null);
+    setReplyingTo(null);
     setInputQuery("");
     updateUrlForSession(null);
     localStorage.removeItem("contexify_active_session");
   };
+
+  const handleReplyMessage = useCallback(
+    (msg: { id?: string; role: "user" | "assistant"; content: string }) => {
+      setReplyingTo({
+        id: msg.id || `msg-${Date.now()}`,
+        role: msg.role,
+        content: msg.content,
+      });
+    },
+    [],
+  );
 
   // --- 5. Delete Session ---
   const handleDeleteSession = async (sessionId: string) => {
@@ -498,7 +518,10 @@ export const App: React.FC = () => {
           }
           updateUrlForSession(newSess.id, false);
         } catch (err) {
-          console.warn("Failed to create session explicitly on file upload, using clientSessionId for self-healing:", err);
+          console.warn(
+            "Failed to create session explicitly on file upload, using clientSessionId for self-healing:",
+            err,
+          );
           targetSessionId = clientSessionId;
           setActiveSessionId(targetSessionId);
           updateUrlForSession(targetSessionId, false);
@@ -716,8 +739,10 @@ export const App: React.FC = () => {
 
     // Capture media to send & reset input
     const mediaToSend = [...attachedMedia];
+    const replyToPayload = replyingTo;
     setInputQuery("");
     setAttachedMedia([]);
+    setReplyingTo(null);
     setIsSending(true);
 
     // Append optimistic user message with attachments
@@ -727,6 +752,7 @@ export const App: React.FC = () => {
       role: "user",
       content:
         query || (mediaToSend.length > 0 ? "Analyze attached media" : ""),
+      reply_to: replyToPayload,
       attachments: mediaToSend.length > 0 ? mediaToSend : null,
       created_at: new Date().toISOString(),
     };
@@ -838,6 +864,7 @@ export const App: React.FC = () => {
       abortController.signal,
       mediaToSend,
       userToUse?.id,
+      replyToPayload,
     );
   };
 
@@ -1040,6 +1067,9 @@ export const App: React.FC = () => {
         onOpenAttachmentsModal={
           currentUser ? handleOpenAttachmentsModal : undefined
         }
+        replyingTo={replyingTo}
+        onCancelReply={() => setReplyingTo(null)}
+        onReply={handleReplyMessage}
       />
 
       <UserModal

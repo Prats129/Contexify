@@ -43,6 +43,7 @@ import type {
   StreamingMessageState,
   DocumentMetadata,
   MediaAttachment,
+  MessageReplyReference,
 } from "./src/types";
 
 import { Header } from "./src/components/Header";
@@ -95,6 +96,9 @@ export default function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [documents, setDocuments] = useState<DocumentMetadata[]>([]);
   const [attachedMedia, setAttachedMedia] = useState<MediaAttachment[]>([]);
+  const [replyingTo, setReplyingTo] = useState<MessageReplyReference | null>(
+    null,
+  );
 
   // Interaction State
   const [query, setQuery] = useState("");
@@ -286,6 +290,7 @@ export default function App() {
     setActiveSessionId(sessionId);
     setStreamingMessage(null);
     setAttachedMedia([]);
+    setReplyingTo(null);
     isAtBottomRef.current = true;
     if (sessionMode) setCurrentMode(sessionMode);
 
@@ -307,6 +312,7 @@ export default function App() {
     setMessages([]);
     setDocuments([]);
     setAttachedMedia([]);
+    setReplyingTo(null);
     setStreamingMessage(null);
     setQuery("");
   };
@@ -328,8 +334,21 @@ export default function App() {
     setMessages([]);
     setDocuments([]);
     setAttachedMedia([]);
+    setReplyingTo(null);
     setStreamingMessage(null);
     setQuery("");
+  };
+
+  const handleReplyMessage = (msg: {
+    id?: string;
+    role: "user" | "assistant";
+    content: string;
+  }) => {
+    setReplyingTo({
+      id: msg.id || `msg_${Date.now()}`,
+      role: msg.role,
+      content: msg.content,
+    });
   };
 
   // --- 4. Delete Session ---
@@ -409,6 +428,8 @@ export default function App() {
     isSendingRef.current = true;
     setIsSending(true);
     setQuery("");
+    const replyToPayload = replyingTo;
+    setReplyingTo(null);
     let sessionId = activeSessionId;
 
     const mediaToSend = [...attachedMedia];
@@ -458,6 +479,7 @@ export default function App() {
       session_id: sessionId,
       role: "user",
       content: prompt,
+      reply_to: replyToPayload,
       attachments: mediaToSend.length > 0 ? mediaToSend : undefined,
       created_at: new Date().toISOString(),
     };
@@ -556,6 +578,7 @@ export default function App() {
       },
       mediaToSend.length > 0 ? mediaToSend : undefined,
       userToUse ? userToUse.id : null,
+      replyToPayload,
     );
 
     streamAbortRef.current = cancel;
@@ -1130,8 +1153,10 @@ export default function App() {
                   content={item.content}
                   citations={item.citations}
                   attachments={item.attachments}
+                  reply_to={item.reply_to}
                   onOpenCitations={handleOpenCitations}
                   onUseAsReference={handleUseAsReference}
+                  onReply={handleReplyMessage}
                   isDark={isDark}
                   theme={theme}
                 />
@@ -1171,6 +1196,8 @@ export default function App() {
             onToggleMode={handleToggleMode}
             isDark={isDark}
             theme={theme}
+            replyingTo={replyingTo}
+            onCancelReply={() => setReplyingTo(null)}
           />
         </KeyboardAvoidingView>
 

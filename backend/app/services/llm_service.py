@@ -28,6 +28,34 @@ class LLMService:
                 models.append(m)
         return models
 
+    def _format_reply_reference_block(self, reply_to: Optional[Any]) -> str:
+        """Format an explicit, high-priority context block when replying to a specific message."""
+        if not reply_to:
+            return ""
+        
+        if hasattr(reply_to, "model_dump"):
+            r_data = reply_to.model_dump()
+        elif isinstance(reply_to, dict):
+            r_data = reply_to
+        else:
+            return ""
+
+        target_role = "USER" if r_data.get("role") == "user" else "ASSISTANT"
+        content = (r_data.get("content") or "").strip()
+        if not content:
+            return ""
+
+        sender = r_data.get("sender_name") or target_role
+
+        return (
+            f"--- REFERENCED MESSAGE BEING SPECIFICALLY REPLIED TO ---\n"
+            f"Original Sender: {sender}\n"
+            f"Referenced Content: \"{content}\"\n"
+            f"----------------------------------------------------------\n"
+            f"CRITICAL DIRECTIVE: The current user message below is a direct reply/reference to the message above. "
+            f"Take the referenced message into deep consideration and address their question, instruction, or follow-up directly in context of that referenced message.\n\n"
+        )
+
     def _format_chat_history(self, chat_history: Optional[List[Dict[str, str]]], max_turns: int = 10) -> str:
         """Format recent conversation turns into clear contextual block."""
         if not chat_history:
@@ -47,7 +75,13 @@ class LLMService:
             if atts:
                 names = [a.get("file_name", "image") if isinstance(a, dict) else getattr(a, "file_name", "image") for a in atts]
                 att_desc = f" [Attached: {', '.join(names)}]"
-            formatted_lines.append(f"{role}{att_desc}: {content}")
+            reply_desc = ""
+            if msg.get("reply_to"):
+                r = msg["reply_to"]
+                target_role = "User" if r.get("role") == "user" else "Assistant"
+                snippet = (r.get("content", "")[:60] + "...") if len(r.get("content", "")) > 60 else r.get("content", "")
+                reply_desc = f" [In reply to {target_role}: \"{snippet}\"]"
+            formatted_lines.append(f"{role}{att_desc}{reply_desc}: {content}")
 
         return "CONVERSATION HISTORY (Previous turns in this chat):\n" + "\n".join(formatted_lines) + "\n\n"
 
@@ -55,7 +89,8 @@ class LLMService:
         self,
         query: str,
         context_chunks: List[Dict[str, Any]],
-        chat_history: Optional[List[Dict[str, str]]] = None
+        chat_history: Optional[List[Dict[str, str]]] = None,
+        reply_to: Optional[Any] = None
     ) -> AsyncGenerator[str, None]:
         """
         Construct grounded system prompt with multi-turn conversation history and stream concise tokens back.
@@ -75,10 +110,12 @@ class LLMService:
         )
 
         history_block = self._format_chat_history(chat_history)
+        reply_block = self._format_reply_reference_block(reply_to)
         user_prompt = (
             f"CONTEXT EXCERPTS FROM UPLOADED DOCUMENT(S):\n"
             f"{context_text}\n\n"
             f"{history_block}"
+            f"{reply_block}"
             f"CURRENT USER QUESTION: {query}\n\n"
             f"Provide a crisp, direct, and concise answer based strictly on the context above. Do not attach citations or references at the end."
         )
@@ -128,10 +165,11 @@ class LLMService:
     async def stream_conversational_answer(
         self,
         query: str,
-        chat_history: Optional[List[Dict[str, str]]] = None
+        chat_history: Optional[List[Dict[str, str]]] = None,
+        reply_to: Optional[Any] = None
     ) -> AsyncGenerator[str, None]:
         """
-        Stream a conversational response maintaining full multi-turn chat memory.
+        Stream a conversational response maintaining full multi-turn chat memory and reply context.
         """
         system_instruction = (
             "You are Contexify AI, a friendly, intelligent, and helpful conversational AI assistant. "
@@ -143,8 +181,10 @@ class LLMService:
         )
 
         history_block = self._format_chat_history(chat_history)
+        reply_block = self._format_reply_reference_block(reply_to)
         user_prompt = (
             f"{history_block}"
+            f"{reply_block}"
             f"CURRENT USER MESSAGE: {query}"
         )
 
@@ -203,7 +243,8 @@ class LLMService:
         self,
         query: str,
         search_results: List[Dict[str, Any]],
-        chat_history: Optional[List[Dict[str, str]]] = None
+        chat_history: Optional[List[Dict[str, str]]] = None,
+        reply_to: Optional[Any] = None
     ) -> AsyncGenerator[str, None]:
         """
         Synthesize a crisp, direct answer using Gemini LLM over real-time web search results and chat history without attaching reference lists.
@@ -223,10 +264,12 @@ class LLMService:
         )
 
         history_block = self._format_chat_history(chat_history)
+        reply_block = self._format_reply_reference_block(reply_to)
         user_prompt = (
             f"REAL-TIME WEB SEARCH CONTEXT:\n"
             f"{formatted_context}\n\n"
             f"{history_block}"
+            f"{reply_block}"
             f"CURRENT USER QUERY: {query}\n\n"
             f"Answer the user's question directly, informatively, and concisely using the search context above. If the context contains specific stories or news developments, present the actual events clearly in structured bullet points on this turn. Do not append citation lists or reference links at the end."
         )
@@ -277,7 +320,8 @@ class LLMService:
         self,
         query: str,
         attachments: List[Any],
-        chat_history: Optional[List[Dict[str, str]]] = None
+        chat_history: Optional[List[Dict[str, str]]] = None,
+        reply_to: Optional[Any] = None
     ) -> AsyncGenerator[str, None]:
         """
         Stream an answer using Gemini Vision / Multimodal capabilities over attached images and documents.
@@ -295,7 +339,8 @@ class LLMService:
         )
 
         history_block = self._format_chat_history(chat_history)
-        text_prompt = f"{history_block}USER INQUIRY: {query if query else 'Please analyze the attached image/document in detail.'}"
+        reply_block = self._format_reply_reference_block(reply_to)
+        text_prompt = f"{history_block}{reply_block}USER INQUIRY: {query if query else 'Please analyze the attached image/document in detail.'}"
 
         contents: List[Any] = []
         

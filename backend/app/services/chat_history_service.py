@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any, Tuple
 from app.core.config import settings
 from app.db.database import get_db_connection
-from app.schemas.chat import ChatMode, Citation, MediaAttachment
+from app.schemas.chat import ChatMode, Citation, MediaAttachment, MessageReplyReference
 from app.schemas.document import DocumentMetadata
 from app.schemas.session import ChatSessionResponse, MessageResponse, SessionHistoryResponse
 from app.core.logging import logger
@@ -193,7 +193,8 @@ class ChatHistoryService:
         role: str,
         content: str,
         citations: Optional[List[Dict[str, Any]]] = None,
-        attachments: Optional[List[Any]] = None
+        attachments: Optional[List[Any]] = None,
+        reply_to: Optional[Any] = None
     ) -> MessageResponse:
         message_id = str(uuid.uuid4())
         now = datetime.utcnow().isoformat()
@@ -216,16 +217,33 @@ class ChatHistoryService:
                 logger.error(f"Error serializing attachments for session {session_id}: {e}")
                 attachments_json = "[]"
 
+        # Serialize reply_to to JSON
+        reply_to_json = None
+        reply_to_obj = None
+        if reply_to:
+            try:
+                if hasattr(reply_to, "model_dump"):
+                    dumped_r = reply_to.model_dump()
+                elif isinstance(reply_to, dict):
+                    dumped_r = reply_to
+                else:
+                    dumped_r = dict(reply_to)
+                reply_to_json = json.dumps(dumped_r)
+                reply_to_obj = MessageReplyReference(**dumped_r)
+            except Exception as e:
+                logger.error(f"Error serializing reply_to for session {session_id}: {e}")
+                reply_to_json = None
+
         # Only persist to SQLite if the session is registered in the database (logged-in user)
         if self.get_session(session_id) is not None:
             with get_db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
                     """
-                    INSERT INTO messages (id, session_id, role, content, citations_json, attachments_json, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO messages (id, session_id, role, content, citations_json, attachments_json, reply_to_json, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (message_id, session_id, role, content, citations_json, attachments_json, now)
+                    (message_id, session_id, role, content, citations_json, attachments_json, reply_to_json, now)
                 )
                 cursor.execute(
                     "UPDATE chat_sessions SET updated_at = ? WHERE id = ?",
@@ -243,6 +261,7 @@ class ChatHistoryService:
             content=content,
             citations=citations_obj,
             attachments=attachments_obj,
+            reply_to=reply_to_obj,
             created_at=now
         )
 
@@ -251,7 +270,7 @@ class ChatHistoryService:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT id, session_id, role, content, citations_json, attachments_json, created_at
+                SELECT id, session_id, role, content, citations_json, attachments_json, reply_to_json, created_at
                 FROM messages
                 WHERE session_id = ?
                 ORDER BY created_at ASC
@@ -271,7 +290,6 @@ class ChatHistoryService:
                         logger.error(f"Error parsing citations for message {row['id']}: {e}")
 
                 attachments = None
-                # Check if attachments_json column exists and has content
                 row_keys = row.keys() if hasattr(row, "keys") else []
                 if "attachments_json" in row_keys and row["attachments_json"]:
                     try:
@@ -281,6 +299,15 @@ class ChatHistoryService:
                     except Exception as e:
                         logger.error(f"Error parsing attachments for message {row['id']}: {e}")
                 
+                reply_to = None
+                if "reply_to_json" in row_keys and row["reply_to_json"]:
+                    try:
+                        raw_r = json.loads(row["reply_to_json"])
+                        if raw_r:
+                            reply_to = MessageReplyReference(**raw_r)
+                    except Exception as e:
+                        logger.error(f"Error parsing reply_to for message {row['id']}: {e}")
+
                 messages.append(MessageResponse(
                     id=row["id"],
                     session_id=row["session_id"],
@@ -288,6 +315,7 @@ class ChatHistoryService:
                     content=row["content"],
                     citations=citations,
                     attachments=attachments,
+                    reply_to=reply_to,
                     created_at=row["created_at"]
                 ))
             return messages

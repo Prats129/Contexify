@@ -8,8 +8,13 @@ import {
   LuMaximize2,
   LuSparkles,
   LuX,
+  LuCornerUpLeft,
 } from "react-icons/lu";
-import type { Citation, MediaAttachment } from "../../types";
+import type {
+  Citation,
+  MediaAttachment,
+  MessageReplyReference,
+} from "../../types";
 
 interface MessageItemProps {
   id?: string;
@@ -17,6 +22,7 @@ interface MessageItemProps {
   content: string;
   citations?: Citation[] | null;
   attachments?: MediaAttachment[] | null;
+  reply_to?: MessageReplyReference | null;
   isStreaming?: boolean;
   isError?: boolean;
   userAvatarUrl?: string | null;
@@ -27,6 +33,11 @@ interface MessageItemProps {
   isHighlighted?: boolean;
   onToggleSources?: (citations: Citation[]) => void;
   onUseAsReference?: (media: MediaAttachment) => void;
+  onReply?: (message: {
+    id?: string;
+    role: "user" | "assistant";
+    content: string;
+  }) => void;
 }
 
 export const MessageItem: React.FC<MessageItemProps> = React.memo(
@@ -36,12 +47,14 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(
     content,
     citations,
     attachments,
+    reply_to,
     isStreaming,
     isError,
     isSourcesActive,
     isHighlighted,
     onToggleSources,
     onUseAsReference,
+    onReply,
   }) => {
     const isUser = role === "user";
     const [copied, setCopied] = useState(false);
@@ -415,6 +428,34 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(
                   }`
             }`}
           >
+            {/* Quoted Reply Reference */}
+            {reply_to && (
+              <div
+                className={`mb-2 px-2.5 py-1.5 rounded-lg border-l-3 text-xs leading-snug ${
+                  isUser
+                    ? "bg-white/15 border-l-white/80 text-white"
+                    : "bg-(--bg-input) border-l-primary-theme text-(--text-main)"
+                }`}
+              >
+                <div className="flex items-center gap-1 font-semibold text-[11px] mb-0.5">
+                  <LuCornerUpLeft
+                    size={11}
+                    className={isUser ? "text-white" : "text-primary-theme"}
+                  />
+                  <span
+                    className={isUser ? "text-white" : "text-primary-theme"}
+                  >
+                    {reply_to.role === "user" ? "You" : "Contexify AI"}
+                  </span>
+                </div>
+                <p
+                  className={`line-clamp-2 text-[11.5px] ${isUser ? "text-white/85" : "text-(--text-muted)"}`}
+                >
+                  {reply_to.content}
+                </p>
+              </div>
+            )}
+
             {isError ? (
               <span className="text-red-500 flex items-center gap-1.5">
                 <LuTriangleAlert size={16} /> {content}
@@ -445,7 +486,7 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(
                 isUser ? "justify-end" : "justify-between"
               } w-full mt-1 px-1`}
             >
-              {/* Actions: Copy button */}
+              {/* Actions: Reply & Copy buttons */}
               <div
                 className={`flex items-center gap-1 transition-opacity duration-150 ${
                   copied || hasSelection
@@ -453,6 +494,18 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(
                     : "opacity-80 sm:opacity-0 sm:group-hover:opacity-100"
                 }`}
               >
+                {/* Reply button */}
+                {onReply && (
+                  <button
+                    type="button"
+                    onClick={() => onReply({ id, role, content })}
+                    className="flex items-center gap-1 text-[11px] text-(--text-muted) hover:text-(--text-main) hover:bg-(--border-subtle) px-1.5 py-0.5 rounded cursor-pointer transition-colors"
+                    title="Reply to message"
+                  >
+                    <LuCornerUpLeft size={12} />
+                    <span className="hidden sm:inline">Reply</span>
+                  </button>
+                )}
                 <button
                   type="button"
                   onMouseDown={(e) => {

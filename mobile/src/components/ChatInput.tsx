@@ -15,7 +15,12 @@ import { Feather, Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import * as DocumentPicker from "expo-document-picker";
 import { getAppTheme, type AppTheme } from "../theme/colors";
-import type { DocumentMetadata, ChatMode, MediaAttachment } from "../types";
+import type {
+  DocumentMetadata,
+  ChatMode,
+  MediaAttachment,
+  MessageReplyReference,
+} from "../types";
 import { Image } from "react-native";
 
 interface ChatInputProps {
@@ -34,6 +39,8 @@ interface ChatInputProps {
   onToggleMode?: () => void;
   isDark?: boolean;
   theme?: AppTheme;
+  replyingTo?: MessageReplyReference | null;
+  onCancelReply?: () => void;
 }
 
 export const ChatInput: React.FC<ChatInputProps> = ({
@@ -52,6 +59,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   onToggleMode,
   isDark = true,
   theme: customTheme,
+  replyingTo,
+  onCancelReply,
 }) => {
   const theme = customTheme || getAppTheme(isDark);
   const isAuto = currentMode === "AUTO";
@@ -369,6 +378,52 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         </ScrollView>
       )}
 
+      {/* Docked Reply Context Preview */}
+      {replyingTo && (
+        <View
+          style={[
+            styles.replyPreviewBar,
+            {
+              backgroundColor: theme.bgCard,
+              borderLeftColor: theme.primary,
+            },
+          ]}
+        >
+          <View style={styles.replyPreviewContent}>
+            <View style={styles.replyHeaderRow}>
+              <Feather
+                name="corner-up-left"
+                size={12}
+                color={theme.primary}
+                style={{ marginRight: 5 }}
+              />
+              <Text
+                style={[styles.replyHeaderTitle, { color: theme.primary }]}
+                numberOfLines={1}
+              >
+                Replying to{" "}
+                {replyingTo.role === "user" ? "yourself" : "Contexify AI"}
+              </Text>
+            </View>
+            <Text
+              style={[styles.replyPreviewSnippet, { color: theme.textMuted }]}
+              numberOfLines={1}
+              ellipsizeMode="tail"
+            >
+              {replyingTo.content.replace(/\s+/g, " ").trim()}
+            </Text>
+          </View>
+          <TouchableOpacity
+            style={styles.replyCloseBtn}
+            onPress={onCancelReply}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            accessibilityLabel="Cancel reply"
+          >
+            <Ionicons name="close-circle" size={18} color={theme.textMuted} />
+          </TouchableOpacity>
+        </View>
+      )}
+
       {/* Main Input Container (Pill when closed, Card when open) */}
       <View
         style={[
@@ -559,5 +614,38 @@ const styles = StyleSheet.create({
     height: 12,
     backgroundColor: "#ffffff",
     borderRadius: 2,
+  },
+  replyPreviewBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    borderLeftWidth: 3.5,
+    borderRadius: 12,
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+    marginBottom: 8,
+    marginHorizontal: 4,
+  },
+  replyPreviewContent: {
+    flex: 1,
+    marginRight: 8,
+  },
+  replyHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 2,
+  },
+  replyHeaderTitle: {
+    fontSize: 11.5,
+    fontWeight: "700",
+  },
+  replyPreviewSnippet: {
+    fontSize: 12.5,
+    lineHeight: 16,
+  },
+  replyCloseBtn: {
+    padding: 2,
+    justifyContent: "center",
+    alignItems: "center",
   },
 });

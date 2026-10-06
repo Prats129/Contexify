@@ -38,6 +38,11 @@ interface MessageListProps {
   isTemporaryChat?: boolean;
   onToggleTemporaryChat?: () => void;
   onUseAsReference?: (media: MediaAttachment) => void;
+  onReply?: (msg: {
+    id?: string;
+    role: "user" | "assistant";
+    content: string;
+  }) => void;
 }
 
 export const MessageList: React.FC<MessageListProps> = ({
@@ -51,6 +56,7 @@ export const MessageList: React.FC<MessageListProps> = ({
   isTemporaryChat = false,
   onToggleTemporaryChat,
   onUseAsReference,
+  onReply,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollEndRef = useRef<HTMLDivElement>(null);
@@ -326,6 +332,7 @@ export const MessageList: React.FC<MessageListProps> = ({
                 id={`msg-${msg.id}`}
                 role={msg.role}
                 content={msg.content}
+                reply_to={msg.reply_to}
                 citations={msg.citations}
                 attachments={msg.attachments}
                 isHighlighted={highlightedMessageId === msg.id}
@@ -347,6 +354,7 @@ export const MessageList: React.FC<MessageListProps> = ({
                     : undefined
                 }
                 onUseAsReference={onUseAsReference}
+                onReply={onReply}
               />
             );
           })}

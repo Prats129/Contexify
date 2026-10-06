@@ -17,8 +17,14 @@ import {
   LuX,
   LuDatabase,
   LuSlidersHorizontal,
+  LuCornerUpLeft,
 } from "react-icons/lu";
-import type { ChatMode, DocumentMetadata, MediaAttachment } from "../../types";
+import type {
+  ChatMode,
+  DocumentMetadata,
+  MediaAttachment,
+  MessageReplyReference,
+} from "../../types";
 
 interface ChatInputProps {
   inputQuery: string;
@@ -35,6 +41,8 @@ interface ChatInputProps {
   onDeleteDocument?: (documentId: string) => void;
   attachedMedia?: MediaAttachment[];
   onDeleteMedia?: (index: number) => void;
+  replyingTo?: MessageReplyReference | null;
+  onCancelReply?: () => void;
 }
 
 export const ChatInput: React.FC<ChatInputProps> = ({
@@ -52,6 +60,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   onDeleteDocument,
   attachedMedia = [],
   onDeleteMedia,
+  replyingTo,
+  onCancelReply,
 }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -287,6 +297,33 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
   return (
     <div className="p-2 sm:p-4 max-w-4xl w-full mx-auto shrink-0 flex flex-col gap-1.5 sm:gap-2">
+      {/* Docked Reply Context Preview */}
+      {replyingTo && (
+        <div className="flex items-center justify-between px-3.5 py-2 bg-(--bg-card) border border-(--border-subtle) border-l-4 border-l-primary-theme rounded-xl text-xs shadow-xs transition-all animate-in fade-in slide-in-from-bottom-1 duration-150">
+          <div className="flex flex-col min-w-0 mr-3">
+            <div className="flex items-center gap-1.5 font-semibold text-primary-theme">
+              <LuCornerUpLeft size={13} className="shrink-0" />
+              <span>
+                Replying to{" "}
+                {replyingTo.role === "user" ? "yourself" : "Contexify AI"}
+              </span>
+            </div>
+            <p className="text-(--text-muted) truncate mt-0.5 text-[11.5px] max-w-2xl">
+              {replyingTo.content.replace(/\s+/g, " ").trim()}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onCancelReply}
+            className="text-(--text-muted) hover:text-(--text-main) p-1 rounded-full hover:bg-(--border-subtle) transition-colors cursor-pointer shrink-0"
+            title="Cancel reply"
+            aria-label="Cancel reply"
+          >
+            <LuX size={15} />
+          </button>
+        </div>
+      )}
+
       <form onSubmit={onSubmit} className="w-full">
         <div
           className={`bg-(--bg-input) border border-(--border-subtle) hover:border-(--border-hover) shadow-lg transition-[border-radius] duration-150 ease-out grid ${

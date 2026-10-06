@@ -13,6 +13,7 @@ import type {
   SessionListParams,
   PaginatedAssetsResponse,
   AssetQueryParams,
+  MessageReplyReference,
 } from '../types';
 
 const BACKEND_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
@@ -515,7 +516,8 @@ export const apiService = {
     handlers: StreamHandlers,
     signal?: AbortSignal,
     attachments?: MediaAttachment[],
-    userId?: string | null
+    userId?: string | null,
+    reply_to?: MessageReplyReference | null
   ): Promise<void> {
     const { onCitations, onMedia, onToken, onError, onDone } = handlers;
 
@@ -528,6 +530,7 @@ export const apiService = {
           user_id: userId || undefined,
           message,
           mode,
+          reply_to: reply_to || undefined,
           attachments: attachments || [],
         }),
         signal,

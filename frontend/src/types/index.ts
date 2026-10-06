@@ -124,11 +124,19 @@ export interface Citation {
   similarity_score: number;
 }
 
+export interface MessageReplyReference {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  sender_name?: string | null;
+}
+
 export interface Message {
   id: string;
   session_id: string;
   role: 'user' | 'assistant';
   content: string;
+  reply_to?: MessageReplyReference | null;
   citations?: Citation[] | null;
   attachments?: MediaAttachment[] | null;
   created_at: string;

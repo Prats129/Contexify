@@ -12,6 +12,7 @@ import type {
   User,
   Citation,
   MediaAttachment,
+  MessageReplyReference,
 } from "../../types";
 
 interface ChatWorkspaceProps {
@@ -40,6 +41,13 @@ interface ChatWorkspaceProps {
   isTemporaryChat?: boolean;
   onToggleTemporaryChat?: () => void;
   onOpenAttachmentsModal?: () => void;
+  replyingTo?: MessageReplyReference | null;
+  onCancelReply?: () => void;
+  onReply?: (msg: {
+    id?: string;
+    role: "user" | "assistant";
+    content: string;
+  }) => void;
 }
 
 export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
@@ -68,6 +76,9 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
   isTemporaryChat = false,
   onToggleTemporaryChat,
   onOpenAttachmentsModal,
+  replyingTo,
+  onCancelReply,
+  onReply,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [activeSources, setActiveSources] = useState<{
@@ -242,6 +253,7 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
             isTemporaryChat={isTemporaryChat}
             onToggleTemporaryChat={onToggleTemporaryChat}
             onUseAsReference={onUseAsReference}
+            onReply={onReply}
           />
 
           <div className="w-full shrink-0 px-2 sm:px-6 pb-3.5 sm:pb-4 pb-safe">
@@ -263,6 +275,8 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
                 onDeleteDocument={onDeleteDocument}
                 attachedMedia={attachedMedia}
                 onDeleteMedia={onDeleteMedia}
+                replyingTo={replyingTo}
+                onCancelReply={onCancelReply}
               />
             </div>
           </div>
