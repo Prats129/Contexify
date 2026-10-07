@@ -120,6 +120,10 @@ export default function App() {
 
   const flatListRef = useRef<FlatList<Message>>(null);
   const isAtBottomRef = useRef(true);
+  const [highlightedMessageId, setHighlightedMessageId] = useState<
+    string | null
+  >(null);
+  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleScroll = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -291,6 +295,7 @@ export default function App() {
     setStreamingMessage(null);
     setAttachedMedia([]);
     setReplyingTo(null);
+    setHighlightedMessageId(null);
     isAtBottomRef.current = true;
     if (sessionMode) setCurrentMode(sessionMode);
 
@@ -313,6 +318,7 @@ export default function App() {
     setDocuments([]);
     setAttachedMedia([]);
     setReplyingTo(null);
+    setHighlightedMessageId(null);
     setStreamingMessage(null);
     setQuery("");
   };
@@ -335,21 +341,69 @@ export default function App() {
     setDocuments([]);
     setAttachedMedia([]);
     setReplyingTo(null);
+    setHighlightedMessageId(null);
     setStreamingMessage(null);
     setQuery("");
   };
 
-  const handleReplyMessage = (msg: {
-    id?: string;
-    role: "user" | "assistant";
-    content: string;
-  }) => {
-    setReplyingTo({
-      id: msg.id || `msg_${Date.now()}`,
-      role: msg.role,
-      content: msg.content,
-    });
-  };
+  const handleReplyMessage = useCallback(
+    (msg: { id?: string; role: "user" | "assistant"; content: string }) => {
+      setReplyingTo({
+        id: msg.id || `msg_${Date.now()}`,
+        role: msg.role,
+        content: msg.content,
+      });
+    },
+    [],
+  );
+
+  useEffect(() => {
+    return () => {
+      if (highlightTimerRef.current) {
+        clearTimeout(highlightTimerRef.current);
+      }
+    };
+  }, []);
+
+  const handleJumpToMessage = useCallback(
+    (targetMessageId: string) => {
+      if (!targetMessageId) return;
+      const cleanTargetId = targetMessageId.replace(/^msg[-_]/, "");
+      const index = messages.findIndex(
+        (m) =>
+          m.id === targetMessageId ||
+          m.id === cleanTargetId ||
+          m.id.replace(/^msg[-_]/, "") === cleanTargetId,
+      );
+
+      if (index >= 0 && flatListRef.current) {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        isAtBottomRef.current = false;
+        try {
+          flatListRef.current.scrollToIndex({
+            index,
+            animated: true,
+            viewPosition: 0.5,
+          });
+        } catch {
+          flatListRef.current.scrollToOffset({
+            offset: Math.max(0, index * 95),
+            animated: true,
+          });
+        }
+
+        const foundId = messages[index].id;
+        if (highlightTimerRef.current) {
+          clearTimeout(highlightTimerRef.current);
+        }
+        setHighlightedMessageId(foundId);
+        highlightTimerRef.current = setTimeout(() => {
+          setHighlightedMessageId(null);
+        }, 1800);
+      }
+    },
+    [messages],
+  );
 
   // --- 4. Delete Session ---
   const handleDeleteSession = async (sessionId: string) => {
@@ -714,17 +768,17 @@ export default function App() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
   };
 
-  const handleUseAsReference = (media: MediaAttachment) => {
+  const handleUseAsReference = useCallback((media: MediaAttachment) => {
     setAttachedMedia([media]);
     setCurrentMode("IMAGE_GENERATION");
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-  };
+  }, []);
 
   // --- 8. Citations Sheet ---
-  const handleOpenCitations = (citations: Citation[]) => {
+  const handleOpenCitations = useCallback((citations: Citation[]) => {
     setActiveCitations(citations);
     setCitationsVisible(true);
-  };
+  }, []);
 
   // --- 9. Attachments & Media Handlers ---
   const activeSessionTitle = useMemo(() => {
@@ -792,6 +846,37 @@ export default function App() {
     setHasMoreSessions(false);
     handleNewChat(null);
   };
+
+  const keyExtractor = useCallback((item: Message) => item.id, []);
+
+  const renderMessageItem = useCallback(
+    ({ item }: { item: Message }) => (
+      <MessageItem
+        id={item.id}
+        role={item.role}
+        content={item.content}
+        citations={item.citations}
+        attachments={item.attachments}
+        reply_to={item.reply_to}
+        isHighlighted={highlightedMessageId === item.id}
+        onOpenCitations={handleOpenCitations}
+        onUseAsReference={handleUseAsReference}
+        onReply={handleReplyMessage}
+        onJumpToMessage={handleJumpToMessage}
+        isDark={isDark}
+        theme={theme}
+      />
+    ),
+    [
+      highlightedMessageId,
+      handleOpenCitations,
+      handleUseAsReference,
+      handleReplyMessage,
+      handleJumpToMessage,
+      isDark,
+      theme,
+    ],
+  );
 
   return (
     <SafeAreaProvider>
@@ -1132,7 +1217,7 @@ export default function App() {
             <FlatList
               ref={flatListRef}
               data={messages}
-              keyExtractor={(item) => item.id}
+              keyExtractor={keyExtractor}
               contentContainerStyle={styles.messageListContent}
               keyboardDismissMode={
                 Platform.OS === "ios" ? "interactive" : "none"
@@ -1140,27 +1225,19 @@ export default function App() {
               keyboardShouldPersistTaps="handled"
               onScroll={handleScroll}
               scrollEventThrottle={16}
+              onScrollToIndexFailed={(info) => {
+                flatListRef.current?.scrollToOffset({
+                  offset: Math.max(0, info.averageItemLength * info.index),
+                  animated: true,
+                });
+              }}
               onContentSizeChange={() => {
                 if (isAtBottomRef.current) {
                   flatListRef.current?.scrollToEnd({ animated: true });
                 }
               }}
               showsVerticalScrollIndicator={false}
-              renderItem={({ item }) => (
-                <MessageItem
-                  id={item.id}
-                  role={item.role}
-                  content={item.content}
-                  citations={item.citations}
-                  attachments={item.attachments}
-                  reply_to={item.reply_to}
-                  onOpenCitations={handleOpenCitations}
-                  onUseAsReference={handleUseAsReference}
-                  onReply={handleReplyMessage}
-                  isDark={isDark}
-                  theme={theme}
-                />
-              )}
+              renderItem={renderMessageItem}
               ListFooterComponent={
                 streamingMessage ? (
                   <MessageItem
@@ -1198,6 +1275,11 @@ export default function App() {
             theme={theme}
             replyingTo={replyingTo}
             onCancelReply={() => setReplyingTo(null)}
+            onJumpToReply={
+              replyingTo?.id
+                ? () => handleJumpToMessage(replyingTo.id)
+                : undefined
+            }
           />
         </KeyboardAvoidingView>
 

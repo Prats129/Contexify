@@ -43,6 +43,8 @@ interface MessageListProps {
     role: "user" | "assistant";
     content: string;
   }) => void;
+  highlightedMessageId?: string | null;
+  onJumpToMessage?: (messageId: string) => void;
 }
 
 export const MessageList: React.FC<MessageListProps> = ({
@@ -57,6 +59,8 @@ export const MessageList: React.FC<MessageListProps> = ({
   onToggleTemporaryChat,
   onUseAsReference,
   onReply,
+  highlightedMessageId: externalHighlightedId,
+  onJumpToMessage,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollEndRef = useRef<HTMLDivElement>(null);
@@ -64,9 +68,13 @@ export const MessageList: React.FC<MessageListProps> = ({
   const prevMsgCountRef = useRef(messages.length);
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [activePromptId, setActivePromptId] = useState<string | null>(null);
-  const [highlightedMessageId, setHighlightedMessageId] = useState<
+  const [internalHighlightedId, setInternalHighlightedId] = useState<
     string | null
   >(null);
+  const activeHighlightedId =
+    externalHighlightedId !== undefined
+      ? externalHighlightedId
+      : internalHighlightedId;
   const highlightTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Extract all user prompt items for the timeline navigation
@@ -129,25 +137,44 @@ export const MessageList: React.FC<MessageListProps> = ({
     setShowScrollButton(false);
   }, []);
 
-  // Jump to specific user prompt with smooth scroll and momentary highlight glow
-  const scrollToPrompt = useCallback((promptId: string) => {
-    const el = document.getElementById(`msg-${promptId}`);
-    if (el) {
-      el.scrollIntoView({
-        behavior: "smooth",
-        block: "start",
-      });
-      setActivePromptId(promptId);
-
-      if (highlightTimerRef.current) {
-        clearTimeout(highlightTimerRef.current);
+  // Jump to specific message with smooth scroll and momentary highlight glow
+  const scrollToTargetMessage = useCallback(
+    (targetId: string) => {
+      if (onJumpToMessage) {
+        onJumpToMessage(targetId);
+        return;
       }
-      setHighlightedMessageId(promptId);
-      highlightTimerRef.current = setTimeout(() => {
-        setHighlightedMessageId(null);
-      }, 1600);
-    }
-  }, []);
+      if (!targetId) return;
+      const cleanId = targetId.startsWith("msg-")
+        ? targetId.slice(4)
+        : targetId;
+      const el =
+        document.getElementById(`msg-${cleanId}`) ||
+        document.getElementById(cleanId);
+      if (el) {
+        el.scrollIntoView({
+          behavior: "smooth",
+          block: "center",
+        });
+        if (highlightTimerRef.current) {
+          clearTimeout(highlightTimerRef.current);
+        }
+        setInternalHighlightedId(cleanId);
+        highlightTimerRef.current = setTimeout(() => {
+          setInternalHighlightedId(null);
+        }, 1800);
+      }
+    },
+    [onJumpToMessage],
+  );
+
+  const scrollToPrompt = useCallback(
+    (promptId: string) => {
+      scrollToTargetMessage(promptId);
+      setActivePromptId(promptId);
+    },
+    [scrollToTargetMessage],
+  );
 
   const activeIndex = useMemo(() => {
     return userPrompts.findIndex((p) => p.id === activePromptId);
@@ -335,7 +362,7 @@ export const MessageList: React.FC<MessageListProps> = ({
                 reply_to={msg.reply_to}
                 citations={msg.citations}
                 attachments={msg.attachments}
-                isHighlighted={highlightedMessageId === msg.id}
+                isHighlighted={activeHighlightedId === msg.id}
                 userAvatarUrl={currentUser?.avatar_url}
                 userAvatarColor={currentUser?.avatar_color}
                 userDisplayName={
@@ -355,6 +382,7 @@ export const MessageList: React.FC<MessageListProps> = ({
                 }
                 onUseAsReference={onUseAsReference}
                 onReply={onReply}
+                onJumpToMessage={scrollToTargetMessage}
               />
             );
           })}

@@ -41,6 +41,7 @@ interface ChatInputProps {
   theme?: AppTheme;
   replyingTo?: MessageReplyReference | null;
   onCancelReply?: () => void;
+  onJumpToReply?: () => void;
 }
 
 export const ChatInput: React.FC<ChatInputProps> = ({
@@ -61,6 +62,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   theme: customTheme,
   replyingTo,
   onCancelReply,
+  onJumpToReply,
 }) => {
   const theme = customTheme || getAppTheme(isDark);
   const isAuto = currentMode === "AUTO";
@@ -378,22 +380,31 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         </ScrollView>
       )}
 
-      {/* Docked Reply Context Preview */}
+      {/* Docked Reply Context Preview (WhatsApp style) */}
       {replyingTo && (
         <View
           style={[
             styles.replyPreviewBar,
             {
               backgroundColor: theme.bgCard,
-              borderLeftColor: theme.primary,
+              borderColor: theme.borderSubtle,
             },
           ]}
         >
-          <View style={styles.replyPreviewContent}>
+          {/* Vertical Accent Pill Indicator */}
+          <View
+            style={[styles.replyAccentLine, { backgroundColor: theme.primary }]}
+          />
+
+          <TouchableOpacity
+            style={styles.replyPreviewContent}
+            onPress={onJumpToReply}
+            activeOpacity={0.75}
+          >
             <View style={styles.replyHeaderRow}>
               <Feather
                 name="corner-up-left"
-                size={12}
+                size={11.5}
                 color={theme.primary}
                 style={{ marginRight: 5 }}
               />
@@ -412,14 +423,18 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             >
               {replyingTo.content.replace(/\s+/g, " ").trim()}
             </Text>
-          </View>
+          </TouchableOpacity>
+
           <TouchableOpacity
-            style={styles.replyCloseBtn}
+            style={[
+              styles.replyCloseBtn,
+              { backgroundColor: theme.borderSubtle },
+            ]}
             onPress={onCancelReply}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
             accessibilityLabel="Cancel reply"
           >
-            <Ionicons name="close-circle" size={18} color={theme.textMuted} />
+            <Feather name="x" size={13} color={theme.textMuted} />
           </TouchableOpacity>
         </View>
       )}
@@ -618,17 +633,29 @@ const styles = StyleSheet.create({
   replyPreviewBar: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    borderLeftWidth: 3.5,
-    borderRadius: 12,
-    paddingVertical: 7,
-    paddingHorizontal: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
     marginBottom: 8,
     marginHorizontal: 4,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 3,
+    elevation: 2,
+    overflow: "hidden",
+  },
+  replyAccentLine: {
+    width: 3.5,
+    height: "100%",
+    borderRadius: 2,
+    marginRight: 9,
   },
   replyPreviewContent: {
     flex: 1,
     marginRight: 8,
+    justifyContent: "center",
   },
   replyHeaderRow: {
     flexDirection: "row",
@@ -636,15 +663,18 @@ const styles = StyleSheet.create({
     marginBottom: 2,
   },
   replyHeaderTitle: {
-    fontSize: 11.5,
+    fontSize: 12,
     fontWeight: "700",
+    letterSpacing: 0.2,
   },
   replyPreviewSnippet: {
     fontSize: 12.5,
     lineHeight: 16,
   },
   replyCloseBtn: {
-    padding: 2,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
     justifyContent: "center",
     alignItems: "center",
   },

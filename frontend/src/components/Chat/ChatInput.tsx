@@ -43,6 +43,7 @@ interface ChatInputProps {
   onDeleteMedia?: (index: number) => void;
   replyingTo?: MessageReplyReference | null;
   onCancelReply?: () => void;
+  onJumpToReply?: () => void;
 }
 
 export const ChatInput: React.FC<ChatInputProps> = ({
@@ -62,6 +63,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   onDeleteMedia,
   replyingTo,
   onCancelReply,
+  onJumpToReply,
 }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -300,7 +302,23 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       {/* Docked Reply Context Preview */}
       {replyingTo && (
         <div className="flex items-center justify-between px-3.5 py-2 bg-(--bg-card) border border-(--border-subtle) border-l-4 border-l-primary-theme rounded-xl text-xs shadow-xs transition-all animate-in fade-in slide-in-from-bottom-1 duration-150">
-          <div className="flex flex-col min-w-0 mr-3">
+          <div
+            role={onJumpToReply ? "button" : undefined}
+            tabIndex={onJumpToReply ? 0 : undefined}
+            onClick={onJumpToReply}
+            onKeyDown={(e) => {
+              if ((e.key === "Enter" || e.key === " ") && onJumpToReply) {
+                e.preventDefault();
+                onJumpToReply();
+              }
+            }}
+            className={`flex flex-col min-w-0 mr-3 flex-1 text-left ${
+              onJumpToReply
+                ? "cursor-pointer hover:opacity-85 select-none transition-opacity"
+                : ""
+            }`}
+            title={onJumpToReply ? "Jump to original message" : undefined}
+          >
             <div className="flex items-center gap-1.5 font-semibold text-primary-theme">
               <LuCornerUpLeft size={13} className="shrink-0" />
               <span>

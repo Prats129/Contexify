@@ -38,6 +38,7 @@ interface MessageItemProps {
     role: "user" | "assistant";
     content: string;
   }) => void;
+  onJumpToMessage?: (messageId: string) => void;
 }
 
 export const MessageItem: React.FC<MessageItemProps> = React.memo(
@@ -55,6 +56,7 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(
     onToggleSources,
     onUseAsReference,
     onReply,
+    onJumpToMessage,
   }) => {
     const isUser = role === "user";
     const [copied, setCopied] = useState(false);
@@ -431,11 +433,39 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(
             {/* Quoted Reply Reference */}
             {reply_to && (
               <div
-                className={`mb-2 px-2.5 py-1.5 rounded-lg border-l-3 text-xs leading-snug ${
+                role={reply_to.id && onJumpToMessage ? "button" : undefined}
+                tabIndex={reply_to.id && onJumpToMessage ? 0 : undefined}
+                onClick={(e) => {
+                  if (reply_to.id && onJumpToMessage) {
+                    e.stopPropagation();
+                    onJumpToMessage(reply_to.id);
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (
+                    (e.key === "Enter" || e.key === " ") &&
+                    reply_to.id &&
+                    onJumpToMessage
+                  ) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onJumpToMessage(reply_to.id);
+                  }
+                }}
+                className={`group/quote mb-2 px-2.5 py-1.5 rounded-lg border-l-3 text-xs leading-snug transition-all ${
+                  reply_to.id && onJumpToMessage
+                    ? "cursor-pointer select-none active:scale-[0.99]"
+                    : ""
+                } ${
                   isUser
-                    ? "bg-white/15 border-l-white/80 text-white"
-                    : "bg-(--bg-input) border-l-primary-theme text-(--text-main)"
+                    ? "bg-white/15 hover:bg-white/25 border-l-white/80 text-white"
+                    : "bg-(--bg-input) hover:bg-(--border-subtle) border-l-primary-theme text-(--text-main)"
                 }`}
+                title={
+                  reply_to.id && onJumpToMessage
+                    ? "Jump to original message"
+                    : undefined
+                }
               >
                 <div className="flex items-center gap-1 font-semibold text-[11px] mb-0.5">
                   <LuCornerUpLeft
