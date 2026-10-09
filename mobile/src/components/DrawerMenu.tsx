@@ -15,6 +15,7 @@ import {
   PanResponder,
   Platform,
   RefreshControl,
+  Dimensions,
   type NativeSyntheticEvent,
   type NativeScrollEvent,
 } from "react-native";
@@ -99,9 +100,16 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
   );
   const editInputRef = useRef<TextInput | null>(null);
 
+  // --- Ellipsis Options Dropdown Menu State ---
+  const [activeMenuSession, setActiveMenuSession] = useState<{
+    session: ChatSession;
+    pageY: number;
+  } | null>(null);
+
   const translateX = useRef(new Animated.Value(-340)).current;
 
   useEffect(() => {
+    setActiveMenuSession(null);
     if (visible) {
       translateX.setValue(-340);
       Animated.spring(translateX, {
@@ -114,6 +122,7 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
   }, [visible]);
 
   const handleClose = (callback?: () => void) => {
+    setActiveMenuSession(null);
     Animated.timing(translateX, {
       toValue: -340,
       duration: 160,
@@ -202,6 +211,7 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
 
   // --- Session Rename Handlers ---
   const handleStartRename = (session: ChatSession) => {
+    setActiveMenuSession(null);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setEditingSessionId(session.id);
     setEditTitle(session.title);
@@ -211,6 +221,7 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
   };
 
   const handleCancelRename = () => {
+    setActiveMenuSession(null);
     setEditingSessionId(null);
     setEditTitle("");
   };
@@ -254,32 +265,21 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
     }
   };
 
-  const handleSessionLongPress = (session: ChatSession) => {
+  const handleSessionLongPress = (session: ChatSession, event?: any) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    Alert.alert("Conversation Options", session.title, [
-      {
-        text: "Rename",
-        onPress: () => handleStartRename(session),
-      },
-      {
-        text: "Delete",
-        style: "destructive",
-        onPress: () => handleDeletePress(session.id, session.title),
-      },
-      {
-        text: "Cancel",
-        style: "cancel",
-      },
-    ]);
+    const pageY = event?.nativeEvent?.pageY || 200;
+    setActiveMenuSession({ session, pageY });
   };
 
   const handleSelect = (id: string) => {
+    setActiveMenuSession(null);
     Haptics.selectionAsync();
     onSelectSession(id);
     handleClose();
   };
 
   const handleDeletePress = (id: string, title: string) => {
+    setActiveMenuSession(null);
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
     Alert.alert(
       "Delete Conversation",
@@ -509,6 +509,7 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
               showsVerticalScrollIndicator={false}
               scrollEventThrottle={16}
               onScroll={handleScroll}
+              onScrollBeginDrag={() => setActiveMenuSession(null)}
               onMomentumScrollEnd={handleScroll}
               alwaysBounceVertical={hasMoreSessions}
               refreshControl={
@@ -654,9 +655,14 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
                             ? theme.primaryBorder
                             : "transparent",
                         },
+                        activeMenuSession?.session.id === s.id && {
+                          backgroundColor: theme.primaryLight,
+                          borderColor: theme.primaryBorder,
+                        },
                       ]}
                       onPress={() => handleSelect(s.id)}
-                      onLongPress={() => handleSessionLongPress(s)}
+                      onLongPress={(e) => handleSessionLongPress(s, e)}
+                      delayLongPress={350}
                       activeOpacity={0.7}
                     >
                       <Ionicons
@@ -676,32 +682,6 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
                       >
                         {s.title}
                       </Text>
-                      <View style={styles.sessionItemActions}>
-                        <TouchableOpacity
-                          onPress={() => handleStartRename(s)}
-                          hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
-                          style={styles.inlineActionBtn}
-                          accessibilityLabel="Rename conversation"
-                        >
-                          <Feather
-                            name="edit-2"
-                            size={12}
-                            color={isActive ? colors.primary : theme.textMuted}
-                          />
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          onPress={() => handleDeletePress(s.id, s.title)}
-                          hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
-                          style={styles.inlineActionBtn}
-                          accessibilityLabel="Delete conversation"
-                        >
-                          <Feather
-                            name="trash-2"
-                            size={12}
-                            color={theme.textMuted}
-                          />
-                        </TouchableOpacity>
-                      </View>
                     </TouchableOpacity>
                   );
                 })
@@ -868,6 +848,113 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
               />
             </TouchableOpacity>
           </View>
+
+          {/* Floating Context Popup Menu for Chat Item Options on Long Press */}
+          {activeMenuSession && (
+            <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+              <Pressable
+                style={styles.dropdownBackdrop}
+                onPress={() => setActiveMenuSession(null)}
+              />
+              <View
+                style={[
+                  styles.dropdownMenu,
+                  {
+                    backgroundColor: theme.bgCard,
+                    borderColor: theme.borderSubtle,
+                    top: Math.max(
+                      85,
+                      Math.min(
+                        activeMenuSession.pageY - 25,
+                        Dimensions.get("window").height - 180,
+                      ),
+                    ),
+                  },
+                ]}
+              >
+                {/* Context Header: Active Session Title */}
+                <View style={styles.dropdownHeader}>
+                  <Ionicons
+                    name={
+                      activeMenuSession.session.mode === "WEB_SEARCH"
+                        ? "globe-outline"
+                        : "document-text-outline"
+                    }
+                    size={12}
+                    color={colors.primary}
+                    style={{ marginRight: 6 }}
+                  />
+                  <Text
+                    style={[
+                      styles.dropdownHeaderTitle,
+                      { color: theme.textMuted },
+                    ]}
+                    numberOfLines={1}
+                  >
+                    {activeMenuSession.session.title}
+                  </Text>
+                </View>
+
+                <View
+                  style={[
+                    styles.dropdownDivider,
+                    { backgroundColor: theme.borderSubtle },
+                  ]}
+                />
+
+                <TouchableOpacity
+                  style={styles.dropdownMenuItem}
+                  onPress={() => {
+                    const s = activeMenuSession.session;
+                    setActiveMenuSession(null);
+                    handleStartRename(s);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Feather
+                    name="edit-2"
+                    size={13}
+                    color={theme.textMain}
+                    style={{ marginRight: 10 }}
+                  />
+                  <Text
+                    style={[styles.dropdownItemText, { color: theme.textMain }]}
+                  >
+                    Rename
+                  </Text>
+                </TouchableOpacity>
+
+                <View
+                  style={[
+                    styles.dropdownDivider,
+                    { backgroundColor: theme.borderSubtle },
+                  ]}
+                />
+
+                <TouchableOpacity
+                  style={styles.dropdownMenuItem}
+                  onPress={() => {
+                    const s = activeMenuSession.session;
+                    setActiveMenuSession(null);
+                    handleDeletePress(s.id, s.title);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Feather
+                    name="trash-2"
+                    size={13}
+                    color={colors.danger}
+                    style={{ marginRight: 10 }}
+                  />
+                  <Text
+                    style={[styles.dropdownItemText, { color: colors.danger }]}
+                  >
+                    Delete
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
         </Animated.View>
       </View>
     </Modal>
@@ -1190,5 +1277,56 @@ const styles = StyleSheet.create({
   endOfListText: {
     fontSize: 11,
     fontWeight: "400",
+  },
+  dropdownBackdrop: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "transparent",
+    zIndex: 99,
+  },
+  dropdownMenu: {
+    position: "absolute",
+    right: 14,
+    width: 165,
+    borderRadius: 14,
+    borderWidth: 1,
+    paddingVertical: 6,
+    paddingHorizontal: 4,
+    zIndex: 100,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.25,
+    shadowRadius: 12,
+    elevation: 12,
+  },
+  dropdownHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  dropdownHeaderTitle: {
+    fontSize: 11,
+    fontWeight: "600",
+    flex: 1,
+  },
+  dropdownMenuItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+  },
+  dropdownItemText: {
+    fontSize: 13,
+    fontWeight: "500",
+  },
+  dropdownDivider: {
+    height: StyleSheet.hairlineWidth,
+    marginVertical: 3,
+    marginHorizontal: 6,
   },
 });

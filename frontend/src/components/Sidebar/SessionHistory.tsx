@@ -13,6 +13,7 @@ import {
   LuSearchX,
   LuLoader,
   LuChevronDown,
+  LuEllipsis,
 } from "react-icons/lu";
 import { FaGoogle } from "react-icons/fa";
 import type { ChatSession, User } from "../../types";
@@ -314,6 +315,24 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
     const x = Math.min(e.clientX, window.innerWidth - 180);
     const y = Math.min(e.clientY, window.innerHeight - 100);
     setContextMenu({ x, y, session });
+  };
+
+  const handleMenuToggle = (s: ChatSession, e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    if (contextMenu && contextMenu.session.id === s.id) {
+      setContextMenu(null);
+      return;
+    }
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const menuWidth = 152;
+    const menuHeight = 84;
+    const x = Math.min(
+      rect.right - menuWidth,
+      window.innerWidth - menuWidth - 12,
+    );
+    const y = Math.min(rect.bottom + 4, window.innerHeight - menuHeight - 12);
+    setContextMenu({ x: Math.max(12, x), y, session: s });
   };
 
   return (
@@ -619,34 +638,28 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
                         </div>
                       </div>
 
-                      {/* Actions: Always visible on active session, visible on hover for others */}
+                      {/* Actions: Ellipsis button opening dropdown options */}
                       <div
-                        className={`flex items-center gap-0.5 shrink-0 transition-opacity ${
-                          isActive
+                        className={`flex items-center shrink-0 transition-opacity ${
+                          isActive || contextMenu?.session.id === s.id
                             ? "opacity-100"
                             : "opacity-0 group-hover:opacity-100"
                         }`}
                       >
                         <button
                           type="button"
-                          className="p-1.5 text-(--text-muted) hover:text-primary-theme hover:bg-primary-light-theme rounded-md cursor-pointer transition-colors"
-                          onClick={(e) => handleStartRename(s, e)}
-                          title="Rename Chat (or double-click)"
-                          aria-label="Rename Chat"
+                          className={`p-1.5 rounded-md cursor-pointer transition-colors ${
+                            contextMenu?.session.id === s.id
+                              ? "bg-primary-light-theme text-primary-theme"
+                              : "text-(--text-muted) hover:text-(--text-main) hover:bg-(--border-subtle)"
+                          }`}
+                          onClick={(e) => handleMenuToggle(s, e)}
+                          title="Options"
+                          aria-label="Options"
+                          aria-haspopup="true"
+                          aria-expanded={contextMenu?.session.id === s.id}
                         >
-                          <LuPencil size={13} />
-                        </button>
-                        <button
-                          type="button"
-                          className="p-1.5 text-(--text-muted) hover:text-red-500 hover:bg-red-500/15 rounded-md cursor-pointer transition-colors"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onDeleteSession(s.id);
-                          }}
-                          title="Delete Conversation"
-                          aria-label="Delete Conversation"
-                        >
-                          <LuTrash2 size={13} />
+                          <LuEllipsis size={15} />
                         </button>
                       </div>
                     </div>
@@ -682,26 +695,30 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
         </div>
       </div>
 
-      {/* Right-click Floating Context Menu */}
+      {/* Floating Options Dropdown Menu */}
       {contextMenu &&
         createPortal(
           <div
             ref={contextMenuRef}
-            className="fixed z-9999 bg-(--bg-card) border border-(--border-hover) shadow-2xl rounded-xl p-1 w-44 flex flex-col gap-0.5 text-xs animate-[popoverIn_0.12s_ease-out] backdrop-blur-md"
+            role="menu"
+            aria-orientation="vertical"
+            className="fixed z-9999 bg-(--bg-card) border border-(--border-subtle) shadow-xl rounded-xl p-1 w-38 flex flex-col gap-0.5 text-xs animate-[popoverIn_0.12s_ease-out] backdrop-blur-md select-none"
             style={{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }}
             onClick={(e) => e.stopPropagation()}
           >
             <button
               type="button"
+              role="menuitem"
               className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-(--text-main) hover:bg-primary-light-theme hover:text-primary-theme transition-colors cursor-pointer text-left w-full font-medium"
               onClick={(e) => handleStartRename(contextMenu.session, e)}
             >
-              <LuPencil size={13} />
+              <LuPencil size={13} className="shrink-0" />
               <span>Rename</span>
             </button>
             <div className="h-px bg-(--border-subtle) my-0.5" />
             <button
               type="button"
+              role="menuitem"
               className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-red-500 hover:bg-red-500/15 transition-colors cursor-pointer text-left w-full font-medium"
               onClick={(e) => {
                 e.stopPropagation();
@@ -710,7 +727,7 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
                 onDeleteSession(sessId);
               }}
             >
-              <LuTrash2 size={13} />
+              <LuTrash2 size={13} className="shrink-0" />
               <span>Delete</span>
             </button>
           </div>,
