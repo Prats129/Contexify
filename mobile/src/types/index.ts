@@ -37,10 +37,14 @@ export interface ChatSession {
   mode: ChatMode;
   is_temporary?: boolean;
   expires_at?: string | null;
+  is_pinned?: boolean;
+  pinned_at?: string | null;
   message_count?: number;
   created_at: string;
   updated_at: string;
 }
+
+export type SessionSortOrder = 'last_created' | 'first_created';
 
 export interface PaginatedChatSessions {
   sessions: ChatSession[];
@@ -54,6 +58,7 @@ export interface SessionListParams {
   limit?: number;
   offset?: number;
   search?: string;
+  sort_by?: SessionSortOrder;
   signal?: AbortSignal;
 }
 

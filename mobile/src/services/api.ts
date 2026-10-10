@@ -396,6 +396,9 @@ export const apiService = {
       if (params?.search && params.search.trim()) {
         query.set('search', params.search.trim());
       }
+      if (params?.sort_by) {
+        query.set('sort_by', params.sort_by);
+      }
 
       const url = await getEndpoint(`/session/list?${query.toString()}`);
       const res = await fetch(url, { signal: params?.signal });
@@ -609,6 +612,24 @@ export const apiService = {
     if (!res.ok) {
       const err = await res.json().catch(() => null);
       throw new Error(extractErrorMessage(err, 'Failed to update conversation title'));
+    }
+    return await res.json();
+  },
+
+  async togglePinSession(
+    sessionId: string,
+    isPinned: boolean
+  ): Promise<{ message: string; session_id: string; is_pinned: boolean }> {
+    const url = await getEndpoint(`/session/${encodeURIComponent(sessionId.trim())}/pin`);
+    const res = await fetch(url, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ is_pinned: isPinned }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Failed to update conversation pin status'));
     }
     return await res.json();
   },

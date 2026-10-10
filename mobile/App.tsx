@@ -17,6 +17,7 @@ import {
   Image,
   Keyboard,
   TouchableWithoutFeedback,
+  PanResponder,
   type NativeSyntheticEvent,
   type NativeScrollEvent,
 } from "react-native";
@@ -44,6 +45,7 @@ import type {
   DocumentMetadata,
   MediaAttachment,
   MessageReplyReference,
+  SessionSortOrder,
 } from "./src/types";
 
 import { Header } from "./src/components/Header";
@@ -63,6 +65,20 @@ function generateGuestSessionId(): string {
     Date.now().toString(36)
   );
 }
+
+const sortMobileSessions = (
+  list: ChatSession[],
+  order: SessionSortOrder,
+): ChatSession[] => {
+  return [...list].sort((a, b) => {
+    const aPinned = Boolean(a.is_pinned);
+    const bPinned = Boolean(b.is_pinned);
+    if (aPinned !== bPinned) return aPinned ? -1 : 1;
+    const aTime = new Date(a.created_at).getTime() || 0;
+    const bTime = new Date(b.created_at).getTime() || 0;
+    return order === "first_created" ? aTime - bTime : bTime - aTime;
+  });
+};
 
 export default function App() {
   // Theme & Appearance State
@@ -87,6 +103,8 @@ export default function App() {
   const isTempActive = Boolean(currentUser && isTemporaryChat);
   const [currentMode, setCurrentMode] = useState<ChatMode>("AUTO");
   const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [sessionSortOrder, setSessionSortOrder] =
+    useState<SessionSortOrder>("last_created");
   const [totalSessions, setTotalSessions] = useState<number>(0);
   const [hasMoreSessions, setHasMoreSessions] = useState<boolean>(false);
   const [isLoadingMoreSessions, setIsLoadingMoreSessions] =
@@ -117,6 +135,90 @@ export default function App() {
   const [activeCitations, setActiveCitations] = useState<Citation[]>([]);
   const [serverConfigVisible, setServerConfigVisible] = useState(false);
   const [attachmentsVisible, setAttachmentsVisible] = useState(false);
+
+  const handleOpenDrawer = useCallback(() => {
+    Keyboard.dismiss();
+    setDrawerVisible(true);
+  }, []);
+
+  const drawerVisibleRef = useRef(drawerVisible);
+  useEffect(() => {
+    drawerVisibleRef.current = drawerVisible;
+  }, [drawerVisible]);
+
+  const hasMessagesRef = useRef(
+    messages.length > 0 || Boolean(streamingMessage),
+  );
+  useEffect(() => {
+    hasMessagesRef.current = messages.length > 0 || Boolean(streamingMessage);
+  }, [messages.length, streamingMessage]);
+
+  const hasTriggeredEdgeDrawerRef = useRef(false);
+
+  // Industry-standard left-edge gesture responder (Slack/Telegram pattern)
+  // Transparent on touch-down to prevent tap blocking; intercepts rightward slides to open drawer.
+  const edgePanResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => false,
+        onStartShouldSetPanResponderCapture: () => false,
+
+        onMoveShouldSetPanResponder: (_, gestureState) => {
+          if (drawerVisibleRef.current) return false;
+          const isHorizontal =
+            Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * 1.2;
+          if (!isHorizontal || gestureState.dx <= 12) return false;
+
+          // When messages are present, restrict trigger to edge (x0 <= 48)
+          // to preserve WhatsApp-style swipe-to-reply on message cards.
+          // On empty/welcome screen, allow swiping right anywhere.
+          if (hasMessagesRef.current) {
+            return gestureState.x0 <= 48;
+          }
+          return true;
+        },
+        onMoveShouldSetPanResponderCapture: (_, gestureState) => {
+          if (drawerVisibleRef.current) return false;
+          const isHorizontal =
+            Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * 1.2;
+          if (!isHorizontal || gestureState.dx <= 12) return false;
+
+          if (hasMessagesRef.current) {
+            return gestureState.x0 <= 48;
+          }
+          return true;
+        },
+
+        onPanResponderGrant: () => {
+          hasTriggeredEdgeDrawerRef.current = false;
+        },
+
+        onPanResponderMove: (_, gestureState) => {
+          if (gestureState.dx > 25 && !hasTriggeredEdgeDrawerRef.current) {
+            hasTriggeredEdgeDrawerRef.current = true;
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            handleOpenDrawer();
+          }
+        },
+
+        onPanResponderRelease: (_, gestureState) => {
+          if (
+            !hasTriggeredEdgeDrawerRef.current &&
+            (gestureState.dx > 18 || gestureState.vx > 0.25)
+          ) {
+            hasTriggeredEdgeDrawerRef.current = true;
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            handleOpenDrawer();
+          }
+          hasTriggeredEdgeDrawerRef.current = false;
+        },
+
+        onPanResponderTerminate: () => {
+          hasTriggeredEdgeDrawerRef.current = false;
+        },
+      }),
+    [handleOpenDrawer],
+  );
 
   const flatListRef = useRef<FlatList<Message>>(null);
   const isAtBottomRef = useRef(true);
@@ -175,11 +277,20 @@ export default function App() {
       }
 
       const savedUserStr = await AsyncStorage.getItem("contexify_mobile_user");
+      const savedSort = await AsyncStorage.getItem(
+        "contexify_mobile_sort_order",
+      );
+      let initialSort: SessionSortOrder = "last_created";
+      if (savedSort === "first_created" || savedSort === "last_created") {
+        initialSort = savedSort;
+        setSessionSortOrder(savedSort);
+      }
+
       if (savedUserStr) {
         const user: User = JSON.parse(savedUserStr);
         currentUserRef.current = user;
         setCurrentUser(user);
-        await loadUserSessions(user.id, user);
+        await loadUserSessions(user.id, user, initialSort);
 
         // Refresh profile in background to fetch latest avatar / settings from server
         apiService
@@ -225,14 +336,17 @@ export default function App() {
   const loadUserSessions = async (
     userId: string,
     userOverride?: User | null,
+    sortOverride?: SessionSortOrder,
   ) => {
+    const activeSort = sortOverride || sessionSortOrder;
     try {
       const res = await apiService.getUserSessions(userId, {
         limit: SESSIONS_PAGE_SIZE,
         offset: 0,
+        sort_by: activeSort,
       });
       const safeList = Array.isArray(res.sessions) ? res.sessions : [];
-      setSessions(safeList);
+      setSessions(sortMobileSessions(safeList, activeSort));
       setTotalSessions(res.total ?? safeList.length);
       setHasMoreSessions(Boolean(res.has_more));
       // Always start in a fresh new chat on app launch
@@ -253,12 +367,13 @@ export default function App() {
       const res = await apiService.getUserSessions(currentUser.id, {
         limit: SESSIONS_PAGE_SIZE,
         offset: sessions.length,
+        sort_by: sessionSortOrder,
       });
       const newSessions = Array.isArray(res.sessions) ? res.sessions : [];
       setSessions((prev) => {
         const existingIds = new Set(prev.map((s) => s.id));
         const filtered = newSessions.filter((s) => !existingIds.has(s.id));
-        return [...prev, ...filtered];
+        return sortMobileSessions([...prev, ...filtered], sessionSortOrder);
       });
       setTotalSessions(res.total ?? sessions.length + newSessions.length);
       setHasMoreSessions(Boolean(res.has_more));
@@ -276,15 +391,80 @@ export default function App() {
       const res = await apiService.getUserSessions(currentUser.id, {
         limit: SESSIONS_PAGE_SIZE,
         offset: 0,
+        sort_by: sessionSortOrder,
       });
       const safeList = Array.isArray(res.sessions) ? res.sessions : [];
-      setSessions(safeList);
+      setSessions(sortMobileSessions(safeList, sessionSortOrder));
       setTotalSessions(res.total ?? safeList.length);
       setHasMoreSessions(Boolean(res.has_more));
     } catch (err) {
       console.warn("Failed to refresh sessions:", err);
     } finally {
       setIsRefreshingSessions(false);
+    }
+  };
+
+  const handleToggleSortOrder = async () => {
+    const nextOrder: SessionSortOrder =
+      sessionSortOrder === "first_created" ? "last_created" : "first_created";
+    setSessionSortOrder(nextOrder);
+    await AsyncStorage.setItem("contexify_mobile_sort_order", nextOrder);
+    if (currentUser) {
+      setIsRefreshingSessions(true);
+      try {
+        const res = await apiService.getUserSessions(currentUser.id, {
+          limit: SESSIONS_PAGE_SIZE,
+          offset: 0,
+          sort_by: nextOrder,
+        });
+        const safeList = Array.isArray(res.sessions) ? res.sessions : [];
+        setSessions(sortMobileSessions(safeList, nextOrder));
+        setTotalSessions(res.total ?? safeList.length);
+        setHasMoreSessions(Boolean(res.has_more));
+      } finally {
+        setIsRefreshingSessions(false);
+      }
+    } else {
+      setSessions((prev) => sortMobileSessions(prev, nextOrder));
+    }
+  };
+
+  const handleTogglePinSession = async (sessionId: string) => {
+    const target = sessions.find((s) => s.id === sessionId);
+    if (!target) return;
+    const nextPinned = !target.is_pinned;
+
+    // Optimistic update
+    setSessions((prev) => {
+      const updated = prev.map((s) =>
+        s.id === sessionId
+          ? {
+              ...s,
+              is_pinned: nextPinned,
+              pinned_at: nextPinned ? new Date().toISOString() : null,
+            }
+          : s,
+      );
+      return sortMobileSessions(updated, sessionSortOrder);
+    });
+
+    try {
+      await apiService.togglePinSession(sessionId, nextPinned);
+    } catch (err) {
+      console.warn("Failed to toggle pin session:", err);
+      // Rollback on failure
+      setSessions((prev) => {
+        const rolledBack = prev.map((s) =>
+          s.id === sessionId
+            ? {
+                ...s,
+                is_pinned: target.is_pinned,
+                pinned_at: target.pinned_at,
+              }
+            : s,
+        );
+        return sortMobileSessions(rolledBack, sessionSortOrder);
+      });
     }
   };
 
@@ -888,7 +1068,7 @@ export default function App() {
 
         {/* Top Native Header */}
         <Header
-          onOpenDrawer={() => setDrawerVisible(true)}
+          onOpenDrawer={handleOpenDrawer}
           onNewChat={handleNewChat}
           onToggleTheme={handleToggleTheme}
           isDark={isDark}
@@ -966,295 +1146,301 @@ export default function App() {
           style={styles.workspace}
           keyboardVerticalOffset={Platform.OS === "ios" ? 54 : 0}
         >
-          {/* Welcome Screen or ChatGPT Temporary Chat Screen */}
-          {messages.length === 0 && !streamingMessage ? (
-            isTempActive ? (
-              <TouchableWithoutFeedback
-                onPress={Keyboard.dismiss}
-                accessible={false}
-              >
-                <View style={styles.welcomeContainer}>
-                  <View
-                    style={{
-                      width: 64,
-                      height: 64,
-                      borderRadius: 32,
-                      backgroundColor: "rgba(245, 158, 11, 0.16)",
-                      borderWidth: 1.5,
-                      borderColor: "rgba(245, 158, 11, 0.35)",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      marginBottom: 16,
-                    }}
-                  >
-                    <MaterialCommunityIcons
-                      name="ghost"
-                      size={32}
-                      color="#f59e0b"
-                    />
-                  </View>
-                  <Text
-                    style={[styles.welcomeTitle, { color: theme.textMain }]}
-                  >
-                    Temporary Chat
-                  </Text>
-                  <Text
-                    style={[
-                      styles.welcomeSubtitle,
-                      { color: theme.textMuted, marginTop: 4 },
-                    ]}
-                  >
-                    Chats in this mode won&apos;t be saved in your chat history
-                    and will be permanently deleted after 3 days.
-                  </Text>
-
-                  <TouchableOpacity
-                    style={{
-                      marginTop: 10,
-                      marginBottom: 16,
-                      paddingHorizontal: 18,
-                      paddingVertical: 9,
-                      borderRadius: 20,
-                      backgroundColor: theme.bgCard,
-                      borderWidth: 1,
-                      borderColor: theme.borderSubtle,
-                    }}
-                    onPress={handleToggleTemporaryChat}
-                    activeOpacity={0.8}
-                  >
-                    <Text
+          {/* Main Messages & Conversation Viewport with Left-to-Right Edge Swipe Responder */}
+          <View style={styles.chatViewport} {...edgePanResponder.panHandlers}>
+            {/* Welcome Screen or ChatGPT Temporary Chat Screen */}
+            {messages.length === 0 && !streamingMessage ? (
+              isTempActive ? (
+                <TouchableWithoutFeedback
+                  onPress={Keyboard.dismiss}
+                  accessible={false}
+                >
+                  <View style={styles.welcomeContainer}>
+                    <View
                       style={{
-                        fontSize: 12.5,
-                        fontWeight: "600",
-                        color: theme.textMain,
+                        width: 64,
+                        height: 64,
+                        borderRadius: 32,
+                        backgroundColor: "rgba(245, 158, 11, 0.16)",
+                        borderWidth: 1.5,
+                        borderColor: "rgba(245, 158, 11, 0.35)",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        marginBottom: 16,
                       }}
                     >
-                      Turn off Temporary Chat
-                    </Text>
-                  </TouchableOpacity>
-
-                  {/* Temporary Starter Prompt Chips */}
-                  <View style={styles.starterChipsRow}>
-                    <TouchableOpacity
-                      style={[
-                        styles.starterChip,
-                        {
-                          backgroundColor: theme.bgCard,
-                          borderColor: "rgba(245, 158, 11, 0.3)",
-                        },
-                      ]}
-                      onPress={() =>
-                        handleSendMessage(
-                          "Explain how zero-trust security architecture works.",
-                        )
-                      }
-                      activeOpacity={0.8}
-                    >
-                      <Ionicons
-                        name="shield-checkmark-outline"
-                        size={14}
+                      <MaterialCommunityIcons
+                        name="ghost"
+                        size={32}
                         color="#f59e0b"
                       />
-                      <Text
-                        style={[
-                          styles.starterChipText,
-                          { color: theme.textMain },
-                        ]}
-                      >
-                        Quick Research
-                      </Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                      style={[
-                        styles.starterChip,
-                        {
-                          backgroundColor: theme.bgCard,
-                          borderColor: "rgba(245, 158, 11, 0.3)",
-                        },
-                      ]}
-                      onPress={() =>
-                        handleSendMessage(
-                          "Check this confidential snippet for potential bugs or security risks.",
-                        )
-                      }
-                      activeOpacity={0.8}
-                    >
-                      <Ionicons
-                        name="code-slash-outline"
-                        size={14}
-                        color="#f59e0b"
-                      />
-                      <Text
-                        style={[
-                          styles.starterChipText,
-                          { color: theme.textMain },
-                        ]}
-                      >
-                        Confidential Review
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              </TouchableWithoutFeedback>
-            ) : (
-              <TouchableWithoutFeedback
-                onPress={Keyboard.dismiss}
-                accessible={false}
-              >
-                <View style={styles.welcomeContainer}>
-                  <View style={styles.welcomeBrandGroup}>
-                    <Image
-                      source={require("./assets/logo.png")}
-                      style={styles.welcomeLogo}
-                      resizeMode="contain"
-                    />
+                    </View>
                     <Text
                       style={[styles.welcomeTitle, { color: theme.textMain }]}
                     >
-                      Contexify AI
+                      Temporary Chat
                     </Text>
-                  </View>
-                  <Text
-                    style={[styles.welcomeSubtitle, { color: theme.textMuted }]}
-                  >
-                    Ask grounded questions with real-time web search or attach
-                    files for instant document RAG.
-                  </Text>
-
-                  {/* Starter Prompt Chips */}
-                  <View style={styles.starterChipsRow}>
-                    <TouchableOpacity
+                    <Text
                       style={[
-                        styles.starterChip,
-                        {
-                          backgroundColor: theme.bgCard,
-                          borderColor: theme.borderSubtle,
-                        },
+                        styles.welcomeSubtitle,
+                        { color: theme.textMuted, marginTop: 4 },
                       ]}
-                      onPress={() =>
-                        handleSendMessage(
-                          "Summarize key points covered in the document.",
-                        )
-                      }
+                    >
+                      Chats in this mode won&apos;t be saved in your chat
+                      history and will be permanently deleted after 3 days.
+                    </Text>
+
+                    <TouchableOpacity
+                      style={{
+                        marginTop: 10,
+                        marginBottom: 16,
+                        paddingHorizontal: 18,
+                        paddingVertical: 9,
+                        borderRadius: 20,
+                        backgroundColor: theme.bgCard,
+                        borderWidth: 1,
+                        borderColor: theme.borderSubtle,
+                      }}
+                      onPress={handleToggleTemporaryChat}
                       activeOpacity={0.8}
                     >
-                      <Ionicons name="list" size={14} color={theme.primary} />
                       <Text
-                        style={[
-                          styles.starterChipText,
-                          { color: theme.textMain },
-                        ]}
+                        style={{
+                          fontSize: 12.5,
+                          fontWeight: "600",
+                          color: theme.textMain,
+                        }}
                       >
-                        Summarize Document
+                        Turn off Temporary Chat
                       </Text>
                     </TouchableOpacity>
 
-                    <TouchableOpacity
-                      style={[
-                        styles.starterChip,
-                        {
-                          backgroundColor: theme.bgCard,
-                          borderColor: theme.borderSubtle,
-                        },
-                      ]}
-                      onPress={() =>
-                        handleSendMessage(
-                          "Explain the main technical concepts.",
-                        )
-                      }
-                      activeOpacity={0.8}
-                    >
-                      <Ionicons
-                        name="hardware-chip-outline"
-                        size={14}
-                        color={theme.primary}
+                    {/* Temporary Starter Prompt Chips */}
+                    <View style={styles.starterChipsRow}>
+                      <TouchableOpacity
+                        style={[
+                          styles.starterChip,
+                          {
+                            backgroundColor: theme.bgCard,
+                            borderColor: "rgba(245, 158, 11, 0.3)",
+                          },
+                        ]}
+                        onPress={() =>
+                          handleSendMessage(
+                            "Explain how zero-trust security architecture works.",
+                          )
+                        }
+                        activeOpacity={0.8}
+                      >
+                        <Ionicons
+                          name="shield-checkmark-outline"
+                          size={14}
+                          color="#f59e0b"
+                        />
+                        <Text
+                          style={[
+                            styles.starterChipText,
+                            { color: theme.textMain },
+                          ]}
+                        >
+                          Quick Research
+                        </Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={[
+                          styles.starterChip,
+                          {
+                            backgroundColor: theme.bgCard,
+                            borderColor: "rgba(245, 158, 11, 0.3)",
+                          },
+                        ]}
+                        onPress={() =>
+                          handleSendMessage(
+                            "Check this confidential snippet for potential bugs or security risks.",
+                          )
+                        }
+                        activeOpacity={0.8}
+                      >
+                        <Ionicons
+                          name="code-slash-outline"
+                          size={14}
+                          color="#f59e0b"
+                        />
+                        <Text
+                          style={[
+                            styles.starterChipText,
+                            { color: theme.textMain },
+                          ]}
+                        >
+                          Confidential Review
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                </TouchableWithoutFeedback>
+              ) : (
+                <TouchableWithoutFeedback
+                  onPress={Keyboard.dismiss}
+                  accessible={false}
+                >
+                  <View style={styles.welcomeContainer}>
+                    <View style={styles.welcomeBrandGroup}>
+                      <Image
+                        source={require("./assets/logo.png")}
+                        style={styles.welcomeLogo}
+                        resizeMode="contain"
                       />
                       <Text
-                        style={[
-                          styles.starterChipText,
-                          { color: theme.textMain },
-                        ]}
+                        style={[styles.welcomeTitle, { color: theme.textMain }]}
                       >
-                        Key Concepts
+                        Contexify AI
                       </Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
+                    </View>
+                    <Text
                       style={[
-                        styles.starterChip,
-                        {
-                          backgroundColor: theme.bgCard,
-                          borderColor: theme.borderSubtle,
-                        },
+                        styles.welcomeSubtitle,
+                        { color: theme.textMuted },
                       ]}
-                      onPress={() =>
-                        handleSendMessage(
-                          "Search the web for the latest updates on this topic.",
-                        )
-                      }
-                      activeOpacity={0.8}
                     >
-                      <Ionicons
-                        name="globe-outline"
-                        size={14}
-                        color={theme.emerald}
-                      />
-                      <Text
+                      Ask grounded questions with real-time web search or attach
+                      files for instant document RAG.
+                    </Text>
+
+                    {/* Starter Prompt Chips */}
+                    <View style={styles.starterChipsRow}>
+                      <TouchableOpacity
                         style={[
-                          styles.starterChipText,
-                          { color: theme.textMain },
+                          styles.starterChip,
+                          {
+                            backgroundColor: theme.bgCard,
+                            borderColor: theme.borderSubtle,
+                          },
                         ]}
+                        onPress={() =>
+                          handleSendMessage(
+                            "Summarize key points covered in the document.",
+                          )
+                        }
+                        activeOpacity={0.8}
                       >
-                        Search Live Web
-                      </Text>
-                    </TouchableOpacity>
+                        <Ionicons name="list" size={14} color={theme.primary} />
+                        <Text
+                          style={[
+                            styles.starterChipText,
+                            { color: theme.textMain },
+                          ]}
+                        >
+                          Summarize Document
+                        </Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={[
+                          styles.starterChip,
+                          {
+                            backgroundColor: theme.bgCard,
+                            borderColor: theme.borderSubtle,
+                          },
+                        ]}
+                        onPress={() =>
+                          handleSendMessage(
+                            "Explain the main technical concepts.",
+                          )
+                        }
+                        activeOpacity={0.8}
+                      >
+                        <Ionicons
+                          name="hardware-chip-outline"
+                          size={14}
+                          color={theme.primary}
+                        />
+                        <Text
+                          style={[
+                            styles.starterChipText,
+                            { color: theme.textMain },
+                          ]}
+                        >
+                          Key Concepts
+                        </Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={[
+                          styles.starterChip,
+                          {
+                            backgroundColor: theme.bgCard,
+                            borderColor: theme.borderSubtle,
+                          },
+                        ]}
+                        onPress={() =>
+                          handleSendMessage(
+                            "Search the web for the latest updates on this topic.",
+                          )
+                        }
+                        activeOpacity={0.8}
+                      >
+                        <Ionicons
+                          name="globe-outline"
+                          size={14}
+                          color={theme.emerald}
+                        />
+                        <Text
+                          style={[
+                            styles.starterChipText,
+                            { color: theme.textMain },
+                          ]}
+                        >
+                          Search Live Web
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
                   </View>
-                </View>
-              </TouchableWithoutFeedback>
-            )
-          ) : (
-            <FlatList
-              ref={flatListRef}
-              data={messages}
-              keyExtractor={keyExtractor}
-              contentContainerStyle={styles.messageListContent}
-              keyboardDismissMode={
-                Platform.OS === "ios" ? "interactive" : "none"
-              }
-              keyboardShouldPersistTaps="handled"
-              onScroll={handleScroll}
-              scrollEventThrottle={16}
-              onScrollToIndexFailed={(info) => {
-                flatListRef.current?.scrollToOffset({
-                  offset: Math.max(0, info.averageItemLength * info.index),
-                  animated: true,
-                });
-              }}
-              onContentSizeChange={() => {
-                if (isAtBottomRef.current) {
-                  flatListRef.current?.scrollToEnd({ animated: true });
+                </TouchableWithoutFeedback>
+              )
+            ) : (
+              <FlatList
+                ref={flatListRef}
+                data={messages}
+                keyExtractor={keyExtractor}
+                contentContainerStyle={styles.messageListContent}
+                keyboardDismissMode={
+                  Platform.OS === "ios" ? "interactive" : "none"
                 }
-              }}
-              showsVerticalScrollIndicator={false}
-              renderItem={renderMessageItem}
-              ListFooterComponent={
-                streamingMessage ? (
-                  <MessageItem
-                    role="assistant"
-                    content={streamingMessage.content}
-                    citations={streamingMessage.citations}
-                    attachments={streamingMessage.attachments}
-                    isStreaming={true}
-                    onOpenCitations={handleOpenCitations}
-                    onUseAsReference={handleUseAsReference}
-                    isDark={isDark}
-                    theme={theme}
-                  />
-                ) : null
-              }
-            />
-          )}
+                keyboardShouldPersistTaps="handled"
+                onScroll={handleScroll}
+                scrollEventThrottle={16}
+                onScrollToIndexFailed={(info) => {
+                  flatListRef.current?.scrollToOffset({
+                    offset: Math.max(0, info.averageItemLength * info.index),
+                    animated: true,
+                  });
+                }}
+                onContentSizeChange={() => {
+                  if (isAtBottomRef.current) {
+                    flatListRef.current?.scrollToEnd({ animated: true });
+                  }
+                }}
+                showsVerticalScrollIndicator={false}
+                renderItem={renderMessageItem}
+                ListFooterComponent={
+                  streamingMessage ? (
+                    <MessageItem
+                      role="assistant"
+                      content={streamingMessage.content}
+                      citations={streamingMessage.citations}
+                      attachments={streamingMessage.attachments}
+                      isStreaming={true}
+                      onOpenCitations={handleOpenCitations}
+                      onUseAsReference={handleUseAsReference}
+                      isDark={isDark}
+                      theme={theme}
+                    />
+                  ) : null
+                }
+              />
+            )}
+          </View>
 
           {/* Bottom Chat Input Bar */}
           <ChatInput
@@ -1299,6 +1485,9 @@ export default function App() {
           onSelectSession={selectSession}
           onDeleteSession={handleDeleteSession}
           onRenameSession={handleRenameSession}
+          sortOrder={sessionSortOrder}
+          onToggleSortOrder={handleToggleSortOrder}
+          onTogglePinSession={handleTogglePinSession}
           onNewChat={handleNewChat}
           documents={documents}
           onDeleteDocument={handleDeleteDocument}
@@ -1385,6 +1574,9 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   workspace: {
+    flex: 1,
+  },
+  chatViewport: {
     flex: 1,
   },
   welcomeContainer: {

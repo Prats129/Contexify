@@ -288,6 +288,9 @@ export const apiService = {
     if (params?.search && params.search.trim()) {
       query.set('search', params.search.trim());
     }
+    if (params?.sort_by) {
+      query.set('sort_by', params.sort_by);
+    }
 
     const response = await fetch(`${API_BASE_URL}/session/list?${query.toString()}`, {
       signal: params?.signal,
@@ -420,6 +423,19 @@ export const apiService = {
     if (!response.ok) {
       const err = await response.json().catch(() => null);
       throw new Error(extractErrorMessage(err, 'Failed to update session title'));
+    }
+    return await response.json();
+  },
+
+  async togglePinSession(sessionId: string, isPinned: boolean): Promise<{ message: string; session_id: string; is_pinned: boolean }> {
+    const response = await fetch(`${API_BASE_URL}/session/${encodeURIComponent(sessionId)}/pin`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ is_pinned: isPinned }),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Failed to update session pin status'));
     }
     return await response.json();
   },

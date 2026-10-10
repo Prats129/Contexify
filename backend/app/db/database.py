@@ -195,19 +195,25 @@ def init_db():
                 mode TEXT NOT NULL DEFAULT 'AUTO',
                 is_temporary INTEGER DEFAULT 0,
                 expires_at TEXT,
+                is_pinned INTEGER DEFAULT 0,
+                pinned_at TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             );
         """)
         
-        # Schema migration check: ensure is_temporary & expires_at columns exist if table was previously created
+        # Schema migration check: ensure is_temporary, expires_at, is_pinned, pinned_at exist
         cursor.execute("PRAGMA table_info(chat_sessions);")
         session_columns = [row["name"] for row in cursor.fetchall()]
         if "is_temporary" not in session_columns:
             cursor.execute("ALTER TABLE chat_sessions ADD COLUMN is_temporary INTEGER DEFAULT 0;")
         if "expires_at" not in session_columns:
             cursor.execute("ALTER TABLE chat_sessions ADD COLUMN expires_at TEXT;")
+        if "is_pinned" not in session_columns:
+            cursor.execute("ALTER TABLE chat_sessions ADD COLUMN is_pinned INTEGER DEFAULT 0;")
+        if "pinned_at" not in session_columns:
+            cursor.execute("ALTER TABLE chat_sessions ADD COLUMN pinned_at TEXT;")
         
         # 3. Messages Table
         cursor.execute("""
@@ -288,6 +294,7 @@ def init_db():
         # Indexes for fast querying
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON chat_sessions(user_id);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user_updated ON chat_sessions(user_id, updated_at DESC);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user_pinned ON chat_sessions(user_id, is_pinned DESC, created_at DESC);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_temporary ON chat_sessions(is_temporary, expires_at);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_documents_session_id ON documents(session_id);")

@@ -44,6 +44,8 @@ class ChatHistoryService:
             mode=ChatMode(mode) if isinstance(mode, str) else mode,
             is_temporary=is_temporary,
             expires_at=expires_at,
+            is_pinned=False,
+            pinned_at=None,
             created_at=now,
             updated_at=now,
             message_count=0,
@@ -56,7 +58,8 @@ class ChatHistoryService:
             cursor.execute(
                 """
                 SELECT 
-                    s.id, s.user_id, s.title, s.mode, s.is_temporary, s.expires_at, s.created_at, s.updated_at,
+                    s.id, s.user_id, s.title, s.mode, s.is_temporary, s.expires_at, 
+                    s.is_pinned, s.pinned_at, s.created_at, s.updated_at,
                     (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) AS message_count,
                     (SELECT COUNT(*) FROM documents d WHERE d.session_id = s.id) AS document_count
                 FROM chat_sessions s
@@ -74,6 +77,8 @@ class ChatHistoryService:
                 mode=ChatMode(row["mode"]),
                 is_temporary=bool(row["is_temporary"]),
                 expires_at=row["expires_at"],
+                is_pinned=bool(row["is_pinned"]) if "is_pinned" in row.keys() else False,
+                pinned_at=row["pinned_at"] if "pinned_at" in row.keys() else None,
                 created_at=row["created_at"],
                 updated_at=row["updated_at"],
                 message_count=row["message_count"],
@@ -85,7 +90,8 @@ class ChatHistoryService:
         user_id: str,
         limit: Optional[int] = None,
         offset: int = 0,
-        search: Optional[str] = None
+        search: Optional[str] = None,
+        sort_by: Optional[str] = "last_created"
     ) -> Tuple[List[ChatSessionResponse], int]:
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -104,14 +110,21 @@ class ChatHistoryService:
             total_row = cursor.fetchone()
             total = int(total_row["total"]) if total_row and total_row["total"] is not None else 0
             
+            # Determine sorting order (pinned always float to top)
+            if sort_by == "first_created":
+                order_sql = "COALESCE(s.is_pinned, 0) DESC, s.created_at ASC"
+            else:
+                order_sql = "COALESCE(s.is_pinned, 0) DESC, s.created_at DESC"
+
             query = f"""
                 SELECT 
-                    s.id, s.user_id, s.title, s.mode, s.is_temporary, s.expires_at, s.created_at, s.updated_at,
+                    s.id, s.user_id, s.title, s.mode, s.is_temporary, s.expires_at, 
+                    s.is_pinned, s.pinned_at, s.created_at, s.updated_at,
                     (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) AS message_count,
                     (SELECT COUNT(*) FROM documents d WHERE d.session_id = s.id) AS document_count
                 FROM chat_sessions s
                 WHERE {where_sql}
-                ORDER BY s.updated_at DESC
+                ORDER BY {order_sql}
             """
             
             query_params = list(params)
@@ -130,6 +143,8 @@ class ChatHistoryService:
                     mode=ChatMode(row["mode"]),
                     is_temporary=bool(row["is_temporary"]),
                     expires_at=row["expires_at"],
+                    is_pinned=bool(row["is_pinned"]) if "is_pinned" in row.keys() else False,
+                    pinned_at=row["pinned_at"] if "pinned_at" in row.keys() else None,
                     created_at=row["created_at"],
                     updated_at=row["updated_at"],
                     message_count=row["message_count"],
@@ -138,6 +153,18 @@ class ChatHistoryService:
                 for row in rows
             ]
             return sessions, total
+
+    def toggle_pin_session(self, session_id: str, is_pinned: bool) -> bool:
+        now = datetime.utcnow().isoformat()
+        pinned_at = now if is_pinned else None
+        pin_val = 1 if is_pinned else 0
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE chat_sessions SET is_pinned = ?, pinned_at = ?, updated_at = ? WHERE id = ?",
+                (pin_val, pinned_at, now, session_id)
+            )
+            return cursor.rowcount > 0
 
     def update_session_title(self, session_id: str, title: str) -> bool:
         now = datetime.utcnow().isoformat()

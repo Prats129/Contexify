@@ -20,6 +20,7 @@ class ChatSessionCreate(BaseModel):
 class ChatSessionUpdate(BaseModel):
     title: Optional[str] = None
     mode: Optional[ChatMode] = None
+    is_pinned: Optional[bool] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -41,6 +42,9 @@ class ModeUpdatePayload(BaseModel):
             data["mode"] = normalize_chat_mode(data.get("mode"), default=ChatMode.AUTO)
         return data
 
+class PinUpdatePayload(BaseModel):
+    is_pinned: bool = Field(..., description="Whether the session is pinned")
+
 
 class ChatSessionResponse(BaseModel):
     id: str
@@ -49,6 +53,8 @@ class ChatSessionResponse(BaseModel):
     mode: ChatMode
     is_temporary: bool = False
     expires_at: Optional[str] = None
+    is_pinned: bool = False
+    pinned_at: Optional[str] = None
     created_at: str
     updated_at: str
     message_count: int = 0

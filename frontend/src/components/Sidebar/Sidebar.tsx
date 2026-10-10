@@ -3,7 +3,7 @@ import { LuPlus, LuX, LuPaperclip, LuMessageCircle } from "react-icons/lu";
 import { FiSidebar } from "react-icons/fi";
 import { UserProfileCard } from "./UserProfileCard";
 import { SessionHistory } from "./SessionHistory";
-import type { User, ChatSession } from "../../types";
+import type { User, ChatSession, SessionSortOrder } from "../../types";
 
 interface SidebarProps {
   isOpen: boolean;
@@ -21,6 +21,9 @@ interface SidebarProps {
     sessionId: string,
     newTitle: string,
   ) => Promise<void> | void;
+  sortOrder?: SessionSortOrder;
+  onSortChange?: (order: SessionSortOrder) => void;
+  onTogglePinSession?: (sessionId: string) => void;
   totalSessions: number;
   hasMore: boolean;
   isLoadingInitial?: boolean;
@@ -45,6 +48,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onNewSession,
   onDeleteSession,
   onRenameSession,
+  sortOrder,
+  onSortChange,
+  onTogglePinSession,
   totalSessions,
   hasMore,
   isLoadingInitial,
@@ -209,6 +215,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
             isSearching={isSearching}
             searchQuery={searchQuery}
             onSearchChange={onSearchChange}
+            sortOrder={sortOrder}
+            onSortChange={onSortChange}
+            onTogglePinSession={onTogglePinSession}
             onLoadMore={onLoadMore}
             onSelectSession={onSelectSession}
             onDeleteSession={onDeleteSession}

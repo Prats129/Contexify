@@ -14,9 +14,13 @@ import {
   LuLoader,
   LuChevronDown,
   LuEllipsis,
+  LuPin,
+  LuPinOff,
+  LuArrowDownWideNarrow,
+  LuArrowUpNarrowWide,
 } from "react-icons/lu";
 import { FaGoogle } from "react-icons/fa";
-import type { ChatSession, User } from "../../types";
+import type { ChatSession, User, SessionSortOrder } from "../../types";
 
 interface SessionHistoryProps {
   isOpen?: boolean;
@@ -30,6 +34,9 @@ interface SessionHistoryProps {
   isSearching?: boolean;
   searchQuery: string;
   onSearchChange: (query: string) => void;
+  sortOrder?: SessionSortOrder;
+  onSortChange?: (order: SessionSortOrder) => void;
+  onTogglePinSession?: (sessionId: string) => void;
   onLoadMore: () => void;
   onSelectSession: (sessionId: string) => void;
   onDeleteSession: (sessionId: string) => void;
@@ -58,6 +65,9 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
   isSearching = false,
   searchQuery,
   onSearchChange,
+  sortOrder = "last_created",
+  onSortChange,
+  onTogglePinSession,
   onLoadMore,
   onSelectSession,
   onDeleteSession,
@@ -361,9 +371,41 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
             <span>Chat History</span>
           </button>
 
-          {/* Action: Search icon toggle button (Replaces conversation count) */}
+          {/* Action: Sort order & Search icon toggle */}
           {!isGuest && (
             <div className="flex items-center gap-1">
+              {onSortChange && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    onSortChange(
+                      sortOrder === "first_created"
+                        ? "last_created"
+                        : "first_created",
+                    )
+                  }
+                  aria-label={
+                    sortOrder === "first_created"
+                      ? "Sorted by First Created (Click for Newest first)"
+                      : "Sorted by Last Created (Click for Oldest first)"
+                  }
+                  title={
+                    sortOrder === "first_created"
+                      ? "Sorted: First Created (Oldest first)"
+                      : "Sorted: Last Created (Newest first)"
+                  }
+                  className="p-1 rounded-md text-(--text-muted) hover:text-(--text-main) hover:bg-(--border-subtle) transition-colors cursor-pointer"
+                >
+                  {sortOrder === "first_created" ? (
+                    <LuArrowUpNarrowWide
+                      size={13}
+                      className="text-primary-theme"
+                    />
+                  ) : (
+                    <LuArrowDownWideNarrow size={13} />
+                  )}
+                </button>
+              )}
               <button
                 ref={searchToggleBtnRef}
                 type="button"
@@ -620,9 +662,24 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
                       title={`${s.title} (${isWeb ? "Web Search" : "Document RAG"}) - Double-click or click pencil to rename`}
                     >
                       <div className="flex flex-col min-w-0 overflow-hidden mr-1 flex-1">
-                        <span className="text-xs truncate font-medium">
-                          {s.title}
-                        </span>
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          {s.is_pinned && (
+                            <LuPin
+                              size={11}
+                              className="text-primary-theme shrink-0 fill-current rotate-45"
+                              title="Pinned chat"
+                            />
+                          )}
+                          <span
+                            className={`text-xs truncate ${
+                              s.is_pinned
+                                ? "font-semibold text-primary-theme"
+                                : "font-medium"
+                            }`}
+                          >
+                            {s.title}
+                          </span>
+                        </div>
                         <div className="flex items-center gap-1.5 text-[10px] text-(--text-muted)">
                           <span className="bg-(--border-subtle) px-1.5 py-0.5 rounded text-[9px] flex items-center gap-1 font-normal">
                             {isWeb ? (
@@ -706,6 +763,37 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
             style={{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }}
             onClick={(e) => e.stopPropagation()}
           >
+            {onTogglePinSession && (
+              <>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-(--text-main) hover:bg-primary-light-theme hover:text-primary-theme transition-colors cursor-pointer text-left w-full font-medium"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const sessId = contextMenu.session.id;
+                    setContextMenu(null);
+                    onTogglePinSession(sessId);
+                  }}
+                >
+                  {contextMenu.session.is_pinned ? (
+                    <>
+                      <LuPinOff size={13} className="shrink-0 text-amber-500" />
+                      <span>Unpin</span>
+                    </>
+                  ) : (
+                    <>
+                      <LuPin
+                        size={13}
+                        className="shrink-0 text-primary-theme"
+                      />
+                      <span>Pin to top</span>
+                    </>
+                  )}
+                </button>
+                <div className="h-px bg-(--border-subtle) my-0.5" />
+              </>
+            )}
             <button
               type="button"
               role="menuitem"

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { apiService } from '../services/api';
-import type { ChatSession, ChatMode } from '../types';
+import type { ChatSession, ChatMode, SessionSortOrder } from '../types';
 
 interface UseChatSessionsOptions {
   userId: string | null;
@@ -17,6 +17,9 @@ export interface UseChatSessionsReturn {
   isSearching: boolean;
   searchQuery: string;
   setSearchQuery: (query: string) => void;
+  sortOrder: SessionSortOrder;
+  setSortOrder: (order: SessionSortOrder) => void;
+  togglePinSession: (sessionId: string) => Promise<void>;
   loadMore: () => Promise<void>;
   reload: () => Promise<void>;
   prependSession: (session: ChatSession) => void;
@@ -30,6 +33,27 @@ export interface UseChatSessionsReturn {
 const DEFAULT_PAGE_SIZE = 12;
 const SEARCH_DEBOUNCE_MS = 300;
 
+export const sortSessionsList = (
+  list: ChatSession[],
+  order: SessionSortOrder
+): ChatSession[] => {
+  return [...list].sort((a, b) => {
+    // 1. Pinned conversations always appear first at the top
+    const aPinned = Boolean(a.is_pinned);
+    const bPinned = Boolean(b.is_pinned);
+    if (aPinned !== bPinned) {
+      return aPinned ? -1 : 1;
+    }
+    // 2. Sort by creation timestamp
+    const aTime = new Date(a.created_at).getTime() || 0;
+    const bTime = new Date(b.created_at).getTime() || 0;
+    if (order === 'first_created') {
+      return aTime - bTime;
+    }
+    return bTime - aTime;
+  });
+};
+
 export function useChatSessions({
   userId,
   pageSize = DEFAULT_PAGE_SIZE,
@@ -42,6 +66,25 @@ export function useChatSessions({
   const [isSearching, setIsSearching] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
 
+  // Persistent Sort Order State (last_created vs first_created)
+  const [sortOrder, setSortOrderState] = useState<SessionSortOrder>(() => {
+    try {
+      const saved = localStorage.getItem('contexify_session_sort');
+      return saved === 'first_created' ? 'first_created' : 'last_created';
+    } catch {
+      return 'last_created';
+    }
+  });
+
+  const setSortOrder = useCallback((order: SessionSortOrder) => {
+    setSortOrderState(order);
+    try {
+      localStorage.setItem('contexify_session_sort', order);
+    } catch {
+      // Ignore localStorage errors
+    }
+  }, []);
+
   // Refs for race-condition prevention and debouncing
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchAbortControllerRef = useRef<AbortController | null>(null);
@@ -51,7 +94,7 @@ export function useChatSessions({
 
   // --- Initial Load / Reload of First Page ---
   const fetchInitialPage = useCallback(
-    async (targetUserId: string, searchFilter?: string) => {
+    async (targetUserId: string, searchFilter?: string, currentSort: SessionSortOrder = sortOrder) => {
       if (!targetUserId || targetUserId.startsWith('guest')) {
         setSessions([]);
         setTotal(0);
@@ -79,12 +122,14 @@ export function useChatSessions({
           limit: pageSize,
           offset: 0,
           search: isSearchQuery ? searchFilter!.trim() : undefined,
+          sort_by: currentSort,
           signal: controller.signal,
         });
 
         if (currentRequestId === searchRequestIdRef.current) {
-          setSessions(result.sessions || []);
-          setTotal(result.total ?? result.sessions?.length ?? 0);
+          const raw = result.sessions || [];
+          setSessions(sortSessionsList(raw, currentSort));
+          setTotal(result.total ?? raw.length);
           setHasMore(Boolean(result.has_more));
         }
       } catch (err: unknown) {
@@ -99,7 +144,7 @@ export function useChatSessions({
         }
       }
     },
-    [pageSize]
+    [pageSize, sortOrder]
   );
 
   // --- User Change Effect ---
@@ -118,6 +163,13 @@ export function useChatSessions({
     }
   }, [userId, fetchInitialPage]);
 
+  // --- Re-fetch on Sort Order Change ---
+  useEffect(() => {
+    if (userId && !userId.startsWith('guest')) {
+      fetchInitialPage(userId, searchQuery.trim() || undefined, sortOrder);
+    }
+  }, [sortOrder]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // --- Debounced Search Effect ---
   useEffect(() => {
     if (!userId || userId.startsWith('guest')) return;
@@ -132,12 +184,12 @@ export function useChatSessions({
       hadSearchRef.current = true;
       setIsSearching(true);
       searchTimeoutRef.current = setTimeout(() => {
-        fetchInitialPage(userId, trimmed);
+        fetchInitialPage(userId, trimmed, sortOrder);
       }, SEARCH_DEBOUNCE_MS);
     } else if (hadSearchRef.current) {
-      // Search was cleared - reload main recent list immediately
+      // Search was cleared - reload main list immediately
       hadSearchRef.current = false;
-      fetchInitialPage(userId);
+      fetchInitialPage(userId, undefined, sortOrder);
     }
 
     return () => {
@@ -145,7 +197,7 @@ export function useChatSessions({
         clearTimeout(searchTimeoutRef.current);
       }
     };
-  }, [searchQuery, userId, fetchInitialPage]);
+  }, [searchQuery, userId, sortOrder, fetchInitialPage]);
 
   // --- Load Next Page (Infinite Scroll) ---
   const loadMore = useCallback(async () => {
@@ -162,12 +214,13 @@ export function useChatSessions({
         limit: pageSize,
         offset: currentOffset,
         search: currentSearch,
+        sort_by: sortOrder,
       });
 
       setSessions((prev) => {
         const existingIds = new Set(prev.map((s) => s.id));
         const uniqueNew = (result.sessions || []).filter((s) => !existingIds.has(s.id));
-        return [...prev, ...uniqueNew];
+        return sortSessionsList([...prev, ...uniqueNew], sortOrder);
       });
 
       setTotal(result.total);
@@ -177,23 +230,69 @@ export function useChatSessions({
     } finally {
       setIsLoadingMore(false);
     }
-  }, [userId, isLoadingMore, hasMore, isLoadingInitial, sessions.length, searchQuery, pageSize]);
+  }, [userId, isLoadingMore, hasMore, isLoadingInitial, sessions.length, searchQuery, pageSize, sortOrder]);
 
   // --- Public Reload Method ---
   const reload = useCallback(async () => {
     if (userId) {
-      await fetchInitialPage(userId, searchQuery.trim() || undefined);
+      await fetchInitialPage(userId, searchQuery.trim() || undefined, sortOrder);
     }
-  }, [userId, searchQuery, fetchInitialPage]);
+  }, [userId, searchQuery, sortOrder, fetchInitialPage]);
+
+  // --- Pin / Unpin Session Handler ---
+  const togglePinSession = useCallback(
+    async (sessionId: string) => {
+      const target = sessions.find((s) => s.id === sessionId);
+      if (!target) return;
+      const nextPinned = !target.is_pinned;
+
+      // Optimistic update
+      setSessions((prev) => {
+        const updated = prev.map((s) =>
+          s.id === sessionId
+            ? {
+                ...s,
+                is_pinned: nextPinned,
+                pinned_at: nextPinned ? new Date().toISOString() : null,
+              }
+            : s
+        );
+        return sortSessionsList(updated, sortOrder);
+      });
+
+      try {
+        await apiService.togglePinSession(sessionId, nextPinned);
+      } catch (err) {
+        console.error('Failed to toggle pin session:', err);
+        // Rollback
+        setSessions((prev) => {
+          const rolledBack = prev.map((s) =>
+            s.id === sessionId
+              ? {
+                  ...s,
+                  is_pinned: target.is_pinned,
+                  pinned_at: target.pinned_at,
+                }
+              : s
+          );
+          return sortSessionsList(rolledBack, sortOrder);
+        });
+      }
+    },
+    [sessions, sortOrder]
+  );
 
   // --- In-Memory Mutators for Optimistic UI ---
-  const prependSession = useCallback((newSession: ChatSession) => {
-    setSessions((prev) => {
-      const filtered = prev.filter((s) => s.id !== newSession.id);
-      return [newSession, ...filtered];
-    });
-    setTotal((prev) => prev + 1);
-  }, []);
+  const prependSession = useCallback(
+    (newSession: ChatSession) => {
+      setSessions((prev) => {
+        const filtered = prev.filter((s) => s.id !== newSession.id);
+        return sortSessionsList([newSession, ...filtered], sortOrder);
+      });
+      setTotal((prev) => prev + 1);
+    },
+    [sortOrder]
+  );
 
   const updateSessionTitle = useCallback((sessionId: string, newTitle: string) => {
     setSessions((prev) =>
@@ -212,14 +311,17 @@ export function useChatSessions({
     setTotal((prev) => Math.max(0, prev - 1));
   }, []);
 
-  const ensureSessionInList = useCallback((session: ChatSession) => {
-    setSessions((prev) => {
-      if (prev.some((s) => s.id === session.id)) {
-        return prev;
-      }
-      return [session, ...prev];
-    });
-  }, []);
+  const ensureSessionInList = useCallback(
+    (session: ChatSession) => {
+      setSessions((prev) => {
+        if (prev.some((s) => s.id === session.id)) {
+          return prev;
+        }
+        return sortSessionsList([session, ...prev], sortOrder);
+      });
+    },
+    [sortOrder]
+  );
 
   return {
     sessions,
@@ -230,6 +332,9 @@ export function useChatSessions({
     isSearching,
     searchQuery,
     setSearchQuery,
+    sortOrder,
+    setSortOrder,
+    togglePinSession,
     loadMore,
     reload,
     prependSession,

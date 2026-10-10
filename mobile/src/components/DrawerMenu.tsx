@@ -24,7 +24,12 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
 import { colors, getAppTheme, type AppTheme } from "../theme/colors";
 import { apiService } from "../services/api";
-import type { ChatSession, DocumentMetadata, User } from "../types";
+import type {
+  ChatSession,
+  DocumentMetadata,
+  User,
+  SessionSortOrder,
+} from "../types";
 
 interface DrawerMenuProps {
   visible: boolean;
@@ -41,6 +46,9 @@ interface DrawerMenuProps {
   onSelectSession: (id: string) => void;
   onDeleteSession: (id: string) => void;
   onRenameSession?: (id: string, newTitle: string) => Promise<void> | void;
+  sortOrder?: SessionSortOrder;
+  onToggleSortOrder?: () => void;
+  onTogglePinSession?: (id: string) => void;
   onNewChat: () => void;
   documents?: DocumentMetadata[];
   onDeleteDocument?: (id: string) => void;
@@ -68,6 +76,9 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
   onSelectSession,
   onDeleteSession,
   onRenameSession,
+  sortOrder = "last_created",
+  onToggleSortOrder,
+  onTogglePinSession,
   onNewChat,
   documents = [],
   onDeleteDocument,
@@ -435,21 +446,50 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
               </TouchableOpacity>
 
               {currentUser ? (
-                <TouchableOpacity
-                  style={[
-                    styles.searchToggleBtn,
-                    isSearchOpen && { backgroundColor: theme.primaryLight },
-                  ]}
-                  onPress={handleToggleSearch}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  accessibilityLabel="Search conversations"
+                <View
+                  style={{ flexDirection: "row", alignItems: "center", gap: 6 }}
                 >
-                  <Feather
-                    name={isSearchOpen ? "x" : "search"}
-                    size={14}
-                    color={isSearchOpen ? colors.primary : theme.textMuted}
-                  />
-                </TouchableOpacity>
+                  {onToggleSortOrder && (
+                    <TouchableOpacity
+                      style={styles.searchToggleBtn}
+                      onPress={() => {
+                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                        onToggleSortOrder();
+                      }}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      accessibilityLabel={
+                        sortOrder === "first_created"
+                          ? "Sorted by First Created (Click for Newest first)"
+                          : "Sorted by Last Created (Click for Oldest first)"
+                      }
+                    >
+                      <Ionicons
+                        name="swap-vertical-outline"
+                        size={15}
+                        color={
+                          sortOrder === "first_created"
+                            ? colors.primary
+                            : theme.textMuted
+                        }
+                      />
+                    </TouchableOpacity>
+                  )}
+                  <TouchableOpacity
+                    style={[
+                      styles.searchToggleBtn,
+                      isSearchOpen && { backgroundColor: theme.primaryLight },
+                    ]}
+                    onPress={handleToggleSearch}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    accessibilityLabel="Search conversations"
+                  >
+                    <Feather
+                      name={isSearchOpen ? "x" : "search"}
+                      size={14}
+                      color={isSearchOpen ? colors.primary : theme.textMuted}
+                    />
+                  </TouchableOpacity>
+                </View>
               ) : (
                 <Text style={[styles.sectionCount, { color: theme.textMuted }]}>
                   Guest
@@ -670,12 +710,20 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
                         size={14}
                         color={isActive ? colors.primary : theme.textMuted}
                       />
+                      {s.is_pinned && (
+                        <Ionicons
+                          name="pin"
+                          size={11}
+                          color={colors.primary}
+                          style={{ marginRight: 1 }}
+                        />
+                      )}
                       <Text
                         style={[
                           styles.sessionTitle,
                           {
                             color: isActive ? colors.primary : theme.textMain,
-                            fontWeight: isActive ? "700" : "500",
+                            fontWeight: isActive || s.is_pinned ? "700" : "500",
                           },
                         ]}
                         numberOfLines={1}
@@ -901,6 +949,57 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
                     { backgroundColor: theme.borderSubtle },
                   ]}
                 />
+
+                {onTogglePinSession && (
+                  <>
+                    <TouchableOpacity
+                      style={styles.dropdownMenuItem}
+                      onPress={() => {
+                        const s = activeMenuSession.session;
+                        setActiveMenuSession(null);
+                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                        onTogglePinSession(s.id);
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons
+                        name={
+                          activeMenuSession.session.is_pinned
+                            ? "pin"
+                            : "pin-outline"
+                        }
+                        size={14}
+                        color={
+                          activeMenuSession.session.is_pinned
+                            ? colors.primary
+                            : theme.textMain
+                        }
+                        style={{ marginRight: 10 }}
+                      />
+                      <Text
+                        style={[
+                          styles.dropdownItemText,
+                          {
+                            color: activeMenuSession.session.is_pinned
+                              ? colors.primary
+                              : theme.textMain,
+                          },
+                        ]}
+                      >
+                        {activeMenuSession.session.is_pinned
+                          ? "Unpin chat"
+                          : "Pin to top"}
+                      </Text>
+                    </TouchableOpacity>
+
+                    <View
+                      style={[
+                        styles.dropdownDivider,
+                        { backgroundColor: theme.borderSubtle },
+                      ]}
+                    />
+                  </>
+                )}
 
                 <TouchableOpacity
                   style={styles.dropdownMenuItem}

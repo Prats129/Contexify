@@ -149,16 +149,21 @@ export interface ChatSession {
   mode: ChatMode;
   is_temporary?: boolean;
   expires_at?: string | null;
+  is_pinned?: boolean;
+  pinned_at?: string | null;
   created_at: string;
   updated_at: string;
   message_count?: number;
   document_count?: number;
 }
 
+export type SessionSortOrder = 'last_created' | 'first_created';
+
 export interface SessionListParams {
   limit?: number;
   offset?: number;
   search?: string;
+  sort_by?: SessionSortOrder;
   signal?: AbortSignal;
 }
 

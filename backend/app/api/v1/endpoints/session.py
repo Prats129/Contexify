@@ -7,6 +7,7 @@ from app.schemas.session import (
     SessionHistoryResponse,
     TitleUpdatePayload,
     ModeUpdatePayload,
+    PinUpdatePayload,
     PaginatedChatSessionsResponse
 )
 from app.services.chat_history_service import chat_history_service
@@ -57,11 +58,12 @@ async def list_sessions(
     limit: Optional[int] = Query(None, ge=1, le=100, description="Page size limit"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     search: Optional[str] = Query(None, description="Optional search term to filter chat titles"),
+    sort_by: Optional[str] = Query("last_created", description="Sort order: 'last_created' or 'first_created'"),
     paginate: Optional[bool] = Query(None, description="Explicitly request paginated object format")
 ):
     """
-    List chat sessions for a given user ordered by most recently active.
-    Supports limit/offset pagination and real-time database-level title search.
+    List chat sessions for a given user ordered by pinned status and creation order.
+    Supports limit/offset pagination, real-time title search, and sort_by (last_created / first_created).
     """
     is_paginated_requested = paginate is True or limit is not None or (search is not None and search.strip() != "")
 
@@ -80,7 +82,8 @@ async def list_sessions(
         user_id=user_id,
         limit=limit,
         offset=offset,
-        search=search
+        search=search,
+        sort_by=sort_by
     )
 
     has_more = (offset + len(sessions)) < total if limit is not None else False
@@ -120,6 +123,16 @@ async def update_session_title(session_id: str, payload: TitleUpdatePayload):
     if not success:
         raise HTTPException(status_code=404, detail="Session not found.")
     return {"message": "Title updated successfully", "title": payload.title.strip()}
+
+@router.patch("/{session_id}/pin")
+async def toggle_pin_session(session_id: str, payload: PinUpdatePayload):
+    """
+    Pin or unpin a chat conversation thread.
+    """
+    success = chat_history_service.toggle_pin_session(session_id, payload.is_pinned)
+    if not success:
+        raise HTTPException(status_code=404, detail="Session not found.")
+    return {"message": "Session pin status updated", "session_id": session_id, "is_pinned": payload.is_pinned}
 
 @router.patch("/{session_id}/mode")
 async def update_session_mode(session_id: str, payload: ModeUpdatePayload):

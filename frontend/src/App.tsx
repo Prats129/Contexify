@@ -105,6 +105,9 @@ export const App: React.FC = () => {
     isSearching: isSearchingSessions,
     searchQuery: sessionSearchQuery,
     setSearchQuery: setSessionSearchQuery,
+    sortOrder: sessionSortOrder,
+    setSortOrder: setSessionSortOrder,
+    togglePinSession,
     loadMore: loadMoreSessions,
     prependSession,
     updateSessionTitle,
@@ -1026,6 +1029,9 @@ export const App: React.FC = () => {
         isSearching={isSearchingSessions}
         searchQuery={sessionSearchQuery}
         onSearchChange={setSessionSearchQuery}
+        sortOrder={sessionSortOrder}
+        onSortChange={setSessionSortOrder}
+        onTogglePinSession={togglePinSession}
         onLoadMore={loadMoreSessions}
         activeSessionId={activeSessionId}
         onSelectSession={selectSession}
