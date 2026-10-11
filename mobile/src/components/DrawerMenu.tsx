@@ -24,6 +24,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
 import { colors, getAppTheme, type AppTheme } from "../theme/colors";
 import { apiService } from "../services/api";
+import { SHOW_DEV_SERVER_CONFIG } from "../config/env";
 import type {
   ChatSession,
   DocumentMetadata,
@@ -871,30 +872,32 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
               </TouchableOpacity>
             )}
 
-            {/* Server IP / Wi-Fi Config Button */}
-            <TouchableOpacity
-              style={[
-                styles.serverConfigBtn,
-                { backgroundColor: theme.borderSubtle },
-              ]}
-              onPress={() => {
-                handleClose(() => onOpenServerConfig());
-              }}
-              activeOpacity={0.7}
-            >
-              <Feather name="server" size={13} color={theme.textMuted} />
-              <Text
-                style={[styles.serverConfigText, { color: theme.textMuted }]}
+            {/* Server IP / Wi-Fi Config Button (Enterprise-standard environment governance via src/config/env) */}
+            {SHOW_DEV_SERVER_CONFIG && (
+              <TouchableOpacity
+                style={[
+                  styles.serverConfigBtn,
+                  { backgroundColor: theme.borderSubtle },
+                ]}
+                onPress={() => {
+                  handleClose(() => onOpenServerConfig());
+                }}
+                activeOpacity={0.7}
               >
-                Backend Server IP / Wi-Fi
-              </Text>
-              <Feather
-                name="sliders"
-                size={12}
-                color={theme.textMuted}
-                style={{ marginLeft: "auto" }}
-              />
-            </TouchableOpacity>
+                <Feather name="server" size={13} color={theme.textMuted} />
+                <Text
+                  style={[styles.serverConfigText, { color: theme.textMuted }]}
+                >
+                  Backend Server IP / Wi-Fi
+                </Text>
+                <Feather
+                  name="sliders"
+                  size={12}
+                  color={theme.textMuted}
+                  style={{ marginLeft: "auto" }}
+                />
+              </TouchableOpacity>
+            )}
           </View>
 
           {/* Floating Context Popup Menu for Chat Item Options on Long Press */}

@@ -15,6 +15,7 @@
         "buildType": "apk"
       },
       "env": {
+        "EXPO_PUBLIC_APP_ENV": "production",
         "EXPO_PUBLIC_API_URL": "https://contexify-backend.onrender.com"
       }
     },
@@ -22,6 +23,7 @@
       "channel": "production",
       "autoIncrement": true,
       "env": {
+        "EXPO_PUBLIC_APP_ENV": "production",
         "EXPO_PUBLIC_API_URL": "https://contexify-backend.onrender.com"
       }
     }
