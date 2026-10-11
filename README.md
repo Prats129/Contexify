@@ -78,8 +78,9 @@ Built as a high-performance monorepo, Contexify provides synchronized clients ac
 ### 📱 Native Mobile Application (iOS & Android)
 
 - **Engineered with React Native 0.86 & Expo 57**: Pure 60fps native performance with zero webview wrappers.
-- **Real-Time SSE Streaming**: Native `XMLHttpRequest` stream consumer with cancellation, token-by-token buffering, and haptic feedback (`expo-haptics`).
-- **Session History Drawer**: Slide-out drawer with recent conversation history, thread deletion, new chat creation, and document listings.
+- **Gesture-Driven Interactions**: Left-edge swipe navigation to reveal sidebar, WhatsApp-style swipe-to-reply, long-press action popups, and floating scroll-to-latest button with haptic feedback (`expo-haptics`).
+- **Real-Time SSE Streaming**: Native `XMLHttpRequest` stream consumer with cancellation, token-by-token buffering, and haptic feedback.
+- **Session History Drawer**: Slide-out drawer with pinned session filtering, chronological sorting (newest/oldest), search, thread deletion, renaming, and document listings.
 - **Dynamic LAN IP Switcher**: In-app configuration modal allowing instant switching between production backends and local dev IP addresses (`http://192.168.x.x:8001/api/v1`).
 
 ### 👥 Enterprise Authentication & Profile Management
@@ -95,6 +96,7 @@ Built as a high-performance monorepo, Contexify provides synchronized clients ac
 - **Adaptive Modes**: True OLED Dark Mode and clean Light Mode.
 - **7 Curated Accent Color Palettes**: _Ocean Blue, Royal Purple, Emerald Forest, Sunset Rose, Amber Gold, Cyan Wave, Indigo Night_.
 - **Prompt Timeline Rail**: Viewport-pinned timeline with real-time tracking, hover flyout menu, and direct jump navigation.
+- **Interactive Threading & Actions**: Tagged message reply references with jump-to-source glow navigation, ellipsis action menus, and favorite session pinning with persistent sort preferences.
 - **Selective Text Copying**: Granular text selection copying alongside whole-message export, allowing users to copy individual sentences, paragraphs, or code blocks cleanly.
 
 ---
@@ -152,17 +154,17 @@ flowchart TD
 
 ## 💻 Tech Stack
 
-| Layer               | Technologies                                                    | Description                                                                  |
-| :------------------ | :-------------------------------------------------------------- | :--------------------------------------------------------------------------- |
-| **Web Frontend**    | React 18, TypeScript, Vite, Tailwind CSS, Lucide Icons, KaTeX   | Responsive web client with rich markdown, LaTeX math, and code highlighting  |
-| **Mobile App**      | React Native 0.86, Expo SDK 57, TypeScript, Expo Haptics        | Cross-platform mobile app with gesture bottom sheets and SSE stream consumer |
-| **Backend API**     | Python 3.11+, FastAPI, Uvicorn, Pydantic v2, SSE-Starlette      | Asynchronous REST and Server-Sent Events (SSE) streaming engine              |
-| **AI / Reasoning**  | Google Gemini (`gemini-3.5-flash`, `gemini-embedding-001`)      | Calibrated 768-dimensional embeddings and multi-turn contextual reasoning    |
-| **AI Image Gen**    | Google Imagen 3 (`imagen-3.0-generate-002`) & FLUX Fallback     | Enterprise text-to-image synthesis and reference-guided remixing             |
-| **Object Storage**  | Cloudflare R2 (S3-Compatible via `boto3`) + Local Disk Fallback | High-speed, zero-egress asset storage for documents, avatars, and media      |
-| **Relational DB**   | Turso (`libsql-client`) + Local SQLite (WAL Mode)               | Distributed serverless SQLite with automatic schema migrations               |
-| **Vector Store**    | Pinecone Serverless + ChromaDB                                  | Scalable high-dimensional semantic search and chunk retrieval                |
-| **Auth & Security** | Google OAuth 2.0, Brevo HTTPS REST API, PBKDF2-HMAC-SHA256      | Enterprise identity, passwordless OTP, and cryptographic salting             |
+| Layer               | Technologies                                                    | Description                                                                                 |
+| :------------------ | :-------------------------------------------------------------- | :------------------------------------------------------------------------------------------ |
+| **Web Frontend**    | React 18, TypeScript, Vite, Tailwind CSS, Lucide Icons, KaTeX   | Responsive web client with swipe-to-reply, jump-to-reference, timeline navigation & LaTeX   |
+| **Mobile App**      | React Native 0.86, Expo SDK 57, TypeScript, Expo Haptics        | Native mobile app with edge-swipe drawer navigation, swipe-to-reply & floating jump button  |
+| **Backend API**     | Python 3.11+, FastAPI, Uvicorn, Pydantic v2, SSE-Starlette      | Asynchronous REST and Server-Sent Events (SSE) streaming engine                             |
+| **AI / Reasoning**  | Google Gemini (`gemini-3.5-flash`, `gemini-embedding-001`)      | Calibrated 768-dimensional embeddings and multi-turn contextual reasoning                   |
+| **AI Image Gen**    | Google Imagen 3 (`imagen-3.0-generate-002`) & FLUX Fallback     | Enterprise text-to-image synthesis and reference-guided remixing                            |
+| **Object Storage**  | Cloudflare R2 (S3-Compatible via `boto3`) + Local Disk Fallback | High-speed, zero-egress asset storage for documents, avatars, and media                     |
+| **Relational DB**   | Turso (`libsql-client`) + Local SQLite (WAL Mode)               | Serverless SQLite with automatic schema migrations, session pinning & chronological sorting |
+| **Vector Store**    | Pinecone Serverless + ChromaDB                                  | Scalable high-dimensional semantic search and chunk retrieval                               |
+| **Auth & Security** | Google OAuth 2.0, Brevo HTTPS REST API, PBKDF2-HMAC-SHA256      | Enterprise identity, passwordless OTP, and cryptographic salting                            |
 
 ---
 
