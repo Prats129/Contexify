@@ -12,6 +12,7 @@ import {
   LuFileText,
   LuImage,
   LuPalette,
+  LuPaperclip,
 } from "react-icons/lu";
 import { useTheme } from "../../context/ThemeContext";
 import type { ChatMode, User } from "../../types";
@@ -25,6 +26,7 @@ interface ChatHeaderProps {
   onToggleSidebar?: () => void;
   isTemporaryChat?: boolean;
   onToggleTemporaryChat?: () => void;
+  onOpenAttachmentsModal?: () => void;
 }
 
 export const ChatHeader: React.FC<ChatHeaderProps> = ({
@@ -36,6 +38,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   onToggleSidebar,
   isTemporaryChat = false,
   onToggleTemporaryChat,
+  onOpenAttachmentsModal,
 }) => {
   const { mode, toggleMode } = useTheme();
 
@@ -156,15 +159,28 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
           </button>
         )}
 
+        {/* Attachments & Media Library Button (Logged-in users only) */}
+        {Boolean(currentUser && onOpenAttachmentsModal) && (
+          <button
+            type="button"
+            onClick={onOpenAttachmentsModal}
+            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-medium rounded-lg cursor-pointer transition-colors text-(--text-muted) hover:text-(--text-main) bg-(--border-subtle) hover:bg-(--border-hover) border border-(--border-subtle)"
+            title="Open Attachments & Media Library"
+          >
+            <LuPaperclip size={14} className="shrink-0" />
+            <span className="hidden sm:inline">Attachments</span>
+          </button>
+        )}
+
         {/* Clear Chat Button (only available for authenticated account holders) */}
         {Boolean(currentUser && hasMessages && onClearChat) && (
           <button
             type="button"
             onClick={onClearChat}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-(--text-muted) hover:text-red-500 hover:bg-red-500/10 rounded-lg cursor-pointer transition-colors"
+            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-medium text-(--text-muted) hover:text-red-500 bg-(--border-subtle) hover:bg-red-500/10 border border-(--border-subtle) hover:border-red-500/30 rounded-lg cursor-pointer transition-colors"
             title="Clear message history (keeps documents)"
           >
-            <LuEraser size={14} />
+            <LuEraser size={14} className="shrink-0" />
             <span className="hidden sm:inline">Clear Chat</span>
           </button>
         )}

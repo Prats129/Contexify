@@ -1,10 +1,10 @@
 import json
 import uuid
 from datetime import datetime, timedelta
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from app.core.config import settings
 from app.db.database import get_db_connection
-from app.schemas.chat import ChatMode, Citation, MediaAttachment
+from app.schemas.chat import ChatMode, Citation, MediaAttachment, MessageReplyReference
 from app.schemas.document import DocumentMetadata
 from app.schemas.session import ChatSessionResponse, MessageResponse, SessionHistoryResponse
 from app.core.logging import logger
@@ -44,6 +44,8 @@ class ChatHistoryService:
             mode=ChatMode(mode) if isinstance(mode, str) else mode,
             is_temporary=is_temporary,
             expires_at=expires_at,
+            is_pinned=False,
+            pinned_at=None,
             created_at=now,
             updated_at=now,
             message_count=0,
@@ -56,7 +58,8 @@ class ChatHistoryService:
             cursor.execute(
                 """
                 SELECT 
-                    s.id, s.user_id, s.title, s.mode, s.is_temporary, s.expires_at, s.created_at, s.updated_at,
+                    s.id, s.user_id, s.title, s.mode, s.is_temporary, s.expires_at, 
+                    s.is_pinned, s.pinned_at, s.created_at, s.updated_at,
                     (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) AS message_count,
                     (SELECT COUNT(*) FROM documents d WHERE d.session_id = s.id) AS document_count
                 FROM chat_sessions s
@@ -74,29 +77,65 @@ class ChatHistoryService:
                 mode=ChatMode(row["mode"]),
                 is_temporary=bool(row["is_temporary"]),
                 expires_at=row["expires_at"],
+                is_pinned=bool(row["is_pinned"]) if "is_pinned" in row.keys() else False,
+                pinned_at=row["pinned_at"] if "pinned_at" in row.keys() else None,
                 created_at=row["created_at"],
                 updated_at=row["updated_at"],
                 message_count=row["message_count"],
                 document_count=row["document_count"]
             )
 
-    def list_user_sessions(self, user_id: str) -> List[ChatSessionResponse]:
+    def list_user_sessions(
+        self,
+        user_id: str,
+        limit: Optional[int] = None,
+        offset: int = 0,
+        search: Optional[str] = None,
+        sort_by: Optional[str] = "last_created"
+    ) -> Tuple[List[ChatSessionResponse], int]:
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                """
+            
+            where_clauses = ["s.user_id = ?", "(s.is_temporary IS NULL OR s.is_temporary = 0)"]
+            params: list = [user_id]
+            
+            if search and search.strip():
+                where_clauses.append("LOWER(s.title) LIKE ?")
+                params.append(f"%{search.strip().lower()}%")
+                
+            where_sql = " AND ".join(where_clauses)
+            
+            # Count total matching sessions
+            cursor.execute(f"SELECT COUNT(*) AS total FROM chat_sessions s WHERE {where_sql}", tuple(params))
+            total_row = cursor.fetchone()
+            total = int(total_row["total"]) if total_row and total_row["total"] is not None else 0
+            
+            # Determine sorting order (pinned always float to top)
+            if sort_by == "first_created":
+                order_sql = "COALESCE(s.is_pinned, 0) DESC, s.created_at ASC"
+            else:
+                order_sql = "COALESCE(s.is_pinned, 0) DESC, s.created_at DESC"
+
+            query = f"""
                 SELECT 
-                    s.id, s.user_id, s.title, s.mode, s.is_temporary, s.expires_at, s.created_at, s.updated_at,
+                    s.id, s.user_id, s.title, s.mode, s.is_temporary, s.expires_at, 
+                    s.is_pinned, s.pinned_at, s.created_at, s.updated_at,
                     (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) AS message_count,
                     (SELECT COUNT(*) FROM documents d WHERE d.session_id = s.id) AS document_count
                 FROM chat_sessions s
-                WHERE s.user_id = ? AND (s.is_temporary IS NULL OR s.is_temporary = 0)
-                ORDER BY s.updated_at DESC
-                """,
-                (user_id,)
-            )
+                WHERE {where_sql}
+                ORDER BY {order_sql}
+            """
+            
+            query_params = list(params)
+            if limit is not None:
+                query += " LIMIT ? OFFSET ?"
+                query_params.extend([max(1, limit), max(0, offset)])
+                
+            cursor.execute(query, tuple(query_params))
             rows = cursor.fetchall()
-            return [
+            
+            sessions = [
                 ChatSessionResponse(
                     id=row["id"],
                     user_id=row["user_id"],
@@ -104,6 +143,8 @@ class ChatHistoryService:
                     mode=ChatMode(row["mode"]),
                     is_temporary=bool(row["is_temporary"]),
                     expires_at=row["expires_at"],
+                    is_pinned=bool(row["is_pinned"]) if "is_pinned" in row.keys() else False,
+                    pinned_at=row["pinned_at"] if "pinned_at" in row.keys() else None,
                     created_at=row["created_at"],
                     updated_at=row["updated_at"],
                     message_count=row["message_count"],
@@ -111,6 +152,19 @@ class ChatHistoryService:
                 )
                 for row in rows
             ]
+            return sessions, total
+
+    def toggle_pin_session(self, session_id: str, is_pinned: bool) -> bool:
+        now = datetime.utcnow().isoformat()
+        pinned_at = now if is_pinned else None
+        pin_val = 1 if is_pinned else 0
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE chat_sessions SET is_pinned = ?, pinned_at = ?, updated_at = ? WHERE id = ?",
+                (pin_val, pinned_at, now, session_id)
+            )
+            return cursor.rowcount > 0
 
     def update_session_title(self, session_id: str, title: str) -> bool:
         now = datetime.utcnow().isoformat()
@@ -166,7 +220,8 @@ class ChatHistoryService:
         role: str,
         content: str,
         citations: Optional[List[Dict[str, Any]]] = None,
-        attachments: Optional[List[Any]] = None
+        attachments: Optional[List[Any]] = None,
+        reply_to: Optional[Any] = None
     ) -> MessageResponse:
         message_id = str(uuid.uuid4())
         now = datetime.utcnow().isoformat()
@@ -189,16 +244,33 @@ class ChatHistoryService:
                 logger.error(f"Error serializing attachments for session {session_id}: {e}")
                 attachments_json = "[]"
 
+        # Serialize reply_to to JSON
+        reply_to_json = None
+        reply_to_obj = None
+        if reply_to:
+            try:
+                if hasattr(reply_to, "model_dump"):
+                    dumped_r = reply_to.model_dump()
+                elif isinstance(reply_to, dict):
+                    dumped_r = reply_to
+                else:
+                    dumped_r = dict(reply_to)
+                reply_to_json = json.dumps(dumped_r)
+                reply_to_obj = MessageReplyReference(**dumped_r)
+            except Exception as e:
+                logger.error(f"Error serializing reply_to for session {session_id}: {e}")
+                reply_to_json = None
+
         # Only persist to SQLite if the session is registered in the database (logged-in user)
         if self.get_session(session_id) is not None:
             with get_db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
                     """
-                    INSERT INTO messages (id, session_id, role, content, citations_json, attachments_json, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO messages (id, session_id, role, content, citations_json, attachments_json, reply_to_json, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (message_id, session_id, role, content, citations_json, attachments_json, now)
+                    (message_id, session_id, role, content, citations_json, attachments_json, reply_to_json, now)
                 )
                 cursor.execute(
                     "UPDATE chat_sessions SET updated_at = ? WHERE id = ?",
@@ -216,6 +288,7 @@ class ChatHistoryService:
             content=content,
             citations=citations_obj,
             attachments=attachments_obj,
+            reply_to=reply_to_obj,
             created_at=now
         )
 
@@ -224,7 +297,7 @@ class ChatHistoryService:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT id, session_id, role, content, citations_json, attachments_json, created_at
+                SELECT id, session_id, role, content, citations_json, attachments_json, reply_to_json, created_at
                 FROM messages
                 WHERE session_id = ?
                 ORDER BY created_at ASC
@@ -244,7 +317,6 @@ class ChatHistoryService:
                         logger.error(f"Error parsing citations for message {row['id']}: {e}")
 
                 attachments = None
-                # Check if attachments_json column exists and has content
                 row_keys = row.keys() if hasattr(row, "keys") else []
                 if "attachments_json" in row_keys and row["attachments_json"]:
                     try:
@@ -254,6 +326,15 @@ class ChatHistoryService:
                     except Exception as e:
                         logger.error(f"Error parsing attachments for message {row['id']}: {e}")
                 
+                reply_to = None
+                if "reply_to_json" in row_keys and row["reply_to_json"]:
+                    try:
+                        raw_r = json.loads(row["reply_to_json"])
+                        if raw_r:
+                            reply_to = MessageReplyReference(**raw_r)
+                    except Exception as e:
+                        logger.error(f"Error parsing reply_to for message {row['id']}: {e}")
+
                 messages.append(MessageResponse(
                     id=row["id"],
                     session_id=row["session_id"],
@@ -261,6 +342,7 @@ class ChatHistoryService:
                     content=row["content"],
                     citations=citations,
                     attachments=attachments,
+                    reply_to=reply_to,
                     created_at=row["created_at"]
                 ))
             return messages

@@ -9,6 +9,11 @@ import type {
   SendOtpResponse,
   GoogleAuthRequest,
   MediaAttachment,
+  PaginatedChatSessions,
+  SessionListParams,
+  PaginatedAssetsResponse,
+  AssetQueryParams,
+  MessageReplyReference,
 } from '../types';
 
 const BACKEND_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
@@ -269,25 +274,57 @@ export const apiService = {
   },
 
   // --- Session Endpoints ---
-  async listSessions(userId: string): Promise<ChatSession[]> {
-    const response = await fetch(`${API_BASE_URL}/session/list?user_id=${encodeURIComponent(userId)}`);
-    if (!response.ok) {
-      throw new Error('Failed to fetch session list');
+  async listSessions(
+    userId: string,
+    params?: SessionListParams
+  ): Promise<PaginatedChatSessions> {
+    const query = new URLSearchParams({ user_id: userId });
+    if (params?.limit !== undefined) {
+      query.set('limit', String(params.limit));
     }
-    return await response.json();
+    if (params?.offset !== undefined) {
+      query.set('offset', String(params.offset));
+    }
+    if (params?.search && params.search.trim()) {
+      query.set('search', params.search.trim());
+    }
+    if (params?.sort_by) {
+      query.set('sort_by', params.sort_by);
+    }
+
+    const response = await fetch(`${API_BASE_URL}/session/list?${query.toString()}`, {
+      signal: params?.signal,
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Failed to fetch session list'));
+    }
+    const data = await response.json();
+    if (Array.isArray(data)) {
+      return {
+        sessions: data,
+        total: data.length,
+        has_more: false,
+        limit: params?.limit ?? null,
+        offset: params?.offset ?? 0,
+      };
+    }
+    return data as PaginatedChatSessions;
   },
 
   async createSession(
     userId: string,
     title: string = 'New Conversation',
     mode: ChatMode = 'AUTO',
-    isTemporary: boolean = false
+    isTemporary: boolean = false,
+    sessionId?: string
   ): Promise<ChatSession> {
     const response = await fetch(`${API_BASE_URL}/session/create`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         user_id: userId,
+        session_id: sessionId || undefined,
         title,
         mode,
         is_temporary: isTemporary,
@@ -341,6 +378,42 @@ export const apiService = {
     };
   },
 
+  async getAssets(params?: AssetQueryParams): Promise<PaginatedAssetsResponse> {
+    const query = new URLSearchParams();
+    if (params?.userId) query.append('user_id', params.userId);
+    if (params?.sessionId) query.append('session_id', params.sessionId);
+    if (params?.origin && params.origin !== 'all') query.append('origin', params.origin);
+    if (params?.fileType && params.fileType !== 'all') query.append('file_type', params.fileType);
+    if (params?.search?.trim()) query.append('search', params.search.trim());
+    if (params?.limit) query.append('limit', String(params.limit));
+    if (params?.offset !== undefined) query.append('offset', String(params.offset));
+
+    const response = await fetch(`${API_BASE_URL}/media/assets?${query.toString()}`);
+    if (!response.ok) {
+      const err = await response.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Failed to fetch assets'));
+    }
+    const data: PaginatedAssetsResponse = await response.json();
+    return {
+      ...data,
+      items: (data.items || []).map((item) => ({
+        ...item,
+        url: formatMediaUrl(item.url),
+      })),
+    };
+  },
+
+  async deleteAsset(assetId: string): Promise<{ message: string; id: string }> {
+    const response = await fetch(`${API_BASE_URL}/media/assets/${encodeURIComponent(assetId)}`, {
+      method: 'DELETE',
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Failed to delete asset'));
+    }
+    return await response.json();
+  },
+
   async updateSessionTitle(sessionId: string, title: string): Promise<{ message: string; title: string }> {
     const response = await fetch(`${API_BASE_URL}/session/${encodeURIComponent(sessionId)}/title`, {
       method: 'PATCH',
@@ -348,7 +421,21 @@ export const apiService = {
       body: JSON.stringify({ title }),
     });
     if (!response.ok) {
-      throw new Error('Failed to update session title');
+      const err = await response.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Failed to update session title'));
+    }
+    return await response.json();
+  },
+
+  async togglePinSession(sessionId: string, isPinned: boolean): Promise<{ message: string; session_id: string; is_pinned: boolean }> {
+    const response = await fetch(`${API_BASE_URL}/session/${encodeURIComponent(sessionId)}/pin`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ is_pinned: isPinned }),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Failed to update session pin status'));
     }
     return await response.json();
   },
@@ -444,7 +531,9 @@ export const apiService = {
     mode: ChatMode,
     handlers: StreamHandlers,
     signal?: AbortSignal,
-    attachments?: MediaAttachment[]
+    attachments?: MediaAttachment[],
+    userId?: string | null,
+    reply_to?: MessageReplyReference | null
   ): Promise<void> {
     const { onCitations, onMedia, onToken, onError, onDone } = handlers;
 
@@ -454,8 +543,10 @@ export const apiService = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           session_id: sessionId,
+          user_id: userId || undefined,
           message,
           mode,
+          reply_to: reply_to || undefined,
           attachments: attachments || [],
         }),
         signal,

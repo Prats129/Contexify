@@ -3,9 +3,10 @@ import { apiService } from "./services/api";
 import { Sidebar } from "./components/Sidebar/Sidebar";
 import { ChatWorkspace } from "./components/Chat/ChatWorkspace";
 import { UserModal } from "./components/Modals/UserModal";
+import { AttachmentsModal } from "./components/Modals/AttachmentsModal";
+import { useChatSessions } from "./hooks/useChatSessions";
 import type {
   User,
-  ChatSession,
   ChatMode,
   DocumentMetadata,
   Message,
@@ -13,6 +14,7 @@ import type {
   Citation,
   GoogleAuthRequest,
   MediaAttachment,
+  MessageReplyReference,
 } from "./types";
 import { useTheme } from "./context/ThemeContext";
 import { useConfirm } from "./context/ConfirmContext";
@@ -84,13 +86,47 @@ export const App: React.FC = () => {
 
   // --- Global State ---
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const currentUserRef = useRef<User | null>(null);
+  const [isAuthReady, setIsAuthReady] = useState<boolean>(false);
+
+  useEffect(() => {
+    currentUserRef.current = currentUser;
+  }, [currentUser]);
+
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+
+  // --- Sessions Management (Pagination, Server-side Debounced Search, Optimistic Updates) ---
+  const {
+    sessions,
+    total: totalSessions,
+    hasMore: hasMoreSessions,
+    isLoadingInitial: isLoadingInitialSessions,
+    isLoadingMore: isLoadingMoreSessions,
+    isSearching: isSearchingSessions,
+    searchQuery: sessionSearchQuery,
+    setSearchQuery: setSessionSearchQuery,
+    sortOrder: sessionSortOrder,
+    setSortOrder: setSessionSortOrder,
+    togglePinSession,
+    loadMore: loadMoreSessions,
+    prependSession,
+    updateSessionTitle,
+    updateSessionMode,
+    removeSession,
+    ensureSessionInList,
+    setSessionsDirect,
+  } = useChatSessions({
+    userId: currentUser?.id ?? null,
+    activeSessionId,
+  });
   const [isTemporaryChat, setIsTemporaryChat] = useState<boolean>(false);
   const [currentMode, setCurrentMode] = useState<ChatMode>("AUTO");
   const [documents, setDocuments] = useState<DocumentMetadata[]>([]);
   const [attachedMedia, setAttachedMedia] = useState<MediaAttachment[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [replyingTo, setReplyingTo] = useState<MessageReplyReference | null>(
+    null,
+  );
 
   // --- Interaction States ---
   const [inputQuery, setInputQuery] = useState("");
@@ -104,6 +140,7 @@ export const App: React.FC = () => {
   const [userModalTab, setUserModalTab] = useState<"login" | "register">(
     "login",
   );
+  const [isAttachmentsModalOpen, setIsAttachmentsModalOpen] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(() => {
     if (typeof window !== "undefined" && window.innerWidth < 768) {
       return false;
@@ -119,6 +156,36 @@ export const App: React.FC = () => {
     setUserModalTab(tab);
     setIsUserModalOpen(true);
   };
+
+  const handleOpenAttachmentsModal = useCallback(() => {
+    if (!currentUser) return;
+    setIsAttachmentsModalOpen(true);
+  }, [currentUser]);
+
+  const handleAttachMediaFromModal = useCallback((media: MediaAttachment) => {
+    setAttachedMedia((prev) => {
+      if (
+        prev.some((m) => (m.id && m.id === media.id) || m.url === media.url)
+      ) {
+        return prev;
+      }
+      return [...prev, media];
+    });
+  }, []);
+
+  const handleAttachDocumentFromModal = useCallback((doc: DocumentMetadata) => {
+    setDocuments((prev) => {
+      if (prev.some((d) => d.document_id === doc.document_id)) {
+        return prev;
+      }
+      return [...prev, doc];
+    });
+  }, []);
+
+  const handleAssetDeletedFromModal = useCallback((assetId: string) => {
+    setAttachedMedia((prev) => prev.filter((m) => m.id !== assetId));
+    setDocuments((prev) => prev.filter((d) => d.document_id !== assetId));
+  }, []);
 
   const handleToggleSidebar = () => {
     setIsSidebarOpen((prev) => {
@@ -136,6 +203,7 @@ export const App: React.FC = () => {
       setMessages([]);
       setDocuments([]);
       setStreamingMessage(null);
+      setReplyingTo(null);
       setInputQuery("");
       updateUrlForSession(null);
       localStorage.removeItem("contexify_active_session");
@@ -157,6 +225,7 @@ export const App: React.FC = () => {
       setIsTemporaryChat(false);
       setActiveSessionId(sessionId);
       setStreamingMessage(null);
+      setReplyingTo(null);
 
       if (currentUser?.id && !isUnauthenticated) {
         localStorage.setItem("contexify_active_session", sessionId);
@@ -191,22 +260,36 @@ export const App: React.FC = () => {
     try {
       const savedUserStr = localStorage.getItem("contexify_user");
       let user: User | null = null;
+      let parsedUser: User | null = null;
       if (savedUserStr) {
-        const parsed = JSON.parse(savedUserStr);
-        user = await apiService.getCurrentUser(parsed.id).catch(() => null);
+        try {
+          parsedUser = JSON.parse(savedUserStr);
+          if (parsedUser?.id) {
+            user = await apiService
+              .getCurrentUser(parsedUser.id)
+              .catch(() => null);
+            // Retain cached credentials if backend cold start or temporary offline occurred
+            if (!user && parsedUser) {
+              user = parsedUser;
+            }
+          }
+        } catch {
+          user = null;
+        }
       }
 
       if (user) {
         // Logged-in user found
+        currentUserRef.current = user;
         setCurrentUser(user);
         localStorage.setItem("contexify_user", JSON.stringify(user));
       } else {
         // Ephemeral Guest Mode (No DB Save)
+        currentUserRef.current = null;
         setCurrentUser(null);
         setIsTemporaryChat(false);
         localStorage.removeItem("contexify_user");
         localStorage.removeItem("contexify_active_session");
-        setSessions([]);
         setMessages([]);
         setDocuments([]);
         setMode("light");
@@ -229,8 +312,11 @@ export const App: React.FC = () => {
       }
     } catch (e) {
       console.error("Failed to initialize user:", e);
+      currentUserRef.current = null;
       setCurrentUser(null);
       setActiveSessionId(null);
+    } finally {
+      setIsAuthReady(true);
     }
   };
 
@@ -238,8 +324,12 @@ export const App: React.FC = () => {
   const loadSessions = useCallback(
     async (userId: string) => {
       try {
-        const sessionList = await apiService.listSessions(userId);
-        setSessions(sessionList || []);
+        const paginated = await apiService.listSessions(userId, {
+          limit: 12,
+          offset: 0,
+        });
+        const sessionList = paginated.sessions || [];
+        setSessionsDirect(sessionList);
 
         const { sessionId: urlSessionId, isUnauthenticated } =
           getUrlRouteInfo();
@@ -257,10 +347,7 @@ export const App: React.FC = () => {
           try {
             const hist = await apiService.getSessionHistory(urlSessionId);
             if (hist.session) {
-              setSessions((prev) => [
-                hist.session,
-                ...prev.filter((s) => s.id !== hist.session.id),
-              ]);
+              ensureSessionInList(hist.session);
               await selectSession(hist.session.id, false, false);
               return;
             }
@@ -278,7 +365,7 @@ export const App: React.FC = () => {
         console.error("Failed to load user sessions:", e);
       }
     },
-    [selectSession],
+    [selectSession, ensureSessionInList, setSessionsDirect],
   );
 
   useEffect(() => {
@@ -321,10 +408,22 @@ export const App: React.FC = () => {
     setMessages([]);
     setDocuments([]);
     setStreamingMessage(null);
+    setReplyingTo(null);
     setInputQuery("");
     updateUrlForSession(null);
     localStorage.removeItem("contexify_active_session");
   };
+
+  const handleReplyMessage = useCallback(
+    (msg: { id?: string; role: "user" | "assistant"; content: string }) => {
+      setReplyingTo({
+        id: msg.id || `msg-${Date.now()}`,
+        role: msg.role,
+        content: msg.content,
+      });
+    },
+    [],
+  );
 
   // --- 5. Delete Session ---
   const handleDeleteSession = async (sessionId: string) => {
@@ -343,8 +442,7 @@ export const App: React.FC = () => {
 
     try {
       await apiService.deleteSession(sessionId);
-      const updated = sessions.filter((s) => s.id !== sessionId);
-      setSessions(updated);
+      removeSession(sessionId);
 
       if (activeSessionId === sessionId) {
         setActiveSessionId(null);
@@ -363,15 +461,37 @@ export const App: React.FC = () => {
     }
   };
 
-  // --- 6. Mode Switch ---
+  // --- 6. Rename Session ---
+  const handleRenameSession = async (sessionId: string, newTitle: string) => {
+    if (!currentUser?.id) return;
+    const trimmed = newTitle.trim();
+    if (!trimmed) return;
+
+    const currentSession = sessions.find((s) => s.id === sessionId);
+    if (!currentSession || currentSession.title === trimmed) return;
+
+    const prevTitle = currentSession.title;
+    updateSessionTitle(sessionId, trimmed);
+
+    try {
+      await apiService.updateSessionTitle(sessionId, trimmed);
+    } catch (e: unknown) {
+      updateSessionTitle(sessionId, prevTitle);
+      const err = e instanceof Error ? e.message : String(e);
+      await showAlert({
+        title: "Rename Failed",
+        message: `Failed to rename conversation: ${err}`,
+      });
+    }
+  };
+
+  // --- 7. Mode Switch ---
   const handleModeChange = async (mode: ChatMode) => {
     setCurrentMode(mode);
     if (activeSessionId && currentUser?.id) {
       try {
         await apiService.updateSessionMode(activeSessionId, mode);
-        setSessions((prev) =>
-          prev.map((s) => (s.id === activeSessionId ? { ...s, mode } : s)),
-        );
+        updateSessionMode(activeSessionId, mode);
       } catch (err) {
         console.error("Failed to persist session mode switch:", err);
       }
@@ -380,26 +500,34 @@ export const App: React.FC = () => {
 
   // --- 7. Document & Media Upload / Delete ---
   const handleFileUpload = async (file: File) => {
+    const userToUse = currentUserRef.current || currentUser;
     let targetSessionId = activeSessionId;
     if (!targetSessionId) {
-      if (currentUser?.id) {
+      if (userToUse?.id) {
+        const clientSessionId = generateGuestSessionId();
         try {
           const newSess = await apiService.createSession(
-            currentUser.id,
+            userToUse.id,
             "New Conversation",
             currentMode,
             isTemporaryChat,
+            clientSessionId,
           );
           targetSessionId = newSess.id;
           setActiveSessionId(newSess.id);
           if (!isTemporaryChat) {
-            setSessions((prev) => [newSess, ...prev]);
+            prependSession(newSess);
             localStorage.setItem("contexify_active_session", newSess.id);
           }
           updateUrlForSession(newSess.id, false);
         } catch (err) {
-          console.error("Failed to create session on file upload:", err);
-          return;
+          console.warn(
+            "Failed to create session explicitly on file upload, using clientSessionId for self-healing:",
+            err,
+          );
+          targetSessionId = clientSessionId;
+          setActiveSessionId(targetSessionId);
+          updateUrlForSession(targetSessionId, false);
         }
       } else {
         targetSessionId = generateGuestSessionId();
@@ -565,6 +693,7 @@ export const App: React.FC = () => {
   // --- 8. Send Chat Message & SSE Stream ---
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
+    if (!isAuthReady) return;
     const query = inputQuery.trim();
     if ((!query && attachedMedia.length === 0) || isSending) return;
 
@@ -574,26 +703,35 @@ export const App: React.FC = () => {
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
 
+    const userToUse = currentUserRef.current || currentUser;
+
     let targetSessionId = activeSessionId;
     if (!targetSessionId) {
-      if (currentUser?.id) {
+      if (userToUse?.id) {
+        const clientSessionId = generateGuestSessionId();
         try {
           const newSess = await apiService.createSession(
-            currentUser.id,
+            userToUse.id,
             "New Conversation",
             currentMode,
             isTemporaryChat,
+            clientSessionId,
           );
           targetSessionId = newSess.id;
           setActiveSessionId(newSess.id);
           if (!isTemporaryChat) {
-            setSessions((prev) => [newSess, ...prev]);
+            prependSession(newSess);
             localStorage.setItem("contexify_active_session", newSess.id);
           }
           updateUrlForSession(newSess.id, false);
         } catch (err) {
-          console.error("Failed to create session on message send:", err);
-          return;
+          console.warn(
+            "Failed to create session explicitly, relying on backend self-healing with user_id:",
+            err,
+          );
+          targetSessionId = clientSessionId;
+          setActiveSessionId(targetSessionId);
+          updateUrlForSession(targetSessionId, false);
         }
       } else {
         targetSessionId = generateGuestSessionId();
@@ -604,8 +742,10 @@ export const App: React.FC = () => {
 
     // Capture media to send & reset input
     const mediaToSend = [...attachedMedia];
+    const replyToPayload = replyingTo;
     setInputQuery("");
     setAttachedMedia([]);
+    setReplyingTo(null);
     setIsSending(true);
 
     // Append optimistic user message with attachments
@@ -615,6 +755,7 @@ export const App: React.FC = () => {
       role: "user",
       content:
         query || (mediaToSend.length > 0 ? "Analyze attached media" : ""),
+      reply_to: replyToPayload,
       attachments: mediaToSend.length > 0 ? mediaToSend : null,
       created_at: new Date().toISOString(),
     };
@@ -710,21 +851,23 @@ export const App: React.FC = () => {
           setMessages((prev) => [...prev, finishedAssistantMsg]);
           setStreamingMessage(null);
 
-          // If logged-in user, refresh sessions list for auto-generated title
-          if (currentUser?.id) {
+          // If logged-in user, refresh active session title if it was generated
+          if (currentUser?.id && targetSessionId) {
             try {
-              const freshSessions = await apiService.listSessions(
-                currentUser.id,
-              );
-              setSessions(freshSessions || []);
+              const hist = await apiService.getSessionHistory(targetSessionId);
+              if (hist?.session?.title) {
+                updateSessionTitle(targetSessionId, hist.session.title);
+              }
             } catch (err) {
-              console.error("Failed to sync sessions list:", err);
+              console.error("Failed to sync session title:", err);
             }
           }
         },
       },
       abortController.signal,
       mediaToSend,
+      userToUse?.id,
+      replyToPayload,
     );
   };
 
@@ -736,6 +879,7 @@ export const App: React.FC = () => {
   // --- 9. User Authentication & Guest Handlers ---
   const handleLogin = async (usernameOrEmail: string, password: string) => {
     const user = await apiService.login(usernameOrEmail, password);
+    currentUserRef.current = user;
     setCurrentUser(user);
     localStorage.setItem("contexify_user", JSON.stringify(user));
     setIsUserModalOpen(false);
@@ -745,6 +889,7 @@ export const App: React.FC = () => {
 
   const handleLoginWithOtp = async (usernameOrEmail: string, otp: string) => {
     const user = await apiService.loginWithOtp(usernameOrEmail, otp);
+    currentUserRef.current = user;
     setCurrentUser(user);
     localStorage.setItem("contexify_user", JSON.stringify(user));
     setIsUserModalOpen(false);
@@ -754,6 +899,7 @@ export const App: React.FC = () => {
 
   const handleGoogleAuth = async (data: GoogleAuthRequest) => {
     const user = await apiService.loginWithGoogle(data);
+    currentUserRef.current = user;
     setCurrentUser(user);
     localStorage.setItem("contexify_user", JSON.stringify(user));
     setIsUserModalOpen(false);
@@ -793,6 +939,7 @@ export const App: React.FC = () => {
       email,
       password,
     );
+    currentUserRef.current = user;
     setCurrentUser(user);
     localStorage.setItem("contexify_user", JSON.stringify(user));
     setIsUserModalOpen(false);
@@ -810,6 +957,7 @@ export const App: React.FC = () => {
       displayName,
       avatarColor,
     );
+    currentUserRef.current = updated;
     setCurrentUser(updated);
     localStorage.setItem("contexify_user", JSON.stringify(updated));
   };
@@ -825,6 +973,7 @@ export const App: React.FC = () => {
   const handleUploadAvatar = async (file: File) => {
     if (!currentUser?.id) return;
     const updated = await apiService.uploadAvatar(currentUser.id, file);
+    currentUserRef.current = updated;
     setCurrentUser(updated);
     localStorage.setItem("contexify_user", JSON.stringify(updated));
   };
@@ -832,6 +981,7 @@ export const App: React.FC = () => {
   const handleDeleteAvatar = async () => {
     if (!currentUser?.id) return;
     const updated = await apiService.deleteAvatar(currentUser.id);
+    currentUserRef.current = updated;
     setCurrentUser(updated);
     localStorage.setItem("contexify_user", JSON.stringify(updated));
   };
@@ -839,9 +989,9 @@ export const App: React.FC = () => {
   const handleLogout = () => {
     localStorage.removeItem("contexify_user");
     localStorage.removeItem("contexify_active_session");
+    currentUserRef.current = null;
     setCurrentUser(null);
     setIsTemporaryChat(false);
-    setSessions([]);
     setMessages([]);
     setDocuments([]);
     setActiveSessionId(generateGuestSessionId());
@@ -872,12 +1022,25 @@ export const App: React.FC = () => {
         onOpenUserModal={() => handleOpenUserModal("login")}
         onLogout={handleLogout}
         sessions={sessions}
+        totalSessions={totalSessions}
+        hasMore={hasMoreSessions}
+        isLoadingInitial={isLoadingInitialSessions}
+        isLoadingMore={isLoadingMoreSessions}
+        isSearching={isSearchingSessions}
+        searchQuery={sessionSearchQuery}
+        onSearchChange={setSessionSearchQuery}
+        sortOrder={sessionSortOrder}
+        onSortChange={setSessionSortOrder}
+        onTogglePinSession={togglePinSession}
+        onLoadMore={loadMoreSessions}
         activeSessionId={activeSessionId}
         onSelectSession={selectSession}
         onNewSession={handleNewSession}
         onDeleteSession={handleDeleteSession}
-        documents={documents}
-        onDeleteDocument={handleDeleteDocument}
+        onRenameSession={handleRenameSession}
+        onOpenAttachmentsModal={
+          currentUser ? handleOpenAttachmentsModal : undefined
+        }
       />
 
       <ChatWorkspace
@@ -907,6 +1070,12 @@ export const App: React.FC = () => {
         onToggleTemporaryChat={
           currentUser ? handleToggleTemporaryChat : undefined
         }
+        onOpenAttachmentsModal={
+          currentUser ? handleOpenAttachmentsModal : undefined
+        }
+        replyingTo={replyingTo}
+        onCancelReply={() => setReplyingTo(null)}
+        onReply={handleReplyMessage}
       />
 
       <UserModal
@@ -927,6 +1096,19 @@ export const App: React.FC = () => {
         onChangePassword={handleChangePassword}
         onUploadAvatar={handleUploadAvatar}
         onDeleteAvatar={handleDeleteAvatar}
+      />
+
+      <AttachmentsModal
+        isOpen={isAttachmentsModalOpen}
+        onClose={() => setIsAttachmentsModalOpen(false)}
+        currentUser={currentUser}
+        activeSessionId={activeSessionId}
+        activeSessionTitle={
+          sessions.find((s) => s.id === activeSessionId)?.title || undefined
+        }
+        onAttachMedia={handleAttachMediaFromModal}
+        onAttachDocument={handleAttachDocumentFromModal}
+        onAssetDeleted={handleAssetDeletedFromModal}
       />
     </div>
   );

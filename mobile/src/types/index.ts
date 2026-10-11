@@ -2,6 +2,7 @@ export type ChatMode = 'AUTO' | 'DOCUMENT_RAG' | 'WEB_SEARCH' | 'MULTIMODAL' | '
 
 export interface MediaAttachment {
   id?: string;
+  media_id?: string;
   url: string;
   file_type: 'image' | 'document';
   file_name?: string;
@@ -36,9 +37,29 @@ export interface ChatSession {
   mode: ChatMode;
   is_temporary?: boolean;
   expires_at?: string | null;
+  is_pinned?: boolean;
+  pinned_at?: string | null;
   message_count?: number;
   created_at: string;
   updated_at: string;
+}
+
+export type SessionSortOrder = 'last_created' | 'first_created';
+
+export interface PaginatedChatSessions {
+  sessions: ChatSession[];
+  total: number;
+  has_more: boolean;
+  limit: number | null;
+  offset: number;
+}
+
+export interface SessionListParams {
+  limit?: number;
+  offset?: number;
+  search?: string;
+  sort_by?: SessionSortOrder;
+  signal?: AbortSignal;
 }
 
 export interface Citation {
@@ -51,6 +72,13 @@ export interface Citation {
   snippet: string;
 }
 
+export interface MessageReplyReference {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  sender_name?: string;
+}
+
 export interface Message {
   id: string;
   session_id?: string;
@@ -58,6 +86,7 @@ export interface Message {
   content: string;
   citations?: Citation[] | null;
   attachments?: MediaAttachment[] | null;
+  reply_to?: MessageReplyReference | null;
   created_at?: string;
 }
 
@@ -82,6 +111,7 @@ export interface DocumentMetadata {
   file_type: string;
   file_size_bytes: number;
   total_chunks: number;
+  storage_url?: string;
   uploaded_at: string;
 }
 
@@ -89,4 +119,37 @@ export interface SessionHistoryResponse {
   session: ChatSession;
   messages: Message[];
   documents: DocumentMetadata[];
+}
+
+export interface AssetItem {
+  id: string;
+  user_id?: string | null;
+  session_id?: string | null;
+  session_title?: string | null;
+  name: string;
+  url: string;
+  file_type: 'image' | 'document';
+  mime_type?: string | null;
+  size_bytes: number;
+  origin: 'upload' | 'generated';
+  prompt?: string;
+  created_at: string;
+}
+
+export interface PaginatedAssetsResponse {
+  items: AssetItem[];
+  total: number;
+  has_more: boolean;
+  limit: number;
+  offset: number;
+}
+
+export interface AssetQueryParams {
+  userId?: string | null;
+  sessionId?: string | null;
+  origin?: 'upload' | 'generated' | 'all';
+  fileType?: 'image' | 'document' | 'all';
+  search?: string;
+  limit?: number;
+  offset?: number;
 }

@@ -54,12 +54,20 @@ class MediaAttachment(BaseModel):
     media_type: Optional[str] = "upload" # "upload" | "generated"
     prompt: Optional[str] = None
 
+class MessageReplyReference(BaseModel):
+    id: str = Field(..., description="ID of the message being replied to")
+    role: str = Field(default="assistant", description="Role of referenced message ('user' | 'assistant')")
+    content: str = Field(default="", description="Snippet or text of the referenced message")
+    sender_name: Optional[str] = Field(default=None, description="Optional display name of the original sender")
+
 class ChatRequest(BaseModel):
     session_id: str = Field(default_factory=lambda: f"guest_{uuid.uuid4().hex[:12]}", description="Unique identifier for chat thread")
+    user_id: Optional[str] = Field(default=None, description="Optional ID of authenticated user")
     message: Optional[str] = Field(default="", description="User question or query")
     query: Optional[str] = Field(default="", description="Alternative field for user query")
     mode: Optional[ChatMode] = Field(default=ChatMode.AUTO)
     attachments: Optional[List[MediaAttachment]] = Field(default_factory=list, description="Attached media such as images or documents")
+    reply_to: Optional[MessageReplyReference] = Field(default=None, description="Optional reference to a prior message being replied to")
 
     @model_validator(mode="before")
     @classmethod
@@ -75,12 +83,17 @@ class ChatRequest(BaseModel):
             # 2. Case-insensitive mode resolution and aliases
             data["mode"] = normalize_chat_mode(data.get("mode"), default=ChatMode.AUTO)
 
-            # 3. Resolve message or query
+            # 3. Resolve user_id if provided
+            uid = data.get("user_id")
+            if uid:
+                data["user_id"] = str(uid).strip()
+
+            # 4. Resolve message or query
             msg = data.get("message") or data.get("query") or ""
             data["message"] = str(msg)
             data["query"] = str(msg)
 
-            # 4. Clean attachments
+            # 5. Clean attachments
             raw_att = data.get("attachments")
             if isinstance(raw_att, list):
                 clean_att = []
@@ -93,6 +106,11 @@ class ChatRequest(BaseModel):
                 data["attachments"] = clean_att
             elif raw_att is None:
                 data["attachments"] = []
+
+            # 6. Clean reply_to if passed as dict
+            raw_reply = data.get("reply_to")
+            if isinstance(raw_reply, dict):
+                data["reply_to"] = raw_reply
 
         return data
 

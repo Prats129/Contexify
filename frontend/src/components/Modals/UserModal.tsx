@@ -339,6 +339,11 @@ export const UserModal: React.FC<UserModalProps> = ({
   const [pendingAvatarFile, setPendingAvatarFile] = useState<File | null>(null);
   const [avatarPreviewUrl, setAvatarPreviewUrl] = useState<string | null>(null);
   const [isAvatarRemoved, setIsAvatarRemoved] = useState(false);
+  const [avatarLoadError, setAvatarLoadError] = useState(false);
+
+  useEffect(() => {
+    setAvatarLoadError(false);
+  }, [currentUser?.avatar_url, avatarPreviewUrl]);
 
   // Change Password State (Logged in)
   const [isChangingPassword, setIsChangingPassword] = useState(false);
@@ -1006,10 +1011,11 @@ export const UserModal: React.FC<UserModalProps> = ({
               {/* User Profile Card */}
               <div className="flex items-center justify-between p-3 bg-(--border-subtle) border border-(--border-subtle) rounded-xl">
                 <div className="flex items-center gap-3 min-w-0">
-                  {currentUser.avatar_url ? (
+                  {currentUser.avatar_url && !avatarLoadError ? (
                     <img
                       src={currentUser.avatar_url}
                       alt={currentUser.display_name}
+                      onError={() => setAvatarLoadError(true)}
                       className="w-12 h-12 rounded-full object-cover shrink-0 border border-(--border-subtle)"
                     />
                   ) : (
@@ -1077,12 +1083,14 @@ export const UserModal: React.FC<UserModalProps> = ({
                       {/* Live Circular Preview */}
                       <div className="relative shrink-0">
                         {!isAvatarRemoved &&
-                        (avatarPreviewUrl || currentUser.avatar_url) ? (
+                        (avatarPreviewUrl ||
+                          (currentUser.avatar_url && !avatarLoadError)) ? (
                           <img
                             src={
                               avatarPreviewUrl || currentUser.avatar_url || ""
                             }
                             alt="Avatar Preview"
+                            onError={() => setAvatarLoadError(true)}
                             className="w-12 h-12 rounded-full object-cover border border-(--border-subtle) shadow-sm"
                           />
                         ) : (

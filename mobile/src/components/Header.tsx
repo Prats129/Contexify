@@ -12,6 +12,7 @@ interface HeaderProps {
   theme?: AppTheme;
   isTemporaryChat?: boolean;
   onToggleTemporaryChat?: () => void;
+  onOpenAttachments?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -22,6 +23,7 @@ export const Header: React.FC<HeaderProps> = ({
   theme: customTheme,
   isTemporaryChat = false,
   onToggleTemporaryChat,
+  onOpenAttachments,
 }) => {
   const theme = customTheme || getAppTheme(isDark);
 
@@ -139,6 +141,22 @@ export const Header: React.FC<HeaderProps> = ({
             accessibilityLabel="New Conversation"
           >
             <Feather name="edit" size={16} color={theme.textMain} />
+          </TouchableOpacity>
+        )}
+
+        {/* Attachments & Media Library Button */}
+        {onOpenAttachments && (
+          <TouchableOpacity
+            style={[styles.iconButton, { backgroundColor: theme.borderSubtle }]}
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              onOpenAttachments();
+            }}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            activeOpacity={0.7}
+            accessibilityLabel="Attachments and Media"
+          >
+            <Feather name="paperclip" size={16} color={theme.textMain} />
           </TouchableOpacity>
         )}
 

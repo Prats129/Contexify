@@ -68,33 +68,39 @@ class SessionStoreRepository:
         return list(self._documents.values())
 
     def get_history_messages(self, session_id: str) -> List[Dict[str, Any]]:
-        """Retrieve conversation history for a session from SQLite or in-memory state including attachments."""
+        """Retrieve conversation history for a session from SQLite or in-memory state including attachments and reply references."""
         db_messages = chat_history_service.get_session_messages(session_id)
         if db_messages:
             return [
                 {
+                    "id": m.id,
                     "role": m.role,
                     "content": m.content,
-                    "attachments": [a.model_dump() if hasattr(a, "model_dump") else a for a in (m.attachments or [])]
+                    "attachments": [a.model_dump() if hasattr(a, "model_dump") else a for a in (m.attachments or [])],
+                    "reply_to": m.reply_to.model_dump() if m.reply_to and hasattr(m.reply_to, "model_dump") else (m.reply_to if isinstance(m.reply_to, dict) else None)
                 }
                 for m in db_messages
             ]
         session = self.get_or_create_session(session_id)
         return [
             {
+                "id": m.get("id", ""),
                 "role": m.get("role", "user"),
                 "content": m.get("content", ""),
-                "attachments": m.get("attachments", [])
+                "attachments": m.get("attachments", []),
+                "reply_to": m.get("reply_to")
             }
             for m in session.messages
         ]
 
-    def record_message(self, session_id: str, role: str, content: str, attachments: Optional[List[Any]] = None):
+    def record_message(self, session_id: str, role: str, content: str, attachments: Optional[List[Any]] = None, reply_to: Optional[Any] = None, message_id: Optional[str] = None):
         """Record an in-memory message for active/guest sessions."""
         session = self.get_or_create_session(session_id)
-        msg_dict: Dict[str, Any] = {"role": role, "content": content}
+        msg_dict: Dict[str, Any] = {"id": message_id or "", "role": role, "content": content}
         if attachments:
             msg_dict["attachments"] = [a.model_dump() if hasattr(a, "model_dump") else a for a in attachments]
+        if reply_to:
+            msg_dict["reply_to"] = reply_to.model_dump() if hasattr(reply_to, "model_dump") else (reply_to if isinstance(reply_to, dict) else dict(reply_to))
         session.messages.append(msg_dict)
 
     def remove_document(self, document_id: str):

@@ -17,6 +17,10 @@ import {
   Image,
   Keyboard,
   TouchableWithoutFeedback,
+  PanResponder,
+  Animated,
+  type NativeSyntheticEvent,
+  type NativeScrollEvent,
 } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
@@ -41,6 +45,8 @@ import type {
   StreamingMessageState,
   DocumentMetadata,
   MediaAttachment,
+  MessageReplyReference,
+  SessionSortOrder,
 } from "./src/types";
 
 import { Header } from "./src/components/Header";
@@ -51,6 +57,7 @@ import { CitationsSheet } from "./src/components/CitationsSheet";
 import { AuthModal } from "./src/components/AuthModal";
 import { ProfileModal } from "./src/components/ProfileModal";
 import { ServerConfigModal } from "./src/components/ServerConfigModal";
+import { AttachmentsModal } from "./src/components/AttachmentsModal";
 
 function generateGuestSessionId(): string {
   return (
@@ -59,6 +66,20 @@ function generateGuestSessionId(): string {
     Date.now().toString(36)
   );
 }
+
+const sortMobileSessions = (
+  list: ChatSession[],
+  order: SessionSortOrder,
+): ChatSession[] => {
+  return [...list].sort((a, b) => {
+    const aPinned = Boolean(a.is_pinned);
+    const bPinned = Boolean(b.is_pinned);
+    if (aPinned !== bPinned) return aPinned ? -1 : 1;
+    const aTime = new Date(a.created_at).getTime() || 0;
+    const bTime = new Date(b.created_at).getTime() || 0;
+    return order === "first_created" ? aTime - bTime : bTime - aTime;
+  });
+};
 
 export default function App() {
   // Theme & Appearance State
@@ -72,14 +93,31 @@ export default function App() {
 
   // Global State
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const currentUserRef = useRef<User | null>(null);
+  const [isAuthReady, setIsAuthReady] = useState(false);
+
+  useEffect(() => {
+    currentUserRef.current = currentUser;
+  }, [currentUser]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [isTemporaryChat, setIsTemporaryChat] = useState(false);
   const isTempActive = Boolean(currentUser && isTemporaryChat);
   const [currentMode, setCurrentMode] = useState<ChatMode>("AUTO");
   const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [sessionSortOrder, setSessionSortOrder] =
+    useState<SessionSortOrder>("last_created");
+  const [totalSessions, setTotalSessions] = useState<number>(0);
+  const [hasMoreSessions, setHasMoreSessions] = useState<boolean>(false);
+  const [isLoadingMoreSessions, setIsLoadingMoreSessions] =
+    useState<boolean>(false);
+  const [isRefreshingSessions, setIsRefreshingSessions] =
+    useState<boolean>(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [documents, setDocuments] = useState<DocumentMetadata[]>([]);
   const [attachedMedia, setAttachedMedia] = useState<MediaAttachment[]>([]);
+  const [replyingTo, setReplyingTo] = useState<MessageReplyReference | null>(
+    null,
+  );
 
   // Interaction State
   const [query, setQuery] = useState("");
@@ -97,22 +135,170 @@ export default function App() {
   const [citationsVisible, setCitationsVisible] = useState(false);
   const [activeCitations, setActiveCitations] = useState<Citation[]>([]);
   const [serverConfigVisible, setServerConfigVisible] = useState(false);
+  const [attachmentsVisible, setAttachmentsVisible] = useState(false);
+
+  const handleOpenDrawer = useCallback(() => {
+    Keyboard.dismiss();
+    setDrawerVisible(true);
+  }, []);
+
+  const drawerVisibleRef = useRef(drawerVisible);
+  useEffect(() => {
+    drawerVisibleRef.current = drawerVisible;
+  }, [drawerVisible]);
+
+  const hasMessagesRef = useRef(
+    messages.length > 0 || Boolean(streamingMessage),
+  );
+  useEffect(() => {
+    hasMessagesRef.current = messages.length > 0 || Boolean(streamingMessage);
+  }, [messages.length, streamingMessage]);
+
+  const hasTriggeredEdgeDrawerRef = useRef(false);
+
+  // Industry-standard left-edge gesture responder (Slack/Telegram pattern)
+  // Transparent on touch-down to prevent tap blocking; intercepts rightward slides to open drawer.
+  const edgePanResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => false,
+        onStartShouldSetPanResponderCapture: () => false,
+
+        onMoveShouldSetPanResponder: (_, gestureState) => {
+          if (drawerVisibleRef.current) return false;
+          const isHorizontal =
+            Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * 1.2;
+          if (!isHorizontal || gestureState.dx <= 12) return false;
+
+          // When messages are present, restrict trigger to edge (x0 <= 48)
+          // to preserve WhatsApp-style swipe-to-reply on message cards.
+          // On empty/welcome screen, allow swiping right anywhere.
+          if (hasMessagesRef.current) {
+            return gestureState.x0 <= 48;
+          }
+          return true;
+        },
+        onMoveShouldSetPanResponderCapture: (_, gestureState) => {
+          if (drawerVisibleRef.current) return false;
+          const isHorizontal =
+            Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * 1.2;
+          if (!isHorizontal || gestureState.dx <= 12) return false;
+
+          if (hasMessagesRef.current) {
+            return gestureState.x0 <= 48;
+          }
+          return true;
+        },
+
+        onPanResponderGrant: () => {
+          hasTriggeredEdgeDrawerRef.current = false;
+        },
+
+        onPanResponderMove: (_, gestureState) => {
+          if (gestureState.dx > 25 && !hasTriggeredEdgeDrawerRef.current) {
+            hasTriggeredEdgeDrawerRef.current = true;
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            handleOpenDrawer();
+          }
+        },
+
+        onPanResponderRelease: (_, gestureState) => {
+          if (
+            !hasTriggeredEdgeDrawerRef.current &&
+            (gestureState.dx > 18 || gestureState.vx > 0.25)
+          ) {
+            hasTriggeredEdgeDrawerRef.current = true;
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            handleOpenDrawer();
+          }
+          hasTriggeredEdgeDrawerRef.current = false;
+        },
+
+        onPanResponderTerminate: () => {
+          hasTriggeredEdgeDrawerRef.current = false;
+        },
+      }),
+    [handleOpenDrawer],
+  );
 
   const flatListRef = useRef<FlatList<Message>>(null);
+  const isAtBottomRef = useRef(true);
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+  const showScrollToBottomRef = useRef(false);
+  const scrollBtnAnim = useRef(new Animated.Value(0)).current;
+
+  const [highlightedMessageId, setHighlightedMessageId] = useState<
+    string | null
+  >(null);
+  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Smooth entrance/exit spring animation for scroll to bottom floating button
+  useEffect(() => {
+    Animated.spring(scrollBtnAnim, {
+      toValue: showScrollToBottom ? 1 : 0,
+      tension: 75,
+      friction: 8,
+      useNativeDriver: true,
+    }).start();
+  }, [showScrollToBottom, scrollBtnAnim]);
+
+  // Reset scroll-to-bottom button when switching sessions
+  useEffect(() => {
+    setShowScrollToBottom(false);
+    showScrollToBottomRef.current = false;
+    isAtBottomRef.current = true;
+  }, [activeSessionId]);
+
+  const handleScroll = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const { layoutMeasurement, contentOffset, contentSize } =
+        event.nativeEvent;
+      const paddingToBottom = 60;
+      const isClose =
+        layoutMeasurement.height + contentOffset.y >=
+        contentSize.height - paddingToBottom;
+      isAtBottomRef.current = isClose;
+
+      // Show button if content is tall enough to scroll and user is not near the bottom
+      const canScroll = contentSize.height > layoutMeasurement.height + 80;
+      const shouldShow = !isClose && canScroll;
+
+      // Senior optimization: Only update state when boolean actually flips to prevent unnecessary re-renders
+      if (shouldShow !== showScrollToBottomRef.current) {
+        showScrollToBottomRef.current = shouldShow;
+        setShowScrollToBottom(shouldShow);
+      }
+    },
+    [],
+  );
+
+  const handleScrollToBottom = useCallback(() => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    isAtBottomRef.current = true;
+    showScrollToBottomRef.current = false;
+    setShowScrollToBottom(false);
+    flatListRef.current?.scrollToEnd({ animated: true });
+  }, []);
 
   // --- 1. App Initialization ---
   useEffect(() => {
     initApp();
   }, []);
 
-  // --- Keyboard Auto-scroll (ChatGPT behavior: scroll messages when keyboard appears) ---
+  // --- Keyboard Auto-scroll (Preserves reading position if scrolled up) ---
   useEffect(() => {
     const showEvent =
       Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
     const sub = Keyboard.addListener(showEvent, () => {
-      setTimeout(() => {
-        flatListRef.current?.scrollToEnd({ animated: true });
-      }, 100);
+      // Only auto-scroll to bottom if the user was already at/near the bottom.
+      // If the user scrolled up to read earlier messages, do not force them down!
+      if (isAtBottomRef.current) {
+        setTimeout(() => {
+          if (isAtBottomRef.current) {
+            flatListRef.current?.scrollToEnd({ animated: true });
+          }
+        }, 100);
+      }
     });
     return () => sub.remove();
   }, []);
@@ -131,16 +317,27 @@ export default function App() {
       }
 
       const savedUserStr = await AsyncStorage.getItem("contexify_mobile_user");
+      const savedSort = await AsyncStorage.getItem(
+        "contexify_mobile_sort_order",
+      );
+      let initialSort: SessionSortOrder = "last_created";
+      if (savedSort === "first_created" || savedSort === "last_created") {
+        initialSort = savedSort;
+        setSessionSortOrder(savedSort);
+      }
+
       if (savedUserStr) {
         const user: User = JSON.parse(savedUserStr);
+        currentUserRef.current = user;
         setCurrentUser(user);
-        await loadUserSessions(user.id);
+        await loadUserSessions(user.id, user, initialSort);
 
         // Refresh profile in background to fetch latest avatar / settings from server
         apiService
           .getCurrentUser(user.id)
           .then((fresh) => {
             if (fresh) {
+              currentUserRef.current = fresh;
               setCurrentUser(fresh);
               AsyncStorage.setItem(
                 "contexify_mobile_user",
@@ -150,11 +347,16 @@ export default function App() {
           })
           .catch(() => {});
       } else {
-        // Guest mode default session
-        setActiveSessionId(generateGuestSessionId());
+        currentUserRef.current = null;
+        setCurrentUser(null);
+        handleNewChat(null);
       }
     } catch {
-      setActiveSessionId(generateGuestSessionId());
+      currentUserRef.current = null;
+      setCurrentUser(null);
+      handleNewChat(null);
+    } finally {
+      setIsAuthReady(true);
     }
   };
 
@@ -169,17 +371,140 @@ export default function App() {
     AsyncStorage.setItem("contexify_theme_accent", nextAccent);
   };
 
-  const loadUserSessions = async (userId: string) => {
+  const SESSIONS_PAGE_SIZE = 15;
+
+  const loadUserSessions = async (
+    userId: string,
+    userOverride?: User | null,
+    sortOverride?: SessionSortOrder,
+  ) => {
+    const activeSort = sortOverride || sessionSortOrder;
     try {
-      const list = await apiService.getUserSessions(userId);
-      const safeList = Array.isArray(list) ? list : [];
-      setSessions(safeList);
+      const res = await apiService.getUserSessions(userId, {
+        limit: SESSIONS_PAGE_SIZE,
+        offset: 0,
+        sort_by: activeSort,
+      });
+      const safeList = Array.isArray(res.sessions) ? res.sessions : [];
+      setSessions(sortMobileSessions(safeList, activeSort));
+      setTotalSessions(res.total ?? safeList.length);
+      setHasMoreSessions(Boolean(res.has_more));
       // Always start in a fresh new chat on app launch
-      handleNewChat();
+      handleNewChat(userOverride);
     } catch (err) {
       console.warn("Failed to load sessions:", err);
       setSessions([]);
-      handleNewChat();
+      setTotalSessions(0);
+      setHasMoreSessions(false);
+      handleNewChat(userOverride);
+    }
+  };
+
+  const handleLoadMoreSessions = async () => {
+    if (!currentUser || isLoadingMoreSessions || !hasMoreSessions) return;
+    setIsLoadingMoreSessions(true);
+    try {
+      const res = await apiService.getUserSessions(currentUser.id, {
+        limit: SESSIONS_PAGE_SIZE,
+        offset: sessions.length,
+        sort_by: sessionSortOrder,
+      });
+      const newSessions = Array.isArray(res.sessions) ? res.sessions : [];
+      setSessions((prev) => {
+        const existingIds = new Set(prev.map((s) => s.id));
+        const filtered = newSessions.filter((s) => !existingIds.has(s.id));
+        return sortMobileSessions([...prev, ...filtered], sessionSortOrder);
+      });
+      setTotalSessions(res.total ?? sessions.length + newSessions.length);
+      setHasMoreSessions(Boolean(res.has_more));
+    } catch (err) {
+      console.warn("Failed to load more sessions:", err);
+    } finally {
+      setIsLoadingMoreSessions(false);
+    }
+  };
+
+  const handleRefreshSessions = async () => {
+    if (!currentUser || isRefreshingSessions) return;
+    setIsRefreshingSessions(true);
+    try {
+      const res = await apiService.getUserSessions(currentUser.id, {
+        limit: SESSIONS_PAGE_SIZE,
+        offset: 0,
+        sort_by: sessionSortOrder,
+      });
+      const safeList = Array.isArray(res.sessions) ? res.sessions : [];
+      setSessions(sortMobileSessions(safeList, sessionSortOrder));
+      setTotalSessions(res.total ?? safeList.length);
+      setHasMoreSessions(Boolean(res.has_more));
+    } catch (err) {
+      console.warn("Failed to refresh sessions:", err);
+    } finally {
+      setIsRefreshingSessions(false);
+    }
+  };
+
+  const handleToggleSortOrder = async () => {
+    const nextOrder: SessionSortOrder =
+      sessionSortOrder === "first_created" ? "last_created" : "first_created";
+    setSessionSortOrder(nextOrder);
+    await AsyncStorage.setItem("contexify_mobile_sort_order", nextOrder);
+    if (currentUser) {
+      setIsRefreshingSessions(true);
+      try {
+        const res = await apiService.getUserSessions(currentUser.id, {
+          limit: SESSIONS_PAGE_SIZE,
+          offset: 0,
+          sort_by: nextOrder,
+        });
+        const safeList = Array.isArray(res.sessions) ? res.sessions : [];
+        setSessions(sortMobileSessions(safeList, nextOrder));
+        setTotalSessions(res.total ?? safeList.length);
+        setHasMoreSessions(Boolean(res.has_more));
+      } finally {
+        setIsRefreshingSessions(false);
+      }
+    } else {
+      setSessions((prev) => sortMobileSessions(prev, nextOrder));
+    }
+  };
+
+  const handleTogglePinSession = async (sessionId: string) => {
+    const target = sessions.find((s) => s.id === sessionId);
+    if (!target) return;
+    const nextPinned = !target.is_pinned;
+
+    // Optimistic update
+    setSessions((prev) => {
+      const updated = prev.map((s) =>
+        s.id === sessionId
+          ? {
+              ...s,
+              is_pinned: nextPinned,
+              pinned_at: nextPinned ? new Date().toISOString() : null,
+            }
+          : s,
+      );
+      return sortMobileSessions(updated, sessionSortOrder);
+    });
+
+    try {
+      await apiService.togglePinSession(sessionId, nextPinned);
+    } catch (err) {
+      console.warn("Failed to toggle pin session:", err);
+      // Rollback on failure
+      setSessions((prev) => {
+        const rolledBack = prev.map((s) =>
+          s.id === sessionId
+            ? {
+                ...s,
+                is_pinned: target.is_pinned,
+                pinned_at: target.pinned_at,
+              }
+            : s,
+        );
+        return sortMobileSessions(rolledBack, sessionSortOrder);
+      });
     }
   };
 
@@ -189,6 +514,9 @@ export default function App() {
     setActiveSessionId(sessionId);
     setStreamingMessage(null);
     setAttachedMedia([]);
+    setReplyingTo(null);
+    setHighlightedMessageId(null);
+    isAtBottomRef.current = true;
     if (sessionMode) setCurrentMode(sessionMode);
 
     try {
@@ -209,14 +537,22 @@ export default function App() {
     setMessages([]);
     setDocuments([]);
     setAttachedMedia([]);
+    setReplyingTo(null);
+    setHighlightedMessageId(null);
     setStreamingMessage(null);
     setQuery("");
   };
 
   // --- 3. New Chat ---
-  const handleNewChat = () => {
+  const handleNewChat = (userOverride?: User | null) => {
     setIsTemporaryChat(false);
-    if (currentUser) {
+    isAtBottomRef.current = true;
+    const effectiveUser =
+      userOverride !== undefined
+        ? userOverride
+        : currentUserRef.current || currentUser;
+    if (effectiveUser) {
+      // Authenticated users start with null session ID (ready for new persistent thread)
       setActiveSessionId(null);
     } else {
       setActiveSessionId(generateGuestSessionId());
@@ -224,9 +560,70 @@ export default function App() {
     setMessages([]);
     setDocuments([]);
     setAttachedMedia([]);
+    setReplyingTo(null);
+    setHighlightedMessageId(null);
     setStreamingMessage(null);
     setQuery("");
   };
+
+  const handleReplyMessage = useCallback(
+    (msg: { id?: string; role: "user" | "assistant"; content: string }) => {
+      setReplyingTo({
+        id: msg.id || `msg_${Date.now()}`,
+        role: msg.role,
+        content: msg.content,
+      });
+    },
+    [],
+  );
+
+  useEffect(() => {
+    return () => {
+      if (highlightTimerRef.current) {
+        clearTimeout(highlightTimerRef.current);
+      }
+    };
+  }, []);
+
+  const handleJumpToMessage = useCallback(
+    (targetMessageId: string) => {
+      if (!targetMessageId) return;
+      const cleanTargetId = targetMessageId.replace(/^msg[-_]/, "");
+      const index = messages.findIndex(
+        (m) =>
+          m.id === targetMessageId ||
+          m.id === cleanTargetId ||
+          m.id.replace(/^msg[-_]/, "") === cleanTargetId,
+      );
+
+      if (index >= 0 && flatListRef.current) {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        isAtBottomRef.current = false;
+        try {
+          flatListRef.current.scrollToIndex({
+            index,
+            animated: true,
+            viewPosition: 0.5,
+          });
+        } catch {
+          flatListRef.current.scrollToOffset({
+            offset: Math.max(0, index * 95),
+            animated: true,
+          });
+        }
+
+        const foundId = messages[index].id;
+        if (highlightTimerRef.current) {
+          clearTimeout(highlightTimerRef.current);
+        }
+        setHighlightedMessageId(foundId);
+        highlightTimerRef.current = setTimeout(() => {
+          setHighlightedMessageId(null);
+        }, 1800);
+      }
+    },
+    [messages],
+  );
 
   // --- 4. Delete Session ---
   const handleDeleteSession = async (sessionId: string) => {
@@ -235,6 +632,7 @@ export default function App() {
       const currentList = Array.isArray(sessions) ? sessions : [];
       const updated = currentList.filter((s) => s.id !== sessionId);
       setSessions(updated);
+      setTotalSessions((prev) => Math.max(0, prev - 1));
       if (activeSessionId === sessionId) {
         if (updated.length > 0) {
           selectSession(updated[0].id, updated[0].mode);
@@ -245,6 +643,32 @@ export default function App() {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       Alert.alert("Error", msg);
+    }
+  };
+
+  // --- 4.1 Rename Session ---
+  const handleRenameSession = async (sessionId: string, newTitle: string) => {
+    const trimmed = newTitle.trim();
+    if (!trimmed) return;
+    const currentList = Array.isArray(sessions) ? sessions : [];
+    const current = currentList.find((s) => s.id === sessionId);
+    if (!current || current.title === trimmed) return;
+
+    const prevTitle = current.title;
+    // Optimistic update
+    setSessions((prev) =>
+      prev.map((s) => (s.id === sessionId ? { ...s, title: trimmed } : s)),
+    );
+
+    try {
+      await apiService.updateSessionTitle(sessionId, trimmed);
+    } catch (err: unknown) {
+      // Revert on error
+      setSessions((prev) =>
+        prev.map((s) => (s.id === sessionId ? { ...s, title: prevTitle } : s)),
+      );
+      const msg = err instanceof Error ? err.message : String(err);
+      Alert.alert("Rename Failed", msg);
     }
   };
 
@@ -278,6 +702,8 @@ export default function App() {
     isSendingRef.current = true;
     setIsSending(true);
     setQuery("");
+    const replyToPayload = replyingTo;
+    setReplyingTo(null);
     let sessionId = activeSessionId;
 
     const mediaToSend = [...attachedMedia];
@@ -289,22 +715,31 @@ export default function App() {
         ? "Generate a creative variation of this image"
         : "Analyze this image and describe what you see in detail.");
 
+    const userToUse = currentUserRef.current || currentUser;
+
     // Create session in backend if user is logged in and no session is active yet
-    if (!sessionId && currentUser) {
+    if (!sessionId && userToUse) {
+      const clientSessionId = generateGuestSessionId();
       try {
         const newSession = await apiService.createSession(
-          currentUser.id,
+          userToUse.id,
           prompt.slice(0, 40),
           currentMode,
           isTempActive,
+          clientSessionId,
         );
         sessionId = newSession.id;
         setActiveSessionId(sessionId);
         if (!isTempActive) {
           setSessions((prev) => [newSession, ...prev]);
+          setTotalSessions((prev) => prev + 1);
         }
-      } catch {
-        sessionId = generateGuestSessionId();
+      } catch (err) {
+        console.warn(
+          "Explicit createSession failed; relying on backend self-healing with user_id:",
+          err,
+        );
+        sessionId = clientSessionId;
         setActiveSessionId(sessionId);
       }
     } else if (!sessionId) {
@@ -318,12 +753,17 @@ export default function App() {
       session_id: sessionId,
       role: "user",
       content: prompt,
+      reply_to: replyToPayload,
       attachments: mediaToSend.length > 0 ? mediaToSend : undefined,
       created_at: new Date().toISOString(),
     };
 
     setMessages((prev) => [...prev, userMsg]);
     setStreamingMessage({ content: "", citations: [], attachments: [] });
+    isAtBottomRef.current = true;
+    setTimeout(() => {
+      flatListRef.current?.scrollToEnd({ animated: true });
+    }, 60);
 
     // Stream SSE Response
     let streamedContent = "";
@@ -411,6 +851,8 @@ export default function App() {
         },
       },
       mediaToSend.length > 0 ? mediaToSend : undefined,
+      userToUse ? userToUse.id : null,
+      replyToPayload,
     );
 
     streamAbortRef.current = cancel;
@@ -443,23 +885,31 @@ export default function App() {
     name: string;
     mimeType: string;
   }) => {
+    const userToUse = currentUserRef.current || currentUser;
     let sessionId = activeSessionId;
     if (!sessionId) {
-      if (currentUser) {
+      if (userToUse) {
+        const clientSessionId = generateGuestSessionId();
         try {
           const newSession = await apiService.createSession(
-            currentUser.id,
+            userToUse.id,
             `File: ${file.name}`.slice(0, 40),
             "DOCUMENT_RAG",
             isTempActive,
+            clientSessionId,
           );
           sessionId = newSession.id;
           setActiveSessionId(sessionId);
           if (!isTempActive) {
             setSessions((prev) => [newSession, ...prev]);
+            setTotalSessions((prev) => prev + 1);
           }
-        } catch {
-          sessionId = generateGuestSessionId();
+        } catch (err) {
+          console.warn(
+            "Session creation on file attach failed; using clientSessionId for self-healing:",
+            err,
+          );
+          sessionId = clientSessionId;
           setActiveSessionId(sessionId);
         }
       } else {
@@ -538,32 +988,115 @@ export default function App() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
   };
 
-  const handleUseAsReference = (media: MediaAttachment) => {
+  const handleUseAsReference = useCallback((media: MediaAttachment) => {
     setAttachedMedia([media]);
     setCurrentMode("IMAGE_GENERATION");
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-  };
+  }, []);
 
   // --- 8. Citations Sheet ---
-  const handleOpenCitations = (citations: Citation[]) => {
+  const handleOpenCitations = useCallback((citations: Citation[]) => {
     setActiveCitations(citations);
     setCitationsVisible(true);
+  }, []);
+
+  // --- 9. Attachments & Media Handlers ---
+  const activeSessionTitle = useMemo(() => {
+    return sessions.find((s) => s.id === activeSessionId)?.title;
+  }, [sessions, activeSessionId]);
+
+  const handleAttachMediaFromModal = (media: MediaAttachment) => {
+    setAttachedMedia((prev) => {
+      const matchId = media.id || media.media_id;
+      if (
+        prev.some(
+          (m) =>
+            (matchId && (m.id === matchId || m.media_id === matchId)) ||
+            m.url === media.url,
+        )
+      ) {
+        return prev;
+      }
+      return [...prev, media];
+    });
+    if (currentMode !== "IMAGE_GENERATION" && currentMode !== "AUTO") {
+      setCurrentMode("MULTIMODAL");
+    }
   };
 
-  // --- 9. Auth Success / Logout ---
+  const handleAttachDocumentFromModal = (doc: DocumentMetadata) => {
+    setDocuments((prev) => {
+      const arr = Array.isArray(prev) ? prev : [];
+      if (arr.some((d) => d.document_id === doc.document_id)) {
+        return arr;
+      }
+      return [...arr, doc];
+    });
+    if (currentMode !== "DOCUMENT_RAG" && currentMode !== "AUTO") {
+      setCurrentMode("DOCUMENT_RAG");
+    }
+  };
+
+  const handleAssetDeletedFromModal = (assetId: string) => {
+    setDocuments((prev) =>
+      (Array.isArray(prev) ? prev : []).filter(
+        (d) => d.document_id !== assetId,
+      ),
+    );
+    setAttachedMedia((prev) =>
+      prev.filter((m) => m.id !== assetId && m.media_id !== assetId),
+    );
+  };
+
+  // --- 10. Auth Success / Logout ---
   const handleAuthSuccess = async (user: User) => {
+    currentUserRef.current = user;
     setCurrentUser(user);
     await AsyncStorage.setItem("contexify_mobile_user", JSON.stringify(user));
-    await loadUserSessions(user.id);
+    await loadUserSessions(user.id, user);
   };
 
   const handleLogout = async () => {
+    currentUserRef.current = null;
     setCurrentUser(null);
     setIsTemporaryChat(false);
     await AsyncStorage.removeItem("contexify_mobile_user");
     setSessions([]);
-    handleNewChat();
+    setTotalSessions(0);
+    setHasMoreSessions(false);
+    handleNewChat(null);
   };
+
+  const keyExtractor = useCallback((item: Message) => item.id, []);
+
+  const renderMessageItem = useCallback(
+    ({ item }: { item: Message }) => (
+      <MessageItem
+        id={item.id}
+        role={item.role}
+        content={item.content}
+        citations={item.citations}
+        attachments={item.attachments}
+        reply_to={item.reply_to}
+        isHighlighted={highlightedMessageId === item.id}
+        onOpenCitations={handleOpenCitations}
+        onUseAsReference={handleUseAsReference}
+        onReply={handleReplyMessage}
+        onJumpToMessage={handleJumpToMessage}
+        isDark={isDark}
+        theme={theme}
+      />
+    ),
+    [
+      highlightedMessageId,
+      handleOpenCitations,
+      handleUseAsReference,
+      handleReplyMessage,
+      handleJumpToMessage,
+      isDark,
+      theme,
+    ],
+  );
 
   return (
     <SafeAreaProvider>
@@ -575,7 +1108,7 @@ export default function App() {
 
         {/* Top Native Header */}
         <Header
-          onOpenDrawer={() => setDrawerVisible(true)}
+          onOpenDrawer={handleOpenDrawer}
           onNewChat={handleNewChat}
           onToggleTheme={handleToggleTheme}
           isDark={isDark}
@@ -583,6 +1116,9 @@ export default function App() {
           isTemporaryChat={isTempActive}
           onToggleTemporaryChat={
             currentUser ? handleToggleTemporaryChat : undefined
+          }
+          onOpenAttachments={
+            currentUser ? () => setAttachmentsVisible(true) : undefined
           }
         />
 
@@ -646,299 +1182,351 @@ export default function App() {
 
         {/* Main Chat Workspace */}
         <KeyboardAvoidingView
-          behavior="padding"
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
           style={styles.workspace}
           keyboardVerticalOffset={Platform.OS === "ios" ? 54 : 0}
         >
-          {/* Welcome Screen or ChatGPT Temporary Chat Screen */}
-          {messages.length === 0 && !streamingMessage ? (
-            isTempActive ? (
-              <TouchableWithoutFeedback
-                onPress={Keyboard.dismiss}
-                accessible={false}
-              >
-                <View style={styles.welcomeContainer}>
-                  <View
-                    style={{
-                      width: 64,
-                      height: 64,
-                      borderRadius: 32,
-                      backgroundColor: "rgba(245, 158, 11, 0.16)",
-                      borderWidth: 1.5,
-                      borderColor: "rgba(245, 158, 11, 0.35)",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      marginBottom: 16,
-                    }}
-                  >
-                    <MaterialCommunityIcons
-                      name="ghost"
-                      size={32}
-                      color="#f59e0b"
-                    />
-                  </View>
-                  <Text
-                    style={[styles.welcomeTitle, { color: theme.textMain }]}
-                  >
-                    Temporary Chat
-                  </Text>
-                  <Text
-                    style={[
-                      styles.welcomeSubtitle,
-                      { color: theme.textMuted, marginTop: 4 },
-                    ]}
-                  >
-                    Chats in this mode won&apos;t be saved in your chat history
-                    and will be permanently deleted after 3 days.
-                  </Text>
-
-                  <TouchableOpacity
-                    style={{
-                      marginTop: 10,
-                      marginBottom: 16,
-                      paddingHorizontal: 18,
-                      paddingVertical: 9,
-                      borderRadius: 20,
-                      backgroundColor: theme.bgCard,
-                      borderWidth: 1,
-                      borderColor: theme.borderSubtle,
-                    }}
-                    onPress={handleToggleTemporaryChat}
-                    activeOpacity={0.8}
-                  >
-                    <Text
+          {/* Main Messages & Conversation Viewport with Left-to-Right Edge Swipe Responder */}
+          <View style={styles.chatViewport} {...edgePanResponder.panHandlers}>
+            {/* Welcome Screen or ChatGPT Temporary Chat Screen */}
+            {messages.length === 0 && !streamingMessage ? (
+              isTempActive ? (
+                <TouchableWithoutFeedback
+                  onPress={Keyboard.dismiss}
+                  accessible={false}
+                >
+                  <View style={styles.welcomeContainer}>
+                    <View
                       style={{
-                        fontSize: 12.5,
-                        fontWeight: "600",
-                        color: theme.textMain,
+                        width: 64,
+                        height: 64,
+                        borderRadius: 32,
+                        backgroundColor: "rgba(245, 158, 11, 0.16)",
+                        borderWidth: 1.5,
+                        borderColor: "rgba(245, 158, 11, 0.35)",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        marginBottom: 16,
                       }}
                     >
-                      Turn off Temporary Chat
-                    </Text>
-                  </TouchableOpacity>
-
-                  {/* Temporary Starter Prompt Chips */}
-                  <View style={styles.starterChipsRow}>
-                    <TouchableOpacity
-                      style={[
-                        styles.starterChip,
-                        {
-                          backgroundColor: theme.bgCard,
-                          borderColor: "rgba(245, 158, 11, 0.3)",
-                        },
-                      ]}
-                      onPress={() =>
-                        handleSendMessage(
-                          "Explain how zero-trust security architecture works.",
-                        )
-                      }
-                      activeOpacity={0.8}
-                    >
-                      <Ionicons
-                        name="shield-checkmark-outline"
-                        size={14}
+                      <MaterialCommunityIcons
+                        name="ghost"
+                        size={32}
                         color="#f59e0b"
                       />
-                      <Text
-                        style={[
-                          styles.starterChipText,
-                          { color: theme.textMain },
-                        ]}
-                      >
-                        Quick Research
-                      </Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                      style={[
-                        styles.starterChip,
-                        {
-                          backgroundColor: theme.bgCard,
-                          borderColor: "rgba(245, 158, 11, 0.3)",
-                        },
-                      ]}
-                      onPress={() =>
-                        handleSendMessage(
-                          "Check this confidential snippet for potential bugs or security risks.",
-                        )
-                      }
-                      activeOpacity={0.8}
-                    >
-                      <Ionicons
-                        name="code-slash-outline"
-                        size={14}
-                        color="#f59e0b"
-                      />
-                      <Text
-                        style={[
-                          styles.starterChipText,
-                          { color: theme.textMain },
-                        ]}
-                      >
-                        Confidential Review
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              </TouchableWithoutFeedback>
-            ) : (
-              <TouchableWithoutFeedback
-                onPress={Keyboard.dismiss}
-                accessible={false}
-              >
-                <View style={styles.welcomeContainer}>
-                  <View style={styles.welcomeBrandGroup}>
-                    <Image
-                      source={require("./assets/logo.png")}
-                      style={styles.welcomeLogo}
-                      resizeMode="contain"
-                    />
+                    </View>
                     <Text
                       style={[styles.welcomeTitle, { color: theme.textMain }]}
                     >
-                      Contexify AI
+                      Temporary Chat
                     </Text>
-                  </View>
-                  <Text
-                    style={[styles.welcomeSubtitle, { color: theme.textMuted }]}
-                  >
-                    Ask grounded questions with real-time web search or attach
-                    files for instant document RAG.
-                  </Text>
-
-                  {/* Starter Prompt Chips */}
-                  <View style={styles.starterChipsRow}>
-                    <TouchableOpacity
+                    <Text
                       style={[
-                        styles.starterChip,
-                        {
-                          backgroundColor: theme.bgCard,
-                          borderColor: theme.borderSubtle,
-                        },
+                        styles.welcomeSubtitle,
+                        { color: theme.textMuted, marginTop: 4 },
                       ]}
-                      onPress={() =>
-                        handleSendMessage(
-                          "Summarize key points covered in the document.",
-                        )
-                      }
+                    >
+                      Chats in this mode won&apos;t be saved in your chat
+                      history and will be permanently deleted after 3 days.
+                    </Text>
+
+                    <TouchableOpacity
+                      style={{
+                        marginTop: 10,
+                        marginBottom: 16,
+                        paddingHorizontal: 18,
+                        paddingVertical: 9,
+                        borderRadius: 20,
+                        backgroundColor: theme.bgCard,
+                        borderWidth: 1,
+                        borderColor: theme.borderSubtle,
+                      }}
+                      onPress={handleToggleTemporaryChat}
                       activeOpacity={0.8}
                     >
-                      <Ionicons name="list" size={14} color={theme.primary} />
                       <Text
-                        style={[
-                          styles.starterChipText,
-                          { color: theme.textMain },
-                        ]}
+                        style={{
+                          fontSize: 12.5,
+                          fontWeight: "600",
+                          color: theme.textMain,
+                        }}
                       >
-                        Summarize Document
+                        Turn off Temporary Chat
                       </Text>
                     </TouchableOpacity>
 
-                    <TouchableOpacity
-                      style={[
-                        styles.starterChip,
-                        {
-                          backgroundColor: theme.bgCard,
-                          borderColor: theme.borderSubtle,
-                        },
-                      ]}
-                      onPress={() =>
-                        handleSendMessage(
-                          "Explain the main technical concepts.",
-                        )
-                      }
-                      activeOpacity={0.8}
-                    >
-                      <Ionicons
-                        name="hardware-chip-outline"
-                        size={14}
-                        color={theme.primary}
+                    {/* Temporary Starter Prompt Chips */}
+                    <View style={styles.starterChipsRow}>
+                      <TouchableOpacity
+                        style={[
+                          styles.starterChip,
+                          {
+                            backgroundColor: theme.bgCard,
+                            borderColor: "rgba(245, 158, 11, 0.3)",
+                          },
+                        ]}
+                        onPress={() =>
+                          handleSendMessage(
+                            "Explain how zero-trust security architecture works.",
+                          )
+                        }
+                        activeOpacity={0.8}
+                      >
+                        <Ionicons
+                          name="shield-checkmark-outline"
+                          size={14}
+                          color="#f59e0b"
+                        />
+                        <Text
+                          style={[
+                            styles.starterChipText,
+                            { color: theme.textMain },
+                          ]}
+                        >
+                          Quick Research
+                        </Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={[
+                          styles.starterChip,
+                          {
+                            backgroundColor: theme.bgCard,
+                            borderColor: "rgba(245, 158, 11, 0.3)",
+                          },
+                        ]}
+                        onPress={() =>
+                          handleSendMessage(
+                            "Check this confidential snippet for potential bugs or security risks.",
+                          )
+                        }
+                        activeOpacity={0.8}
+                      >
+                        <Ionicons
+                          name="code-slash-outline"
+                          size={14}
+                          color="#f59e0b"
+                        />
+                        <Text
+                          style={[
+                            styles.starterChipText,
+                            { color: theme.textMain },
+                          ]}
+                        >
+                          Confidential Review
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                </TouchableWithoutFeedback>
+              ) : (
+                <TouchableWithoutFeedback
+                  onPress={Keyboard.dismiss}
+                  accessible={false}
+                >
+                  <View style={styles.welcomeContainer}>
+                    <View style={styles.welcomeBrandGroup}>
+                      <Image
+                        source={require("./assets/logo.png")}
+                        style={styles.welcomeLogo}
+                        resizeMode="contain"
                       />
                       <Text
-                        style={[
-                          styles.starterChipText,
-                          { color: theme.textMain },
-                        ]}
+                        style={[styles.welcomeTitle, { color: theme.textMain }]}
                       >
-                        Key Concepts
+                        Contexify AI
                       </Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
+                    </View>
+                    <Text
                       style={[
-                        styles.starterChip,
-                        {
-                          backgroundColor: theme.bgCard,
-                          borderColor: theme.borderSubtle,
-                        },
+                        styles.welcomeSubtitle,
+                        { color: theme.textMuted },
                       ]}
-                      onPress={() =>
-                        handleSendMessage(
-                          "Search the web for the latest updates on this topic.",
-                        )
-                      }
-                      activeOpacity={0.8}
                     >
-                      <Ionicons
-                        name="globe-outline"
-                        size={14}
-                        color={theme.emerald}
-                      />
-                      <Text
+                      Ask grounded questions with real-time web search or attach
+                      files for instant document RAG.
+                    </Text>
+
+                    {/* Starter Prompt Chips */}
+                    <View style={styles.starterChipsRow}>
+                      <TouchableOpacity
                         style={[
-                          styles.starterChipText,
-                          { color: theme.textMain },
+                          styles.starterChip,
+                          {
+                            backgroundColor: theme.bgCard,
+                            borderColor: theme.borderSubtle,
+                          },
                         ]}
+                        onPress={() =>
+                          handleSendMessage(
+                            "Summarize key points covered in the document.",
+                          )
+                        }
+                        activeOpacity={0.8}
                       >
-                        Search Live Web
-                      </Text>
-                    </TouchableOpacity>
+                        <Ionicons name="list" size={14} color={theme.primary} />
+                        <Text
+                          style={[
+                            styles.starterChipText,
+                            { color: theme.textMain },
+                          ]}
+                        >
+                          Summarize Document
+                        </Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={[
+                          styles.starterChip,
+                          {
+                            backgroundColor: theme.bgCard,
+                            borderColor: theme.borderSubtle,
+                          },
+                        ]}
+                        onPress={() =>
+                          handleSendMessage(
+                            "Explain the main technical concepts.",
+                          )
+                        }
+                        activeOpacity={0.8}
+                      >
+                        <Ionicons
+                          name="hardware-chip-outline"
+                          size={14}
+                          color={theme.primary}
+                        />
+                        <Text
+                          style={[
+                            styles.starterChipText,
+                            { color: theme.textMain },
+                          ]}
+                        >
+                          Key Concepts
+                        </Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={[
+                          styles.starterChip,
+                          {
+                            backgroundColor: theme.bgCard,
+                            borderColor: theme.borderSubtle,
+                          },
+                        ]}
+                        onPress={() =>
+                          handleSendMessage(
+                            "Search the web for the latest updates on this topic.",
+                          )
+                        }
+                        activeOpacity={0.8}
+                      >
+                        <Ionicons
+                          name="globe-outline"
+                          size={14}
+                          color={theme.emerald}
+                        />
+                        <Text
+                          style={[
+                            styles.starterChipText,
+                            { color: theme.textMain },
+                          ]}
+                        >
+                          Search Live Web
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
                   </View>
-                </View>
-              </TouchableWithoutFeedback>
-            )
-          ) : (
-            <FlatList
-              ref={flatListRef}
-              data={messages}
-              keyExtractor={(item) => item.id}
-              contentContainerStyle={styles.messageListContent}
-              keyboardDismissMode="on-drag"
-              keyboardShouldPersistTaps="handled"
-              onContentSizeChange={() =>
-                flatListRef.current?.scrollToEnd({ animated: true })
-              }
-              showsVerticalScrollIndicator={false}
-              renderItem={({ item }) => (
-                <MessageItem
-                  id={item.id}
-                  role={item.role}
-                  content={item.content}
-                  citations={item.citations}
-                  attachments={item.attachments}
-                  onOpenCitations={handleOpenCitations}
-                  onUseAsReference={handleUseAsReference}
-                  isDark={isDark}
-                  theme={theme}
-                />
-              )}
-              ListFooterComponent={
-                streamingMessage ? (
-                  <MessageItem
-                    role="assistant"
-                    content={streamingMessage.content}
-                    citations={streamingMessage.citations}
-                    attachments={streamingMessage.attachments}
-                    isStreaming={true}
-                    onOpenCitations={handleOpenCitations}
-                    onUseAsReference={handleUseAsReference}
-                    isDark={isDark}
-                    theme={theme}
-                  />
-                ) : null
-              }
-            />
-          )}
+                </TouchableWithoutFeedback>
+              )
+            ) : (
+              <FlatList
+                ref={flatListRef}
+                data={messages}
+                keyExtractor={keyExtractor}
+                contentContainerStyle={styles.messageListContent}
+                keyboardDismissMode={
+                  Platform.OS === "ios" ? "interactive" : "none"
+                }
+                keyboardShouldPersistTaps="handled"
+                onScroll={handleScroll}
+                scrollEventThrottle={16}
+                onScrollToIndexFailed={(info) => {
+                  flatListRef.current?.scrollToOffset({
+                    offset: Math.max(0, info.averageItemLength * info.index),
+                    animated: true,
+                  });
+                }}
+                onContentSizeChange={() => {
+                  if (isAtBottomRef.current) {
+                    flatListRef.current?.scrollToEnd({ animated: true });
+                  }
+                }}
+                showsVerticalScrollIndicator={false}
+                renderItem={renderMessageItem}
+                ListFooterComponent={
+                  streamingMessage ? (
+                    <MessageItem
+                      role="assistant"
+                      content={streamingMessage.content}
+                      citations={streamingMessage.citations}
+                      attachments={streamingMessage.attachments}
+                      isStreaming={true}
+                      onOpenCitations={handleOpenCitations}
+                      onUseAsReference={handleUseAsReference}
+                      isDark={isDark}
+                      theme={theme}
+                    />
+                  ) : null
+                }
+              />
+            )}
+
+            {/* Scroll to Bottom / Jump to Latest Message Floating Button */}
+            {messages.length > 0 && (
+              <Animated.View
+                pointerEvents={showScrollToBottom ? "auto" : "none"}
+                style={[
+                  styles.scrollToBottomBtnContainer,
+                  {
+                    opacity: scrollBtnAnim,
+                    transform: [
+                      {
+                        scale: scrollBtnAnim.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [0.65, 1],
+                        }),
+                      },
+                      {
+                        translateY: scrollBtnAnim.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [8, 0],
+                        }),
+                      },
+                    ],
+                  },
+                ]}
+              >
+                <TouchableOpacity
+                  style={[
+                    styles.scrollToBottomBtn,
+                    {
+                      backgroundColor: theme.primary,
+                      borderColor: isDark
+                        ? "rgba(255,255,255,0.18)"
+                        : "rgba(0,0,0,0.08)",
+                    },
+                  ]}
+                  onPress={handleScrollToBottom}
+                  activeOpacity={0.85}
+                  accessibilityLabel="Scroll to latest message"
+                  accessibilityRole="button"
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Feather name="arrow-down" size={17} color="#ffffff" />
+                </TouchableOpacity>
+              </Animated.View>
+            )}
+          </View>
 
           {/* Bottom Chat Input Bar */}
           <ChatInput
@@ -957,6 +1545,13 @@ export default function App() {
             onToggleMode={handleToggleMode}
             isDark={isDark}
             theme={theme}
+            replyingTo={replyingTo}
+            onCancelReply={() => setReplyingTo(null)}
+            onJumpToReply={
+              replyingTo?.id
+                ? () => handleJumpToMessage(replyingTo.id)
+                : undefined
+            }
           />
         </KeyboardAvoidingView>
 
@@ -966,12 +1561,25 @@ export default function App() {
           onClose={() => setDrawerVisible(false)}
           currentUser={currentUser}
           sessions={sessions}
+          totalSessions={totalSessions}
+          hasMoreSessions={hasMoreSessions}
+          isLoadingMoreSessions={isLoadingMoreSessions}
+          onLoadMoreSessions={handleLoadMoreSessions}
+          onRefreshSessions={handleRefreshSessions}
+          isRefreshingSessions={isRefreshingSessions}
           activeSessionId={activeSessionId}
           onSelectSession={selectSession}
           onDeleteSession={handleDeleteSession}
+          onRenameSession={handleRenameSession}
+          sortOrder={sessionSortOrder}
+          onToggleSortOrder={handleToggleSortOrder}
+          onTogglePinSession={handleTogglePinSession}
           onNewChat={handleNewChat}
           documents={documents}
           onDeleteDocument={handleDeleteDocument}
+          onOpenAttachments={
+            currentUser ? () => setAttachmentsVisible(true) : undefined
+          }
           onOpenAuth={() => setAuthVisible(true)}
           onOpenProfile={() => setProfileVisible(true)}
           onOpenServerConfig={() => setServerConfigVisible(true)}
@@ -1028,6 +1636,20 @@ export default function App() {
           isDark={isDark}
           theme={theme}
         />
+
+        {/* Attachments & Media Library Modal */}
+        <AttachmentsModal
+          visible={attachmentsVisible}
+          onClose={() => setAttachmentsVisible(false)}
+          currentUser={currentUser}
+          activeSessionId={activeSessionId}
+          activeSessionTitle={activeSessionTitle}
+          onAttachMedia={handleAttachMediaFromModal}
+          onAttachDocument={handleAttachDocumentFromModal}
+          onAssetDeleted={handleAssetDeletedFromModal}
+          isDark={isDark}
+          theme={theme}
+        />
       </SafeAreaView>
     </SafeAreaProvider>
   );
@@ -1038,6 +1660,9 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   workspace: {
+    flex: 1,
+  },
+  chatViewport: {
     flex: 1,
   },
   welcomeContainer: {
@@ -1100,5 +1725,24 @@ const styles = StyleSheet.create({
   temporaryBannerText: {
     fontSize: 12,
     fontWeight: "600",
+  },
+  scrollToBottomBtnContainer: {
+    position: "absolute",
+    bottom: 12,
+    alignSelf: "center",
+    zIndex: 35,
+  },
+  scrollToBottomBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.28,
+    shadowRadius: 5,
+    elevation: 6,
   },
 });

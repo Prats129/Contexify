@@ -15,6 +15,39 @@ export interface MediaAttachment {
   prompt?: string;
 }
 
+export interface AssetItem {
+  id: string;
+  user_id?: string | null;
+  session_id?: string | null;
+  session_title?: string | null;
+  name: string;
+  url: string;
+  file_type: 'image' | 'document';
+  mime_type?: string | null;
+  size_bytes: number;
+  origin: 'upload' | 'generated';
+  prompt?: string;
+  created_at: string;
+}
+
+export interface PaginatedAssetsResponse {
+  items: AssetItem[];
+  total: number;
+  has_more: boolean;
+  limit: number;
+  offset: number;
+}
+
+export interface AssetQueryParams {
+  userId?: string | null;
+  sessionId?: string | null;
+  origin?: 'upload' | 'generated' | 'all';
+  fileType?: 'image' | 'document' | 'all';
+  search?: string;
+  limit?: number;
+  offset?: number;
+}
+
 export interface User {
   id: string;
   username: string;
@@ -91,11 +124,19 @@ export interface Citation {
   similarity_score: number;
 }
 
+export interface MessageReplyReference {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  sender_name?: string | null;
+}
+
 export interface Message {
   id: string;
   session_id: string;
   role: 'user' | 'assistant';
   content: string;
+  reply_to?: MessageReplyReference | null;
   citations?: Citation[] | null;
   attachments?: MediaAttachment[] | null;
   created_at: string;
@@ -108,10 +149,30 @@ export interface ChatSession {
   mode: ChatMode;
   is_temporary?: boolean;
   expires_at?: string | null;
+  is_pinned?: boolean;
+  pinned_at?: string | null;
   created_at: string;
   updated_at: string;
   message_count?: number;
   document_count?: number;
+}
+
+export type SessionSortOrder = 'last_created' | 'first_created';
+
+export interface SessionListParams {
+  limit?: number;
+  offset?: number;
+  search?: string;
+  sort_by?: SessionSortOrder;
+  signal?: AbortSignal;
+}
+
+export interface PaginatedChatSessions {
+  sessions: ChatSession[];
+  total: number;
+  has_more: boolean;
+  limit: number | null;
+  offset: number;
 }
 
 export interface DocumentMetadata {
@@ -120,6 +181,7 @@ export interface DocumentMetadata {
   file_type: string;
   file_size_bytes: number;
   total_chunks: number;
+  storage_url?: string;
   uploaded_at: string;
 }
 

@@ -4,12 +4,17 @@ import type {
   User,
   GoogleAuthRequest,
   ChatSession,
+  PaginatedChatSessions,
+  SessionListParams,
   ChatMode,
   SessionHistoryResponse,
   DocumentMetadata,
   Citation,
   MediaAttachment,
   StreamHandlers,
+  PaginatedAssetsResponse,
+  AssetQueryParams,
+  MessageReplyReference,
 } from '../types';
 
 // Default development IP matching your current Wi-Fi network (10.66.137.54:8001)
@@ -367,16 +372,70 @@ export const apiService = {
   },
 
   // --- Sessions & History ---
-  async getUserSessions(userId: string): Promise<ChatSession[]> {
+  async getUserSessions(
+    userId: string,
+    params?: SessionListParams
+  ): Promise<PaginatedChatSessions> {
     try {
-      if (!userId || userId.startsWith('guest')) return [];
-      const url = await getEndpoint(`/session/list?user_id=${encodeURIComponent(userId)}`);
-      const res = await fetch(url);
-      if (!res.ok) return [];
+      if (!userId || userId.startsWith('guest')) {
+        return {
+          sessions: [],
+          total: 0,
+          has_more: false,
+          limit: params?.limit ?? null,
+          offset: params?.offset ?? 0,
+        };
+      }
+      const query = new URLSearchParams({ user_id: userId, paginate: 'true' });
+      if (params?.limit !== undefined) {
+        query.set('limit', String(params.limit));
+      }
+      if (params?.offset !== undefined) {
+        query.set('offset', String(params.offset));
+      }
+      if (params?.search && params.search.trim()) {
+        query.set('search', params.search.trim());
+      }
+      if (params?.sort_by) {
+        query.set('sort_by', params.sort_by);
+      }
+
+      const url = await getEndpoint(`/session/list?${query.toString()}`);
+      const res = await fetch(url, { signal: params?.signal });
+      if (!res.ok) {
+        return {
+          sessions: [],
+          total: 0,
+          has_more: false,
+          limit: params?.limit ?? null,
+          offset: params?.offset ?? 0,
+        };
+      }
       const data = await res.json();
-      return Array.isArray(data) ? data : [];
+      if (Array.isArray(data)) {
+        return {
+          sessions: data,
+          total: data.length,
+          has_more: false,
+          limit: params?.limit ?? null,
+          offset: params?.offset ?? 0,
+        };
+      }
+      return {
+        sessions: Array.isArray(data?.sessions) ? data.sessions : [],
+        total: typeof data?.total === 'number' ? data.total : (data?.sessions?.length ?? 0),
+        has_more: Boolean(data?.has_more),
+        limit: data?.limit ?? params?.limit ?? null,
+        offset: data?.offset ?? params?.offset ?? 0,
+      };
     } catch {
-      return [];
+      return {
+        sessions: [],
+        total: 0,
+        has_more: false,
+        limit: params?.limit ?? null,
+        offset: params?.offset ?? 0,
+      };
     }
   },
 
@@ -435,18 +494,62 @@ export const apiService = {
     return data;
   },
 
+  async getAssets(params?: AssetQueryParams): Promise<PaginatedAssetsResponse> {
+    const query = new URLSearchParams();
+    if (params?.userId) query.append('user_id', params.userId);
+    if (params?.sessionId) query.append('session_id', params.sessionId);
+    if (params?.origin && params.origin !== 'all') query.append('origin', params.origin);
+    if (params?.fileType && params.fileType !== 'all') query.append('file_type', params.fileType);
+    if (params?.search?.trim()) query.append('search', params.search.trim());
+    if (params?.limit) query.append('limit', String(params.limit));
+    if (params?.offset !== undefined) query.append('offset', String(params.offset));
+
+    const url = await getEndpoint(`/media/assets?${query.toString()}`);
+    const res = await fetch(url);
+    if (!res.ok) {
+      const err = await res.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Failed to fetch media assets'));
+    }
+    const data: PaginatedAssetsResponse = await res.json();
+    const host = await getCleanHost();
+    return {
+      ...data,
+      items: (data.items || []).map((item) => ({
+        ...item,
+        url: item.url?.startsWith('/') ? `${host}${item.url}` : item.url,
+      })),
+    };
+  },
+
+  async deleteAsset(assetId: string): Promise<{ message: string; id: string }> {
+    const url = await getEndpoint(`/media/assets/${encodeURIComponent(assetId)}`);
+    const res = await fetch(url, { method: 'DELETE' });
+    if (!res.ok) {
+      const err = await res.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Failed to delete asset'));
+    }
+    return res.json();
+  },
+
   async createSession(
     userId: string,
     title: string,
     mode: ChatMode,
-    isTemporary: boolean = false
+    isTemporary: boolean = false,
+    sessionId?: string
   ): Promise<ChatSession> {
     const backendMode = resolveBackendMode(mode);
     const url = await getEndpoint('/session/create');
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user_id: userId, title, mode: backendMode, is_temporary: isTemporary }),
+      body: JSON.stringify({
+        user_id: userId,
+        session_id: sessionId || undefined,
+        title,
+        mode: backendMode,
+        is_temporary: isTemporary,
+      }),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => null);
@@ -456,19 +559,79 @@ export const apiService = {
   },
 
   async deleteSession(sessionId: string): Promise<void> {
-    const url = await getEndpoint(`/session/${encodeURIComponent(sessionId)}`);
+    if (!sessionId || !sessionId.trim()) {
+      throw new Error('Session ID is required to delete a conversation.');
+    }
+    const url = await getEndpoint(`/session/${encodeURIComponent(sessionId.trim())}`);
     const res = await fetch(url, { method: 'DELETE' });
-    if (!res.ok) throw new Error('Failed to delete session');
+    if (!res.ok) {
+      const err = await res.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Failed to delete conversation'));
+    }
   },
 
   async updateSessionMode(sessionId: string, mode: ChatMode): Promise<void> {
+    if (!sessionId || !sessionId.trim()) {
+      throw new Error('Session ID is required to update conversation mode.');
+    }
     const backendMode = resolveBackendMode(mode);
-    const url = await getEndpoint(`/session/${encodeURIComponent(sessionId)}/mode`);
-    await fetch(url, {
+    const url = await getEndpoint(`/session/${encodeURIComponent(sessionId.trim())}/mode`);
+    const res = await fetch(url, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ mode: backendMode }),
     });
+    if (!res.ok) {
+      const err = await res.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Failed to update conversation mode'));
+    }
+  },
+
+  async updateSessionTitle(
+    sessionId: string,
+    title: string
+  ): Promise<{ message: string; title: string }> {
+    if (!sessionId || !sessionId.trim()) {
+      throw new Error('Session ID is required to rename a conversation.');
+    }
+    const cleanTitle = title.trim();
+    if (!cleanTitle) {
+      throw new Error('Conversation title cannot be empty.');
+    }
+    if (cleanTitle.length > 100) {
+      throw new Error('Conversation title must be 100 characters or fewer.');
+    }
+
+    const url = await getEndpoint(`/session/${encodeURIComponent(sessionId.trim())}/title`);
+    const res = await fetch(url, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: cleanTitle }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Failed to update conversation title'));
+    }
+    return await res.json();
+  },
+
+  async togglePinSession(
+    sessionId: string,
+    isPinned: boolean
+  ): Promise<{ message: string; session_id: string; is_pinned: boolean }> {
+    const url = await getEndpoint(`/session/${encodeURIComponent(sessionId.trim())}/pin`);
+    const res = await fetch(url, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ is_pinned: isPinned }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, 'Failed to update conversation pin status'));
+    }
+    return await res.json();
   },
 
   // --- Documents ---
@@ -523,7 +686,9 @@ export const apiService = {
     query: string,
     mode: ChatMode,
     handlers: StreamHandlers,
-    attachments?: MediaAttachment[]
+    attachments?: MediaAttachment[],
+    userId?: string | null,
+    reply_to?: MessageReplyReference | null
   ): () => void {
     let isAborted = false;
     let hasEnded = false;
@@ -638,9 +803,11 @@ export const apiService = {
       xhr.send(
         JSON.stringify({
           session_id: sessionId || `guest_${Date.now()}`,
+          user_id: userId || undefined,
           message: query || '',
           query: query || '',
           mode: effectiveMode,
+          reply_to: reply_to || undefined,
           attachments: (attachments || []).map((att) => ({
             ...att,
             url: att.url || '',

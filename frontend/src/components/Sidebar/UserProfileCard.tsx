@@ -30,6 +30,11 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
   const popoverRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const { currentAccent } = useTheme();
+  const [avatarLoadError, setAvatarLoadError] = useState(false);
+
+  useEffect(() => {
+    setAvatarLoadError(false);
+  }, [currentUser?.avatar_url]);
 
   // Close menu when sidebar isOpen state changes or window resizes
   useEffect(() => {
@@ -136,10 +141,11 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
             }}
           >
             <div className="flex items-center gap-2.5 p-2 border-b border-(--border-subtle)">
-              {currentUser.avatar_url ? (
+              {currentUser.avatar_url && !avatarLoadError ? (
                 <img
                   src={currentUser.avatar_url}
                   alt={currentUser.display_name}
+                  onError={() => setAvatarLoadError(true)}
                   className="w-9 h-9 aspect-square rounded-full object-cover shrink-0 border border-(--border-subtle)"
                 />
               ) : (
@@ -190,23 +196,28 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
       <button
         ref={buttonRef}
         type="button"
-        className={`flex items-center bg-(--border-subtle) hover:bg-(--border-hover) border border-(--border-subtle) cursor-pointer text-left shrink-0 transition-colors ${
+        className={`flex items-center cursor-pointer text-left shrink-0 transition-all duration-200 ${
           isOpen
-            ? "w-full p-2 gap-2.5 rounded-xl"
-            : "w-10 h-10 p-0 justify-center mx-auto rounded-full aspect-square"
+            ? "w-full p-2 gap-2.5 rounded-xl bg-(--border-subtle) hover:bg-(--border-hover) border border-(--border-subtle)"
+            : "w-9 h-9 p-0 justify-center mx-auto rounded-full aspect-square bg-black/4 hover:bg-black/8 dark:hover:bg-white/12 border dark:border-white/8 active:scale-95"
         } ${isMenuOpen ? "border-primary-theme" : ""}`}
         onClick={handleToggleMenu}
         title="Account & Settings"
       >
-        {currentUser.avatar_url ? (
+        {currentUser.avatar_url && !avatarLoadError ? (
           <img
             src={currentUser.avatar_url}
             alt={currentUser.display_name}
-            className="w-8 h-8 aspect-square rounded-full object-cover shrink-0 border border-(--border-subtle)"
+            onError={() => setAvatarLoadError(true)}
+            className={`${
+              isOpen ? "w-8 h-8" : "w-7 h-7"
+            } aspect-square rounded-full object-cover shrink-0 border border-(--border-subtle)`}
           />
         ) : (
           <div
-            className="w-8 h-8 aspect-square rounded-full flex items-center justify-center font-bold text-white text-xs shrink-0"
+            className={`${
+              isOpen ? "w-8 h-8 text-xs" : "w-7 h-7 text-[11px]"
+            } aspect-square rounded-full flex items-center justify-center font-bold text-white shrink-0`}
             style={{ backgroundColor: avatarBg }}
           >
             {initial}

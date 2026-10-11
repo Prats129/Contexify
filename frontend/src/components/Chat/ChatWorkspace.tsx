@@ -12,6 +12,7 @@ import type {
   User,
   Citation,
   MediaAttachment,
+  MessageReplyReference,
 } from "../../types";
 
 interface ChatWorkspaceProps {
@@ -39,6 +40,14 @@ interface ChatWorkspaceProps {
   onToggleSidebar?: () => void;
   isTemporaryChat?: boolean;
   onToggleTemporaryChat?: () => void;
+  onOpenAttachmentsModal?: () => void;
+  replyingTo?: MessageReplyReference | null;
+  onCancelReply?: () => void;
+  onReply?: (msg: {
+    id?: string;
+    role: "user" | "assistant";
+    content: string;
+  }) => void;
 }
 
 export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
@@ -66,6 +75,10 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
   onToggleSidebar,
   isTemporaryChat = false,
   onToggleTemporaryChat,
+  onOpenAttachmentsModal,
+  replyingTo,
+  onCancelReply,
+  onReply,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [activeSources, setActiveSources] = useState<{
@@ -99,6 +112,46 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
 
   const handleToggleCollapse = useCallback(() => {
     setIsSourcesCollapsed((prev) => !prev);
+  }, []);
+
+  const [highlightedMessageId, setHighlightedMessageId] = useState<
+    string | null
+  >(null);
+  const highlightTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  const handleJumpToMessage = useCallback((targetId: string) => {
+    if (!targetId) return;
+    const cleanId = targetId.startsWith("msg-") ? targetId.slice(4) : targetId;
+    const el =
+      document.getElementById(`msg-${cleanId}`) ||
+      document.getElementById(cleanId);
+    if (el) {
+      el.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+      if (highlightTimerRef.current) {
+        clearTimeout(highlightTimerRef.current);
+      }
+      setHighlightedMessageId(cleanId);
+      highlightTimerRef.current = setTimeout(() => {
+        setHighlightedMessageId(null);
+      }, 1800);
+    }
+  }, []);
+
+  const handleJumpToReply = useCallback(() => {
+    if (replyingTo?.id) {
+      handleJumpToMessage(replyingTo.id);
+    }
+  }, [replyingTo, handleJumpToMessage]);
+
+  useEffect(() => {
+    return () => {
+      if (highlightTimerRef.current) {
+        clearTimeout(highlightTimerRef.current);
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -193,6 +246,7 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
         onToggleSidebar={onToggleSidebar}
         isTemporaryChat={isTemporaryChat}
         onToggleTemporaryChat={onToggleTemporaryChat}
+        onOpenAttachmentsModal={onOpenAttachmentsModal}
       />
 
       {/* Temporary Chat Notice Banner (ChatGPT style, shown when messages exist) */}
@@ -239,6 +293,9 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
             isTemporaryChat={isTemporaryChat}
             onToggleTemporaryChat={onToggleTemporaryChat}
             onUseAsReference={onUseAsReference}
+            onReply={onReply}
+            highlightedMessageId={highlightedMessageId}
+            onJumpToMessage={handleJumpToMessage}
           />
 
           <div className="w-full shrink-0 px-2 sm:px-6 pb-3.5 sm:pb-4 pb-safe">
@@ -260,6 +317,9 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
                 onDeleteDocument={onDeleteDocument}
                 attachedMedia={attachedMedia}
                 onDeleteMedia={onDeleteMedia}
+                replyingTo={replyingTo}
+                onCancelReply={onCancelReply}
+                onJumpToReply={replyingTo?.id ? handleJumpToReply : undefined}
               />
             </div>
           </div>
