@@ -9,6 +9,14 @@ from app.schemas.document import DocumentMetadata
 from app.schemas.session import ChatSessionResponse, MessageResponse, SessionHistoryResponse
 from app.core.logging import logger
 
+def get_row_value(row: Any, key: str, default: Any = None) -> Any:
+    """Safely extracts a column value from sqlite3.Row, libsql_client.Row, or dict without crashing."""
+    try:
+        val = row[key]
+        return val if val is not None else default
+    except (KeyError, IndexError, TypeError):
+        return default
+
 class ChatHistoryService:
     """Chat session, message history, and document persistence service."""
 
@@ -77,8 +85,8 @@ class ChatHistoryService:
                 mode=ChatMode(row["mode"]),
                 is_temporary=bool(row["is_temporary"]),
                 expires_at=row["expires_at"],
-                is_pinned=bool(row["is_pinned"]) if "is_pinned" in row.keys() else False,
-                pinned_at=row["pinned_at"] if "pinned_at" in row.keys() else None,
+                is_pinned=bool(get_row_value(row, "is_pinned", 0)),
+                pinned_at=get_row_value(row, "pinned_at", None),
                 created_at=row["created_at"],
                 updated_at=row["updated_at"],
                 message_count=row["message_count"],
@@ -143,8 +151,8 @@ class ChatHistoryService:
                     mode=ChatMode(row["mode"]),
                     is_temporary=bool(row["is_temporary"]),
                     expires_at=row["expires_at"],
-                    is_pinned=bool(row["is_pinned"]) if "is_pinned" in row.keys() else False,
-                    pinned_at=row["pinned_at"] if "pinned_at" in row.keys() else None,
+                    is_pinned=bool(get_row_value(row, "is_pinned", 0)),
+                    pinned_at=get_row_value(row, "pinned_at", None),
                     created_at=row["created_at"],
                     updated_at=row["updated_at"],
                     message_count=row["message_count"],
@@ -317,20 +325,21 @@ class ChatHistoryService:
                         logger.error(f"Error parsing citations for message {row['id']}: {e}")
 
                 attachments = None
-                row_keys = row.keys() if hasattr(row, "keys") else []
-                if "attachments_json" in row_keys and row["attachments_json"]:
+                attachments_json = get_row_value(row, "attachments_json")
+                if attachments_json:
                     try:
-                        raw_att = json.loads(row["attachments_json"])
+                        raw_att = json.loads(attachments_json)
                         if raw_att:
                             attachments = [MediaAttachment(**a) for a in raw_att]
                     except Exception as e:
                         logger.error(f"Error parsing attachments for message {row['id']}: {e}")
                 
                 reply_to = None
-                if "reply_to_json" in row_keys and row["reply_to_json"]:
+                reply_to_json = get_row_value(row, "reply_to_json")
+                if reply_to_json:
                     try:
-                        raw_r = json.loads(row["reply_to_json"])
-                        if raw_r:
+                        raw_r = json.loads(reply_to_json)
+                        if raw_r and isinstance(raw_r, dict):
                             reply_to = MessageReplyReference(**raw_r)
                     except Exception as e:
                         logger.error(f"Error parsing reply_to for message {row['id']}: {e}")
@@ -401,7 +410,7 @@ class ChatHistoryService:
                     file_type=row["file_type"],
                     file_size_bytes=row["file_size_bytes"],
                     total_chunks=row["total_chunks"],
-                    storage_url=row["storage_url"] if "storage_url" in row.keys() and row["storage_url"] else None,
+                    storage_url=get_row_value(row, "storage_url", None),
                     uploaded_at=row["created_at"]
                 )
                 for row in rows
@@ -412,8 +421,10 @@ class ChatHistoryService:
             cursor = conn.cursor()
             cursor.execute("SELECT storage_url FROM documents WHERE id = ?", (document_id,))
             row = cursor.fetchone()
-            if row and "storage_url" in row.keys() and row["storage_url"]:
-                return row["storage_url"]
+            if row:
+                storage_url = get_row_value(row, "storage_url", None)
+                if storage_url:
+                    return storage_url
         return None
 
     def delete_document(self, document_id: str) -> bool:
