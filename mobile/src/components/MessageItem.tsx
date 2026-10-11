@@ -69,16 +69,30 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(
     const translateX = useRef(new Animated.Value(0)).current;
     const hasTriggeredHapticRef = useRef(false);
 
+    // Stable refs to prevent PanResponder re-instantiation across re-renders
+    const onReplyRef = useRef(onReply);
+    onReplyRef.current = onReply;
+
+    const messageDataRef = useRef({ id, role, content });
+    messageDataRef.current = { id, role, content };
+
     const panResponder = useMemo(() => {
       if (!onReply) return null;
 
       return PanResponder.create({
         onStartShouldSetPanResponder: () => false,
+        onStartShouldSetPanResponderCapture: () => false,
         onMoveShouldSetPanResponder: (_, gestureState) => {
-          // Only engage when horizontal swipe to the right is intentional and dominant
+          // Dominant horizontal rightward swipe (> 1.35x vertical motion, min 10px)
           const isHorizontal =
-            Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * 1.8;
-          return isHorizontal && gestureState.dx > 12;
+            Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * 1.35;
+          return isHorizontal && gestureState.dx > 10;
+        },
+        onMoveShouldSetPanResponderCapture: (_, gestureState) => {
+          // Capture phase ensures immediate responsiveness over nested elements on horizontal drag
+          const isHorizontal =
+            Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * 1.35;
+          return isHorizontal && gestureState.dx > 10;
         },
         onPanResponderTerminationRequest: () => false,
         onPanResponderMove: (_, gestureState) => {
@@ -88,19 +102,20 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(
             translateX.setValue(dampedX);
 
             // Trigger crisp haptic feedback as soon as threshold is crossed
-            if (dampedX >= 42 && !hasTriggeredHapticRef.current) {
+            if (dampedX >= 40 && !hasTriggeredHapticRef.current) {
               hasTriggeredHapticRef.current = true;
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-            } else if (dampedX < 35 && hasTriggeredHapticRef.current) {
+            } else if (dampedX < 32 && hasTriggeredHapticRef.current) {
               hasTriggeredHapticRef.current = false;
             }
           }
         },
         onPanResponderRelease: (_, gestureState) => {
           const didTrigger =
-            hasTriggeredHapticRef.current || gestureState.dx >= 75;
+            hasTriggeredHapticRef.current || gestureState.dx >= 65;
           hasTriggeredHapticRef.current = false;
 
+          translateX.stopAnimation();
           Animated.spring(translateX, {
             toValue: 0,
             tension: 65,
@@ -108,12 +123,13 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(
             useNativeDriver: true,
           }).start();
 
-          if (didTrigger && onReply) {
-            onReply({ id, role, content });
+          if (didTrigger && onReplyRef.current) {
+            onReplyRef.current(messageDataRef.current);
           }
         },
         onPanResponderTerminate: () => {
           hasTriggeredHapticRef.current = false;
+          translateX.stopAnimation();
           Animated.spring(translateX, {
             toValue: 0,
             tension: 65,
@@ -122,7 +138,7 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(
           }).start();
         },
       });
-    }, [id, role, content, onReply, translateX]);
+    }, [Boolean(onReply), translateX]);
 
     const handleCopy = async () => {
       if (!content) return;
@@ -299,7 +315,10 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(
     };
 
     return (
-      <View style={styles.swipeContainer}>
+      <View
+        style={styles.swipeContainer}
+        {...(panResponder?.panHandlers || {})}
+      >
         {/* Background Animated Reply Badge (Revealed on Swipe Right) */}
         {onReply && (
           <Animated.View
@@ -340,7 +359,6 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(
 
         {/* Swipeable Message Row */}
         <Animated.View
-          {...(panResponder?.panHandlers || {})}
           style={[
             styles.container,
             isUser ? styles.userContainer : styles.assistantContainer,

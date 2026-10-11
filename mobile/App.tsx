@@ -147,17 +147,11 @@ export default function App() {
     drawerVisibleRef.current = drawerVisible;
   }, [drawerVisible]);
 
-  const hasMessagesRef = useRef(
-    messages.length > 0 || Boolean(streamingMessage),
-  );
-  useEffect(() => {
-    hasMessagesRef.current = messages.length > 0 || Boolean(streamingMessage);
-  }, [messages.length, streamingMessage]);
-
   const hasTriggeredEdgeDrawerRef = useRef(false);
 
-  // Industry-standard left-edge gesture responder (Slack/Telegram pattern)
-  // Transparent on touch-down to prevent tap blocking; intercepts rightward slides to open drawer.
+  // Industry-standard left-bezel edge gesture responder (Slack/Telegram pattern)
+  // Attached exclusively to a narrow 20px bezel edge overlay strip, leaving all message items
+  // completely unhindered for horizontal WhatsApp-style swipe-to-reply.
   const edgePanResponder = useMemo(
     () =>
       PanResponder.create({
@@ -168,26 +162,13 @@ export default function App() {
           if (drawerVisibleRef.current) return false;
           const isHorizontal =
             Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * 1.2;
-          if (!isHorizontal || gestureState.dx <= 12) return false;
-
-          // When messages are present, restrict trigger to edge (x0 <= 48)
-          // to preserve WhatsApp-style swipe-to-reply on message cards.
-          // On empty/welcome screen, allow swiping right anywhere.
-          if (hasMessagesRef.current) {
-            return gestureState.x0 <= 48;
-          }
-          return true;
+          return isHorizontal && gestureState.dx > 10;
         },
         onMoveShouldSetPanResponderCapture: (_, gestureState) => {
           if (drawerVisibleRef.current) return false;
           const isHorizontal =
             Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * 1.2;
-          if (!isHorizontal || gestureState.dx <= 12) return false;
-
-          if (hasMessagesRef.current) {
-            return gestureState.x0 <= 48;
-          }
-          return true;
+          return isHorizontal && gestureState.dx > 10;
         },
 
         onPanResponderGrant: () => {
@@ -195,7 +176,7 @@ export default function App() {
         },
 
         onPanResponderMove: (_, gestureState) => {
-          if (gestureState.dx > 25 && !hasTriggeredEdgeDrawerRef.current) {
+          if (gestureState.dx > 15 && !hasTriggeredEdgeDrawerRef.current) {
             hasTriggeredEdgeDrawerRef.current = true;
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
             handleOpenDrawer();
@@ -205,7 +186,58 @@ export default function App() {
         onPanResponderRelease: (_, gestureState) => {
           if (
             !hasTriggeredEdgeDrawerRef.current &&
-            (gestureState.dx > 18 || gestureState.vx > 0.25)
+            (gestureState.dx > 15 || gestureState.vx > 0.25)
+          ) {
+            hasTriggeredEdgeDrawerRef.current = true;
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            handleOpenDrawer();
+          }
+          hasTriggeredEdgeDrawerRef.current = false;
+        },
+
+        onPanResponderTerminate: () => {
+          hasTriggeredEdgeDrawerRef.current = false;
+        },
+      }),
+    [handleOpenDrawer],
+  );
+
+  // Dedicated swipe responder for empty/welcome screens where there are no messages to swipe
+  const welcomePanResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => false,
+        onStartShouldSetPanResponderCapture: () => false,
+
+        onMoveShouldSetPanResponder: (_, gestureState) => {
+          if (drawerVisibleRef.current) return false;
+          const isHorizontal =
+            Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * 1.2;
+          return isHorizontal && gestureState.dx > 12;
+        },
+        onMoveShouldSetPanResponderCapture: (_, gestureState) => {
+          if (drawerVisibleRef.current) return false;
+          const isHorizontal =
+            Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * 1.2;
+          return isHorizontal && gestureState.dx > 12;
+        },
+
+        onPanResponderGrant: () => {
+          hasTriggeredEdgeDrawerRef.current = false;
+        },
+
+        onPanResponderMove: (_, gestureState) => {
+          if (gestureState.dx > 20 && !hasTriggeredEdgeDrawerRef.current) {
+            hasTriggeredEdgeDrawerRef.current = true;
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            handleOpenDrawer();
+          }
+        },
+
+        onPanResponderRelease: (_, gestureState) => {
+          if (
+            !hasTriggeredEdgeDrawerRef.current &&
+            (gestureState.dx > 16 || gestureState.vx > 0.25)
           ) {
             hasTriggeredEdgeDrawerRef.current = true;
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -1186,257 +1218,252 @@ export default function App() {
           style={styles.workspace}
           keyboardVerticalOffset={Platform.OS === "ios" ? 54 : 0}
         >
-          {/* Main Messages & Conversation Viewport with Left-to-Right Edge Swipe Responder */}
-          <View style={styles.chatViewport} {...edgePanResponder.panHandlers}>
+          {/* Main Messages & Conversation Viewport */}
+          <View style={styles.chatViewport}>
             {/* Welcome Screen or ChatGPT Temporary Chat Screen */}
             {messages.length === 0 && !streamingMessage ? (
               isTempActive ? (
-                <TouchableWithoutFeedback
-                  onPress={Keyboard.dismiss}
-                  accessible={false}
+                <View
+                  style={styles.welcomeContainer}
+                  onTouchStart={() => Keyboard.dismiss()}
+                  {...welcomePanResponder.panHandlers}
                 >
-                  <View style={styles.welcomeContainer}>
-                    <View
-                      style={{
-                        width: 64,
-                        height: 64,
-                        borderRadius: 32,
-                        backgroundColor: "rgba(245, 158, 11, 0.16)",
-                        borderWidth: 1.5,
-                        borderColor: "rgba(245, 158, 11, 0.35)",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        marginBottom: 16,
-                      }}
-                    >
-                      <MaterialCommunityIcons
-                        name="ghost"
-                        size={32}
-                        color="#f59e0b"
-                      />
-                    </View>
-                    <Text
-                      style={[styles.welcomeTitle, { color: theme.textMain }]}
-                    >
-                      Temporary Chat
-                    </Text>
-                    <Text
-                      style={[
-                        styles.welcomeSubtitle,
-                        { color: theme.textMuted, marginTop: 4 },
-                      ]}
-                    >
-                      Chats in this mode won&apos;t be saved in your chat
-                      history and will be permanently deleted after 3 days.
-                    </Text>
+                  <View
+                    style={{
+                      width: 64,
+                      height: 64,
+                      borderRadius: 32,
+                      backgroundColor: "rgba(245, 158, 11, 0.16)",
+                      borderWidth: 1.5,
+                      borderColor: "rgba(245, 158, 11, 0.35)",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      marginBottom: 16,
+                    }}
+                  >
+                    <MaterialCommunityIcons
+                      name="ghost"
+                      size={32}
+                      color="#f59e0b"
+                    />
+                  </View>
+                  <Text
+                    style={[styles.welcomeTitle, { color: theme.textMain }]}
+                  >
+                    Temporary Chat
+                  </Text>
+                  <Text
+                    style={[
+                      styles.welcomeSubtitle,
+                      { color: theme.textMuted, marginTop: 4 },
+                    ]}
+                  >
+                    Chats in this mode won&apos;t be saved in your chat history
+                    and will be permanently deleted after 3 days.
+                  </Text>
 
-                    <TouchableOpacity
+                  <TouchableOpacity
+                    style={{
+                      marginTop: 10,
+                      marginBottom: 16,
+                      paddingHorizontal: 18,
+                      paddingVertical: 9,
+                      borderRadius: 20,
+                      backgroundColor: theme.bgCard,
+                      borderWidth: 1,
+                      borderColor: theme.borderSubtle,
+                    }}
+                    onPress={handleToggleTemporaryChat}
+                    activeOpacity={0.8}
+                  >
+                    <Text
                       style={{
-                        marginTop: 10,
-                        marginBottom: 16,
-                        paddingHorizontal: 18,
-                        paddingVertical: 9,
-                        borderRadius: 20,
-                        backgroundColor: theme.bgCard,
-                        borderWidth: 1,
-                        borderColor: theme.borderSubtle,
+                        fontSize: 12.5,
+                        fontWeight: "600",
+                        color: theme.textMain,
                       }}
-                      onPress={handleToggleTemporaryChat}
+                    >
+                      Turn off Temporary Chat
+                    </Text>
+                  </TouchableOpacity>
+
+                  {/* Temporary Starter Prompt Chips */}
+                  <View style={styles.starterChipsRow}>
+                    <TouchableOpacity
+                      style={[
+                        styles.starterChip,
+                        {
+                          backgroundColor: theme.bgCard,
+                          borderColor: "rgba(245, 158, 11, 0.3)",
+                        },
+                      ]}
+                      onPress={() =>
+                        handleSendMessage(
+                          "Explain how zero-trust security architecture works.",
+                        )
+                      }
                       activeOpacity={0.8}
                     >
+                      <Ionicons
+                        name="shield-checkmark-outline"
+                        size={14}
+                        color="#f59e0b"
+                      />
                       <Text
-                        style={{
-                          fontSize: 12.5,
-                          fontWeight: "600",
-                          color: theme.textMain,
-                        }}
+                        style={[
+                          styles.starterChipText,
+                          { color: theme.textMain },
+                        ]}
                       >
-                        Turn off Temporary Chat
+                        Quick Research
                       </Text>
                     </TouchableOpacity>
 
-                    {/* Temporary Starter Prompt Chips */}
-                    <View style={styles.starterChipsRow}>
-                      <TouchableOpacity
-                        style={[
-                          styles.starterChip,
-                          {
-                            backgroundColor: theme.bgCard,
-                            borderColor: "rgba(245, 158, 11, 0.3)",
-                          },
-                        ]}
-                        onPress={() =>
-                          handleSendMessage(
-                            "Explain how zero-trust security architecture works.",
-                          )
-                        }
-                        activeOpacity={0.8}
-                      >
-                        <Ionicons
-                          name="shield-checkmark-outline"
-                          size={14}
-                          color="#f59e0b"
-                        />
-                        <Text
-                          style={[
-                            styles.starterChipText,
-                            { color: theme.textMain },
-                          ]}
-                        >
-                          Quick Research
-                        </Text>
-                      </TouchableOpacity>
-
-                      <TouchableOpacity
-                        style={[
-                          styles.starterChip,
-                          {
-                            backgroundColor: theme.bgCard,
-                            borderColor: "rgba(245, 158, 11, 0.3)",
-                          },
-                        ]}
-                        onPress={() =>
-                          handleSendMessage(
-                            "Check this confidential snippet for potential bugs or security risks.",
-                          )
-                        }
-                        activeOpacity={0.8}
-                      >
-                        <Ionicons
-                          name="code-slash-outline"
-                          size={14}
-                          color="#f59e0b"
-                        />
-                        <Text
-                          style={[
-                            styles.starterChipText,
-                            { color: theme.textMain },
-                          ]}
-                        >
-                          Confidential Review
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                </TouchableWithoutFeedback>
-              ) : (
-                <TouchableWithoutFeedback
-                  onPress={Keyboard.dismiss}
-                  accessible={false}
-                >
-                  <View style={styles.welcomeContainer}>
-                    <View style={styles.welcomeBrandGroup}>
-                      <Image
-                        source={require("./assets/logo.png")}
-                        style={styles.welcomeLogo}
-                        resizeMode="contain"
+                    <TouchableOpacity
+                      style={[
+                        styles.starterChip,
+                        {
+                          backgroundColor: theme.bgCard,
+                          borderColor: "rgba(245, 158, 11, 0.3)",
+                        },
+                      ]}
+                      onPress={() =>
+                        handleSendMessage(
+                          "Check this confidential snippet for potential bugs or security risks.",
+                        )
+                      }
+                      activeOpacity={0.8}
+                    >
+                      <Ionicons
+                        name="code-slash-outline"
+                        size={14}
+                        color="#f59e0b"
                       />
                       <Text
-                        style={[styles.welcomeTitle, { color: theme.textMain }]}
+                        style={[
+                          styles.starterChipText,
+                          { color: theme.textMain },
+                        ]}
                       >
-                        Contexify AI
+                        Confidential Review
                       </Text>
-                    </View>
-                    <Text
-                      style={[
-                        styles.welcomeSubtitle,
-                        { color: theme.textMuted },
-                      ]}
-                    >
-                      Ask grounded questions with real-time web search or attach
-                      files for instant document RAG.
-                    </Text>
-
-                    {/* Starter Prompt Chips */}
-                    <View style={styles.starterChipsRow}>
-                      <TouchableOpacity
-                        style={[
-                          styles.starterChip,
-                          {
-                            backgroundColor: theme.bgCard,
-                            borderColor: theme.borderSubtle,
-                          },
-                        ]}
-                        onPress={() =>
-                          handleSendMessage(
-                            "Summarize key points covered in the document.",
-                          )
-                        }
-                        activeOpacity={0.8}
-                      >
-                        <Ionicons name="list" size={14} color={theme.primary} />
-                        <Text
-                          style={[
-                            styles.starterChipText,
-                            { color: theme.textMain },
-                          ]}
-                        >
-                          Summarize Document
-                        </Text>
-                      </TouchableOpacity>
-
-                      <TouchableOpacity
-                        style={[
-                          styles.starterChip,
-                          {
-                            backgroundColor: theme.bgCard,
-                            borderColor: theme.borderSubtle,
-                          },
-                        ]}
-                        onPress={() =>
-                          handleSendMessage(
-                            "Explain the main technical concepts.",
-                          )
-                        }
-                        activeOpacity={0.8}
-                      >
-                        <Ionicons
-                          name="hardware-chip-outline"
-                          size={14}
-                          color={theme.primary}
-                        />
-                        <Text
-                          style={[
-                            styles.starterChipText,
-                            { color: theme.textMain },
-                          ]}
-                        >
-                          Key Concepts
-                        </Text>
-                      </TouchableOpacity>
-
-                      <TouchableOpacity
-                        style={[
-                          styles.starterChip,
-                          {
-                            backgroundColor: theme.bgCard,
-                            borderColor: theme.borderSubtle,
-                          },
-                        ]}
-                        onPress={() =>
-                          handleSendMessage(
-                            "Search the web for the latest updates on this topic.",
-                          )
-                        }
-                        activeOpacity={0.8}
-                      >
-                        <Ionicons
-                          name="globe-outline"
-                          size={14}
-                          color={theme.emerald}
-                        />
-                        <Text
-                          style={[
-                            styles.starterChipText,
-                            { color: theme.textMain },
-                          ]}
-                        >
-                          Search Live Web
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
+                    </TouchableOpacity>
                   </View>
-                </TouchableWithoutFeedback>
+                </View>
+              ) : (
+                <View
+                  style={styles.welcomeContainer}
+                  onTouchStart={() => Keyboard.dismiss()}
+                  {...welcomePanResponder.panHandlers}
+                >
+                  <View style={styles.welcomeBrandGroup}>
+                    <Image
+                      source={require("./assets/logo.png")}
+                      style={styles.welcomeLogo}
+                      resizeMode="contain"
+                    />
+                    <Text
+                      style={[styles.welcomeTitle, { color: theme.textMain }]}
+                    >
+                      Contexify AI
+                    </Text>
+                  </View>
+                  <Text
+                    style={[styles.welcomeSubtitle, { color: theme.textMuted }]}
+                  >
+                    Ask grounded questions with real-time web search or attach
+                    files for instant document RAG.
+                  </Text>
+
+                  {/* Starter Prompt Chips */}
+                  <View style={styles.starterChipsRow}>
+                    <TouchableOpacity
+                      style={[
+                        styles.starterChip,
+                        {
+                          backgroundColor: theme.bgCard,
+                          borderColor: theme.borderSubtle,
+                        },
+                      ]}
+                      onPress={() =>
+                        handleSendMessage(
+                          "Summarize key points covered in the document.",
+                        )
+                      }
+                      activeOpacity={0.8}
+                    >
+                      <Ionicons name="list" size={14} color={theme.primary} />
+                      <Text
+                        style={[
+                          styles.starterChipText,
+                          { color: theme.textMain },
+                        ]}
+                      >
+                        Summarize Document
+                      </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[
+                        styles.starterChip,
+                        {
+                          backgroundColor: theme.bgCard,
+                          borderColor: theme.borderSubtle,
+                        },
+                      ]}
+                      onPress={() =>
+                        handleSendMessage(
+                          "Explain the main technical concepts.",
+                        )
+                      }
+                      activeOpacity={0.8}
+                    >
+                      <Ionicons
+                        name="hardware-chip-outline"
+                        size={14}
+                        color={theme.primary}
+                      />
+                      <Text
+                        style={[
+                          styles.starterChipText,
+                          { color: theme.textMain },
+                        ]}
+                      >
+                        Key Concepts
+                      </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[
+                        styles.starterChip,
+                        {
+                          backgroundColor: theme.bgCard,
+                          borderColor: theme.borderSubtle,
+                        },
+                      ]}
+                      onPress={() =>
+                        handleSendMessage(
+                          "Search the web for the latest updates on this topic.",
+                        )
+                      }
+                      activeOpacity={0.8}
+                    >
+                      <Ionicons
+                        name="globe-outline"
+                        size={14}
+                        color={theme.emerald}
+                      />
+                      <Text
+                        style={[
+                          styles.starterChipText,
+                          { color: theme.textMain },
+                        ]}
+                      >
+                        Search Live Web
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
               )
             ) : (
               <FlatList
@@ -1525,6 +1552,14 @@ export default function App() {
                   <Feather name="arrow-down" size={17} color="#ffffff" />
                 </TouchableOpacity>
               </Animated.View>
+            )}
+
+            {/* Dedicated Left-Edge Bezel Swipe Detector (Mounted on top of FlatList in z-order) */}
+            {!drawerVisible && (
+              <View
+                style={styles.edgeDrawerSwipeStrip}
+                {...edgePanResponder.panHandlers}
+              />
             )}
           </View>
 
@@ -1664,6 +1699,16 @@ const styles = StyleSheet.create({
   },
   chatViewport: {
     flex: 1,
+  },
+  edgeDrawerSwipeStrip: {
+    position: "absolute",
+    top: 0,
+    bottom: 0,
+    left: 0,
+    width: 44,
+    zIndex: 999,
+    elevation: 999,
+    backgroundColor: "transparent",
   },
   welcomeContainer: {
     flex: 1,
