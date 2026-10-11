@@ -18,6 +18,7 @@ import {
   Keyboard,
   TouchableWithoutFeedback,
   PanResponder,
+  Animated,
   type NativeSyntheticEvent,
   type NativeScrollEvent,
 } from "react-native";
@@ -222,10 +223,31 @@ export default function App() {
 
   const flatListRef = useRef<FlatList<Message>>(null);
   const isAtBottomRef = useRef(true);
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+  const showScrollToBottomRef = useRef(false);
+  const scrollBtnAnim = useRef(new Animated.Value(0)).current;
+
   const [highlightedMessageId, setHighlightedMessageId] = useState<
     string | null
   >(null);
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Smooth entrance/exit spring animation for scroll to bottom floating button
+  useEffect(() => {
+    Animated.spring(scrollBtnAnim, {
+      toValue: showScrollToBottom ? 1 : 0,
+      tension: 75,
+      friction: 8,
+      useNativeDriver: true,
+    }).start();
+  }, [showScrollToBottom, scrollBtnAnim]);
+
+  // Reset scroll-to-bottom button when switching sessions
+  useEffect(() => {
+    setShowScrollToBottom(false);
+    showScrollToBottomRef.current = false;
+    isAtBottomRef.current = true;
+  }, [activeSessionId]);
 
   const handleScroll = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -236,9 +258,27 @@ export default function App() {
         layoutMeasurement.height + contentOffset.y >=
         contentSize.height - paddingToBottom;
       isAtBottomRef.current = isClose;
+
+      // Show button if content is tall enough to scroll and user is not near the bottom
+      const canScroll = contentSize.height > layoutMeasurement.height + 80;
+      const shouldShow = !isClose && canScroll;
+
+      // Senior optimization: Only update state when boolean actually flips to prevent unnecessary re-renders
+      if (shouldShow !== showScrollToBottomRef.current) {
+        showScrollToBottomRef.current = shouldShow;
+        setShowScrollToBottom(shouldShow);
+      }
     },
     [],
   );
+
+  const handleScrollToBottom = useCallback(() => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    isAtBottomRef.current = true;
+    showScrollToBottomRef.current = false;
+    setShowScrollToBottom(false);
+    flatListRef.current?.scrollToEnd({ animated: true });
+  }, []);
 
   // --- 1. App Initialization ---
   useEffect(() => {
@@ -1440,6 +1480,52 @@ export default function App() {
                 }
               />
             )}
+
+            {/* Scroll to Bottom / Jump to Latest Message Floating Button */}
+            {messages.length > 0 && (
+              <Animated.View
+                pointerEvents={showScrollToBottom ? "auto" : "none"}
+                style={[
+                  styles.scrollToBottomBtnContainer,
+                  {
+                    opacity: scrollBtnAnim,
+                    transform: [
+                      {
+                        scale: scrollBtnAnim.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [0.65, 1],
+                        }),
+                      },
+                      {
+                        translateY: scrollBtnAnim.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [8, 0],
+                        }),
+                      },
+                    ],
+                  },
+                ]}
+              >
+                <TouchableOpacity
+                  style={[
+                    styles.scrollToBottomBtn,
+                    {
+                      backgroundColor: theme.primary,
+                      borderColor: isDark
+                        ? "rgba(255,255,255,0.18)"
+                        : "rgba(0,0,0,0.08)",
+                    },
+                  ]}
+                  onPress={handleScrollToBottom}
+                  activeOpacity={0.85}
+                  accessibilityLabel="Scroll to latest message"
+                  accessibilityRole="button"
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Feather name="arrow-down" size={17} color="#ffffff" />
+                </TouchableOpacity>
+              </Animated.View>
+            )}
           </View>
 
           {/* Bottom Chat Input Bar */}
@@ -1639,5 +1725,24 @@ const styles = StyleSheet.create({
   temporaryBannerText: {
     fontSize: 12,
     fontWeight: "600",
+  },
+  scrollToBottomBtnContainer: {
+    position: "absolute",
+    bottom: 12,
+    alignSelf: "center",
+    zIndex: 35,
+  },
+  scrollToBottomBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.28,
+    shadowRadius: 5,
+    elevation: 6,
   },
 });
