@@ -38,7 +38,7 @@ settings = types.SimpleNamespace(
     GUEST_SESSION_TTL_SECONDS=600, DOWNLOAD_TICKET_TTL_SECONDS=300, ADMIN_USER_IDS=[],
     TEMPORARY_CHAT_RETENTION_DAYS=3, OTP_MAX_ATTEMPTS=3, OTP_EXPIRY_SECONDS=180,
     OTP_RESEND_COOLDOWN_SECONDS=30, OTP_MAX_SENDS_PER_HOUR=5, is_cloudflare_r2_configured=False,
-    CLOUDFLARE_R2_PUBLIC_URL="", CLOUDFLARE_R2_BUCKET_NAME="fixture",
+    CLOUDFLARE_R2_PUBLIC_URL="", CLOUDFLARE_R2_BUCKET_NAME="fixture", r2_endpoint_url="",
     API_V1_STR="/api/v1", PROJECT_NAME="Offline auth tests", CORS_ORIGINS=[], WORKSPACE_DIR=root,
 )
 for directory in (settings.UPLOAD_DIR, settings.MEDIA_DIR, settings.UPLOAD_IMAGE_DIR, settings.GENERATED_IMAGE_DIR):
@@ -338,7 +338,7 @@ class SecurityTests(unittest.TestCase):
             temporary_paths.append(file_path)
             self.assertTrue(file_path.resolve().is_relative_to(settings.UPLOAD_DIR.resolve()))
             metadata = DocumentMetadata(
-                document_id="uploaded-document", filename=filename, file_type="txt",
+                document_id=f"uploaded-document-{len(temporary_paths)}", filename=filename, file_type="txt",
                 file_size_bytes=len(file_path.read_bytes()), total_chunks=1,
                 storage_url=storage_url, uploaded_at="2026-01-01",
             )
@@ -346,16 +346,137 @@ class SecurityTests(unittest.TestCase):
             session_store_repo.attach_document_to_session(session_id, metadata.document_id)
             return metadata
 
+        import re
+
+        from app.services.storage_service import storage_service
+
         with patch.object(rag_service, "process_and_index_document", side_effect=index):
-            response = self.request("POST", "/document/upload", self.token,
-                                    data={"session_id": "alice-session"},
-                                    files={"file": ("../../fixture.txt", b"uploaded document", "text/plain")})
-        self.assertEqual(response.status_code, 201)
-        document = response.json()["document"]
-        self.assertEqual(document["filename"], "fixture.txt")
+            for original, expected in (("../../fixture.txt", "fixture.txt"),
+                                       (r"..\..\windows.txt", "windows.txt"),
+                                       ("CON.txt", "CON.txt"), ("fixture:stream.txt", "fixture:stream.txt")):
+                with self.subTest(filename=original):
+                    response = self.request("POST", "/document/upload", self.token,
+                                            data={"session_id": "alice-session"},
+                                            files={"file": (original, b"uploaded document", "text/plain")})
+                    self.assertEqual(response.status_code, 201)
+                    document = response.json()["document"]
+                    self.assertEqual(document["filename"], expected)
+                    with database.get_db_connection() as conn:
+                        stored = conn.execute("SELECT storage_url FROM documents WHERE id=?", (document["document_id"],)).fetchone()[0]
+                    key = storage_service.owned_storage_key({"storage_url": stored}, "document")
+                    self.assertIsNotNone(re.fullmatch(r"documents/alice-session/[0-9a-f]{32}\.txt", key))
+                    self.assertEqual(self.request("GET", document["storage_url"].removeprefix("/api/v1")).content, b"uploaded document")
         self.assertTrue(temporary_paths)
         self.assertTrue(all(not path.exists() for path in temporary_paths))
-        self.assertEqual(self.request("GET", document["storage_url"].removeprefix("/api/v1")).content, b"uploaded document")
+
+    def test_upload_rejects_path_shaped_session_ids_before_file_writes(self):
+        from app.services.rag_service import rag_service
+        from app.services.storage_service import storage_service
+
+        with patch.object(rag_service, "process_and_index_document") as index, patch.object(storage_service, "upload_file") as upload:
+            for session in ("../outside", r"..\outside", "/absolute", "C:/absolute", "nested/session", "%2e%2e", "x" * 129):
+                for path in ("/document/upload", "/media/upload"):
+                    with self.subTest(session=session, path=path):
+                        response = self.request("POST", path, self.token, data={"session_id": session},
+                                                files={"file": ("fixture.txt" if path.startswith("/document") else "fixture.png", b"fixture", "application/octet-stream")})
+                        self.assertEqual(response.status_code, 400)
+            index.assert_not_called()
+            upload.assert_not_called()
+
+    def test_storage_rejects_unsafe_keys_before_disk_or_r2_writes(self):
+        from app.services.storage_service import storage_service
+
+        data = root / (self.__class__.__name__ + "-storage-keys")
+        data.mkdir()
+        client = Mock()
+        keys = ("", "/absolute.txt", "../outside.txt", "media/../../outside.txt", r"..\outside.txt",
+                "C:/outside.txt", r"\\host\share\outside.txt", "media/file.txt:stream.txt",
+                "media/CON.txt", "media/NUL.txt", "media/file.txt.", "media/file.txt ",
+                "media//file.txt", "media/./file.txt", "media/invalid\x00.txt")
+        with patch.object(settings, "DATA_DIR", data), patch.object(storage_service, "_s3_client", client):
+            for cloud in (False, True):
+                with patch.object(storage_service, "_initialized", cloud):
+                    for key in keys:
+                        with self.subTest(cloud=cloud, key=key), self.assertRaises(ValueError):
+                            storage_service.upload_file(b"fixture", key)
+            client.put_object.assert_not_called()
+        self.assertEqual(list(data.iterdir()), [])
+
+    def test_storage_valid_keys_work_in_local_r2_and_cloud_fallback_modes(self):
+        from app.services.storage_service import storage_service
+
+        data = root / (self.__class__.__name__ + "-storage-valid")
+        data.mkdir()
+        client = Mock()
+        with patch.object(settings, "DATA_DIR", data), patch.object(storage_service, "_s3_client", client):
+            with patch.object(storage_service, "_initialized", False):
+                _, key = storage_service.upload_file(b"local", "documents/session/object.txt")
+                self.assertEqual((data / key).read_bytes(), b"local")
+            with patch.object(storage_service, "_initialized", True):
+                _, key = storage_service.upload_file(b"cloud", "media/uploads/object.png")
+                self.assertEqual(key, "media/uploads/object.png")
+                self.assertEqual(client.put_object.call_args.kwargs["Key"], key)
+                self.assertFalse((data / key).exists())
+                client.put_object.side_effect = RuntimeError("fixture provider failure")
+                _, key = storage_service.upload_file(b"fallback", "media/generated/object.png")
+                self.assertEqual((data / key).read_bytes(), b"fallback")
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows junction regression")
+    def test_storage_upload_blocks_junction_writes_outside_data_root(self):
+        import _winapi
+
+        from app.services.storage_service import storage_service
+
+        data = root / (self.__class__.__name__ + "-storage-junction")
+        data.mkdir()
+        outside = root / (self.__class__.__name__ + "-outside-storage")
+        outside.mkdir()
+        sentinel = outside / "fixture.txt"
+        sentinel.write_bytes(b"unchanged")
+        _winapi.CreateJunction(str(outside), str(data / "linked"))
+        client = Mock()
+        with patch.object(settings, "DATA_DIR", data), patch.object(storage_service, "_s3_client", client), patch.object(storage_service, "_initialized", True):
+            with self.assertRaises(ValueError):
+                storage_service.upload_file(b"overwrite", "linked/fixture.txt")
+            client.put_object.assert_not_called()
+        self.assertEqual(sentinel.read_bytes(), b"unchanged")
+
+    def test_document_index_failure_still_removes_temporary_upload(self):
+        from app.services.rag_service import rag_service
+
+        paths = []
+
+        def fail(**kwargs):
+            paths.append(kwargs["file_path"])
+            raise RuntimeError("fixture index failure")
+
+        with patch.object(rag_service, "process_and_index_document", side_effect=fail):
+            response = self.request("POST", "/document/upload", self.token, data={"session_id": "alice-session"},
+                                    files={"file": ("../../fixture.txt", b"fixture", "text/plain")})
+        self.assertEqual(response.status_code, 500)
+        self.assertTrue(paths)
+        self.assertTrue(all(not path.exists() for path in paths))
+
+    def test_partial_temporary_write_failure_cleans_up_without_indexing(self):
+        from app.api.v1.endpoints import document
+
+        path = settings.UPLOAD_DIR / "partial-write-fixture.txt"
+        path.write_bytes(b"partial fixture")
+        writer = Mock(name=str(path))
+        writer.name = str(path)
+        writer.write.side_effect = OSError("fixture write failure")
+        manager = Mock()
+        manager.__enter__ = Mock(return_value=writer)
+        manager.__exit__ = Mock(return_value=False)
+        with patch.object(document.tempfile, "NamedTemporaryFile", return_value=manager), patch.object(
+            document.rag_service, "process_and_index_document"
+        ) as index:
+            response = self.request("POST", "/document/upload", self.token, data={"session_id": "alice-session"},
+                                    files={"file": ("fixture.txt", b"fixture", "text/plain")})
+        self.assertEqual(response.status_code, 500)
+        self.assertFalse(path.exists())
+        index.assert_not_called()
+
 
     def test_real_orchestrator_streams_owned_media_without_external_requests(self):
         from app.api.v1.endpoints import chat

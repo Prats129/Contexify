@@ -1,4 +1,5 @@
 import os
+import tempfile
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -61,18 +62,24 @@ async def upload_document(
         logger.exception(f"Failed to read uploaded file: {e}")
         raise HTTPException(status_code=500, detail="Failed to read uploaded file.")
 
-    temp_file_path = settings.UPLOAD_DIR / f"{uuid.uuid4().hex}{ext}"
+    temp_file_path = None
     try:
-        with open(temp_file_path, "wb") as buffer:
+        with tempfile.NamedTemporaryFile(mode="wb", suffix=ext, dir=settings.UPLOAD_DIR, delete=False) as buffer:
+            temp_file_path = Path(buffer.name)
             buffer.write(content)
     except Exception as e:
         logger.exception(f"Failed to save temp file: {e}")
+        if temp_file_path is not None:
+            try:
+                temp_file_path.unlink(missing_ok=True)
+            except OSError:
+                logger.warning("Could not remove failed temporary upload", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to save uploaded file.")
 
     storage_url = ""
     try:
         from app.services.storage_service import storage_service
-        storage_key = f"documents/{session_id}/{uuid.uuid4().hex}/{filename}"
+        storage_key = f"documents/{session_id}/{uuid.uuid4().hex}{ext}"
         storage_url, _ = storage_service.upload_file(
             file_bytes=content,
             destination_key=storage_key,

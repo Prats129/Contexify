@@ -1,5 +1,5 @@
 import mimetypes
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Optional, Tuple
 
 import httpx
@@ -111,7 +111,19 @@ class StorageService:
         Upload raw bytes to storage (Cloudflare R2 or local disk).
         Returns: (public_url, storage_key)
         """
-        clean_key = destination_key.lstrip("/")
+        clean_key = destination_key
+        parts = clean_key.split("/")
+        if (
+            not clean_key
+            or "\\" in clean_key
+            or any(char in '<>:"|?*' or ord(char) < 32 or ord(char) == 127 for char in clean_key)
+            or any(part in {"", ".", ".."} or part.endswith((" ", ".")) or PureWindowsPath(part).is_reserved() for part in parts)
+        ):
+            raise ValueError("Invalid storage key.")
+        data_root = settings.DATA_DIR.resolve()
+        local_target = (data_root / clean_key).resolve()
+        if not local_target.is_relative_to(data_root):
+            raise ValueError("Storage key escapes the data directory.")
         
         if not content_type:
             guessed, _ = mimetypes.guess_type(clean_key)
@@ -133,7 +145,6 @@ class StorageService:
                 logger.exception(f"Cloudflare R2 upload error for key '{clean_key}': {e}. Falling back to local disk.")
 
         # Local Disk Storage Fallback
-        local_target = settings.DATA_DIR / clean_key
         local_target.parent.mkdir(parents=True, exist_ok=True)
         with open(local_target, "wb") as f:
             f.write(file_bytes)
