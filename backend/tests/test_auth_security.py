@@ -8,16 +8,16 @@ import io
 import json
 import logging
 import runpy
-import sqlite3
 import sys
 import tempfile
 import time
 import types
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from email.message import Message
 from pathlib import Path
-from typing import Any, cast
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 fixture = tempfile.TemporaryDirectory(prefix="contexify-auth-")
@@ -37,7 +37,7 @@ settings = types.SimpleNamespace(
     GOOGLE_CLIENT_ID="fixture-client", AUTH_SESSION_TTL_SECONDS=3600,
     GUEST_SESSION_TTL_SECONDS=600, DOWNLOAD_TICKET_TTL_SECONDS=300, ADMIN_USER_IDS=[],
     TEMPORARY_CHAT_RETENTION_DAYS=3, OTP_MAX_ATTEMPTS=3, OTP_EXPIRY_SECONDS=180,
-    OTP_RESEND_COOLDOWN_SECONDS=30, is_cloudflare_r2_configured=False,
+    OTP_RESEND_COOLDOWN_SECONDS=30, OTP_MAX_SENDS_PER_HOUR=5, is_cloudflare_r2_configured=False,
     CLOUDFLARE_R2_PUBLIC_URL="", CLOUDFLARE_R2_BUCKET_NAME="fixture",
     API_V1_STR="/api/v1", PROJECT_NAME="Offline auth tests", CORS_ORIGINS=[], WORKSPACE_DIR=root,
 )
@@ -81,7 +81,7 @@ from app.db import database
 from app.main import app
 from app.schemas.user import UserRegisterRequest
 from app.services import google_auth
-from app.services.user_service import user_service
+from app.services.user_service import hash_password, user_service
 
 
 class SecurityTests(unittest.TestCase):
@@ -281,14 +281,14 @@ class SecurityTests(unittest.TestCase):
         self.assertEqual(self.request("GET", "/media/content/media/image", token).content, b"fixture-image")
 
     def test_otp_login_and_password_reset_credentials(self):
-        def otp(identifier):
+        def otp(identifier, purpose):
             with database.get_db_connection() as conn:
                 conn.execute(
-                    "INSERT INTO email_otps(id,email,otp_code,expires_at,created_at) VALUES(?,?,?,?,?)",
-                    (identifier, self.alice.email, "123456", time.time() + 300, "2026-01-01"),
+                    "INSERT INTO email_otps(id,email,otp_code,expires_at,created_at,purpose,delivery_status) VALUES(?,?,?,?,?,?,?)",
+                    (identifier, self.alice.email, hash_password("123456", identifier), time.time() + 300, "2026-01-01", purpose, "sent"),
                 )
 
-        otp("login-code")
+        otp("login-code", "login")
         response = self.request("POST", "/user/otp/verify", json={
             "email_or_username": "alice", "otp": "123456",
         })
@@ -298,7 +298,7 @@ class SecurityTests(unittest.TestCase):
         self.assertEqual(self.request("POST", "/user/otp/verify", json={
             "email_or_username": "alice", "otp": "123456",
         }).status_code, 400)
-        otp("reset-code")
+        otp("reset-code", "reset")
         response = self.request("POST", "/user/password-reset/verify", json={
             "email_or_username": "alice", "otp": "123456", "new_password": "Another!482Strong",
         })
@@ -488,42 +488,231 @@ class SecurityTests(unittest.TestCase):
         assert fixture_orchestrator.last_request is not None
         self.assertEqual(fixture_orchestrator.last_request.attachments[0].url, "media/uploads/fixture.png")
 
+    def issue_otp(self, purpose="login", delivered=True):
+        from app.services import user_service as service_module
+        sender = AsyncMock(return_value=delivered)
+        method = "send_otp_email" if purpose == "login" else "send_password_reset_otp_email"
+        path = "/user/otp/send" if purpose == "login" else "/user/password-reset/send"
+        with patch.object(service_module.email_service, method, sender):
+            response = self.request("POST", path, json={"email_or_username": "alice"})
+        return response, sender.call_args.kwargs["otp_code"] if sender.called else None
+
+    def verify_otp(self, code, purpose="login"):
+        payload = {"email_or_username": "alice", "otp": code}
+        path = "/user/otp/verify"
+        if purpose == "reset":
+            path = "/user/password-reset/verify"
+            payload["new_password"] = "Another!482Strong"
+        return self.request("POST", path, json=payload)
+
+    def test_wrong_otp_attempts_commit_and_revoke_for_each_purpose(self):
+        for purpose in ("login", "reset"):
+            with database.get_db_connection() as conn:
+                conn.execute("DELETE FROM email_otps")
+            sent, code = self.issue_otp(purpose)
+            self.assertEqual(sent.status_code, 200)
+            wrong = "000000"
+            for attempt in range(1, 4):
+                self.assertEqual(self.verify_otp(wrong, purpose).status_code, 400)
+                with database.get_db_connection() as conn:
+                    row = conn.execute("SELECT attempts,is_used,otp_code FROM email_otps").fetchone()
+                    self.assertEqual(row["attempts"], attempt)
+                    self.assertEqual(row["is_used"], int(attempt == 3))
+                    self.assertNotEqual(row["otp_code"], code)
+            self.assertEqual(self.verify_otp(code, purpose).status_code, 400)
+
+    def test_otp_is_bound_to_purpose_and_expiry(self):
+        sent, code = self.issue_otp()
+        self.assertEqual(sent.status_code, 200)
+        self.assertEqual(self.verify_otp(code, "reset").status_code, 400)
+        self.assertEqual(self.verify_otp(code).status_code, 200)
+        with database.get_db_connection() as conn:
+            conn.execute("UPDATE email_otps SET requested_at = requested_at - 31")
+        _, reset_code = self.issue_otp("reset")
+        self.assertEqual(self.verify_otp(reset_code).status_code, 400)
+        with database.get_db_connection() as conn:
+            conn.execute("UPDATE email_otps SET expires_at = 0")
+        self.assertEqual(self.verify_otp(reset_code, "reset").status_code, 400)
+        with database.get_db_connection() as conn:
+            self.assertEqual(conn.execute("SELECT is_used FROM email_otps WHERE purpose='reset'").fetchone()[0], 1)
+
+    def test_failed_email_is_reported_and_cannot_authenticate(self):
+        failed, code = self.issue_otp(delivered=False)
+        self.assertEqual(failed.status_code, 503)
+        self.assertEqual(self.verify_otp(code).status_code, 400)
+        with database.get_db_connection() as conn:
+            row = conn.execute("SELECT delivery_status,is_used FROM email_otps").fetchone()
+            self.assertEqual((row[0], row[1]), ("failed", 1))
+        self.assertEqual(self.issue_otp()[0].status_code, 429)
+
+    def test_send_budget_shared_by_login_reset_and_used_codes(self):
+        for i in range(settings.OTP_MAX_SENDS_PER_HOUR):
+            response, _ = self.issue_otp("login" if i % 2 == 0 else "reset")
+            self.assertEqual(response.status_code, 200)
+            with database.get_db_connection() as conn:
+                conn.execute("UPDATE email_otps SET requested_at = requested_at - 31, is_used = 1")
+        self.assertEqual(self.issue_otp()[0].status_code, 429)
+
+    def test_pending_email_cannot_authenticate_and_delivery_is_awaited(self):
+        from app.services import user_service as service_module
+
+        async def delivery(**kwargs):
+            from fastapi import HTTPException
+            with self.assertRaises(HTTPException):
+                user_service.verify_login_otp("alice", kwargs["otp_code"])
+            return True
+
+        with patch.object(service_module.email_service, "send_otp_email", delivery):
+            result = self.request("POST", "/user/otp/send", json={"email_or_username": "alice"})
+        self.assertEqual(result.status_code, 200)
+
+    def test_concurrent_otp_use_has_one_winner(self):
+        _, code = self.issue_otp()
+        from fastapi import HTTPException
+
+        def verify(_):
+            try:
+                user_service.verify_login_otp("alice", code)
+                return 200
+            except HTTPException as exc:
+                return exc.status_code
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results = list(pool.map(verify, range(4)))
+        self.assertEqual(sorted(results), [200, 400, 400, 400])
+
+    def test_concurrent_wrong_guesses_do_not_lose_attempts(self):
+        self.issue_otp()
+        from fastapi import HTTPException
+
+        def verify(_):
+            try:
+                user_service.verify_login_otp("alice", "000000")
+                return 200
+            except HTTPException as exc:
+                return exc.status_code
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            self.assertEqual(list(pool.map(verify, range(6))), [400] * 6)
+        with database.get_db_connection() as conn:
+            row = conn.execute("SELECT attempts,is_used FROM email_otps").fetchone()
+            self.assertEqual((row[0], row[1]), (3, 1))
+
+    def test_password_update_failure_rolls_back_otp_consumption(self):
+        _, code = self.issue_otp("reset")
+        with database.get_db_connection() as conn:
+            original = conn.execute("SELECT password_hash FROM users WHERE id=?", (self.alice.id,)).fetchone()[0]
+            conn.execute("CREATE TRIGGER reject_password BEFORE UPDATE OF password_hash ON users "
+                         "BEGIN SELECT RAISE(ABORT, 'fixture update failure'); END")
+        with self.assertRaises(Exception):
+            self.verify_otp(code, "reset")
+        with database.get_db_connection() as conn:
+            self.assertEqual(conn.execute("SELECT is_used FROM email_otps").fetchone()[0], 0)
+            self.assertEqual(conn.execute("SELECT password_hash FROM users WHERE id=?", (self.alice.id,)).fetchone()[0], original)
+            conn.execute("DROP TRIGGER reject_password")
+        self.assertEqual(self.verify_otp(code, "reset").status_code, 200)
+
+    def test_multi_statement_failure_rolls_back_inserts(self):
+        with self.assertRaises(Exception):
+            with database.get_db_connection() as conn:
+                conn.execute("INSERT INTO email_otps(id,email,otp_code,expires_at,created_at) "
+                             "VALUES('rollback-fixture','fixture@example.invalid','unused',0,'fixture')")
+                conn.execute("INSERT INTO email_otps(id,email,otp_code,expires_at,created_at) "
+                             "VALUES('broken-fixture',NULL,'unused',0,'fixture')")
+        with database.get_db_connection() as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM email_otps").fetchone()[0], 0)
+
+    def test_legacy_otp_migration_revokes_codes_and_is_repeatable(self):
+        with database.get_db_connection() as conn:
+            conn.execute("DROP INDEX idx_otp_email_requested")
+            for name in ("purpose", "delivery_status", "requested_at"):
+                conn.execute(f"ALTER TABLE email_otps DROP COLUMN {name}")
+            conn.execute("INSERT INTO email_otps(id,email,otp_code,expires_at,created_at) "
+                         "VALUES('legacy-fixture',?,'123456',?,'fixture')", (self.alice.email, time.time() + 300))
+        database.init_db()
+        database.init_db()
+        self.assertEqual(self.verify_otp("123456").status_code, 400)
+        with database.get_db_connection() as conn:
+            row = conn.execute("SELECT is_used,otp_code FROM email_otps").fetchone()
+            self.assertEqual((row[0], row[1]), (1, ""))
+
+
+    def test_resend_replaces_only_its_own_purpose(self):
+        self.issue_otp()
+        with database.get_db_connection() as conn:
+            conn.execute("UPDATE email_otps SET requested_at = requested_at - 31")
+        self.issue_otp("reset")
+        with database.get_db_connection() as conn:
+            conn.execute("UPDATE email_otps SET requested_at = requested_at - 31")
+        _, latest_code = self.issue_otp()
+        with database.get_db_connection() as conn:
+            rows = conn.execute("SELECT purpose,is_used FROM email_otps ORDER BY requested_at").fetchall()
+            self.assertEqual([(row[0], row[1]) for row in rows], [("login", 1), ("reset", 0), ("login", 0)])
+        self.assertEqual(self.verify_otp(latest_code).status_code, 200)
+
+    def test_delivery_exception_is_redacted_and_challenge_revoked(self):
+        from app.services import user_service as service_module
+        sender = AsyncMock(side_effect=RuntimeError("sensitive fixture provider response"))
+        with patch.object(service_module.email_service, "send_otp_email", sender), patch.object(service_module.logger, "error") as log:
+            result = self.request("POST", "/user/otp/send", json={"email_or_username": "alice"})
+        self.assertEqual(result.status_code, 503)
+        self.assertNotIn("sensitive fixture", str(log.call_args))
+        with database.get_db_connection() as conn:
+            self.assertEqual(conn.execute("SELECT delivery_status FROM email_otps").fetchone()[0], "failed")
+
+
 
 class CloudAdapterSecurityTests(SecurityTests):
-    """Exercise the actual Turso adapter with an offline, autocommit SQL client.
+    """Exercise the Turso adapter with real SDK transactions on disposable SQL.
 
     This verifies statement/row compatibility, not remote Turso or its FK setup.
     """
     def setUp(self):
         super().setUp()
-        original = database.TursoConnection
-
-        class SqlClient:
-            def __init__(self):
-                self.connection = sqlite3.connect(database.DB_FILE, isolation_level=None)
-                self.connection.row_factory = sqlite3.Row
-
-            def execute(self, sql, args):
-                cursor = self.connection.execute(sql, args)
-                return types.SimpleNamespace(rows=cursor.fetchall(), rows_affected=cursor.rowcount)
-
-            def close(self):
-                self.connection.close()
-
-        def connection(**kwargs):
-            adapter = original.__new__(original)
-            adapter._client = cast(Any, SqlClient())
-            return adapter
+        import libsql_client
+        original = libsql_client.create_client_sync
+        # Run the installed SDK and its transaction/row classes against
+        # disposable local SQL, without contacting a remote server.
+        def client(**kwargs):
+            return original(url=database.DB_FILE.resolve().as_uri())
 
         for replacement in (patch.object(database, "is_turso_configured", return_value=True),
-                            patch.object(database, "get_turso_url", return_value="https://fixture.invalid"),
-                            patch.object(database, "TursoConnection", side_effect=connection)):
+                            patch.object(database, "get_turso_url", return_value="wss://fixture.invalid"),
+                            patch.object(libsql_client, "create_client_sync", side_effect=client)):
             replacement.start()
             self.addCleanup(replacement.stop)
 
     def test_cloud_initializer_is_repeatable(self):
         database.init_db()
         self.assertEqual(self.request("GET", "/user/me", self.token).status_code, 200)
+
+
+class EmailDeliveryTests(unittest.TestCase):
+    def setUp(self):
+        module_path = Path(__file__).resolve().parents[1] / "app/services/email_service.py"
+        self.namespace = runpy.run_path(str(module_path))
+        self.mail = self.namespace["EmailService"]()
+
+    def test_unconfigured_smtp_fails_without_logging_email_content(self):
+        with patch.object(settings, "SMTP_HOST", "", create=True), patch.object(logger, "warning") as log:
+            self.assertFalse(self.mail._send_smtp_sync("fixture@example.invalid", "secret subject", "secret body", "secret html"))
+        self.assertNotIn("secret", str(log.call_args))
+
+    def test_provider_error_body_is_not_logged(self):
+        import urllib.error
+        with patch.multiple(settings, BREVO_API_KEY="fixture", BREVO_FROM_EMAIL="fixture@example.invalid",
+                            BREVO_FROM_NAME="Fixture", create=True), patch("urllib.request.urlopen", side_effect=urllib.error.HTTPError(
+                                "https://fixture.invalid", 400, "fixture", Message(), io.BytesIO(b"secret provider response"))), patch.object(logger, "error") as log:
+            self.assertFalse(self.mail._send_brevo_http("fixture@example.invalid", "secret", "secret", "secret"))
+        self.assertNotIn("secret", str(log.call_args))
+
+    def test_turso_transport_supports_transactions(self):
+        for source, expected in (("libsql://fixture.invalid", "libsql://fixture.invalid"),
+                                 ("https://fixture.invalid", "wss://fixture.invalid"),
+                                 ("http://localhost:8080", "ws://localhost:8080")):
+            with patch.object(settings, "TURSO_DATABASE_URL", source):
+                self.assertEqual(database.get_turso_url(), expected)
+
 
 
 class GoogleVerificationTests(unittest.TestCase):

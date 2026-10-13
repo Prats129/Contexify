@@ -1,4 +1,5 @@
 import sqlite3
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, List, Optional
@@ -33,8 +34,11 @@ def is_turso_configured() -> bool:
 
 def get_turso_url() -> str:
     url = settings.TURSO_DATABASE_URL.strip()
-    if url.startswith("libsql://"):
-        return url.replace("libsql://", "https://", 1)
+    # The installed SDK only supports interactive transactions over WebSockets.
+    if url.startswith("https://"):
+        return url.replace("https://", "wss://", 1)
+    if url.startswith("http://"):
+        return url.replace("http://", "ws://", 1)
     return url
 
 class TursoCursor:
@@ -91,9 +95,12 @@ class TursoConnection:
     def __init__(self, url: str, token: str):
         import libsql_client
         self._client = libsql_client.create_client_sync(url=url, auth_token=token)
+        self._transaction = None
 
     def cursor(self):
-        return TursoCursor(self._client)
+        if self._transaction is None:
+            self._transaction = self._client.transaction()
+        return TursoCursor(self._transaction)
 
     def execute(self, sql: str, params: Optional[Any] = None):
         cursor = self.cursor()
@@ -101,30 +108,59 @@ class TursoConnection:
         return cursor
 
     def commit(self):
-        pass
+        if self._transaction is not None:
+            self._transaction.commit()
+            self._transaction.close()
+            self._transaction = None
 
     def rollback(self):
-        pass
+        if self._transaction is not None:
+            try:
+                self._transaction.rollback()
+            finally:
+                self._transaction.close()
+                self._transaction = None
 
     def close(self):
         try:
-            self._client.close()
+            self.rollback()
         except Exception:
-            logger.warning("Could not close database connection", exc_info=True)
+            logger.warning("Could not roll back database connection", exc_info=True)
+        finally:
+            try:
+                self._client.close()
+            except Exception:
+                logger.warning("Could not close database connection", exc_info=True)
 
 def get_db_path() -> Path:
     settings.DATA_DIR.mkdir(parents=True, exist_ok=True)
     return DB_FILE
 
 @contextmanager
-def get_db_connection():
+def get_db_connection(*, write: bool = False):
     """
-    Context manager providing either a cloud Turso database connection
-    or a local SQLite connection with automatic fallback.
+    Provide the configured database with commit on success and rollback on error.
     """
     if is_turso_configured():
         conn = TursoConnection(url=get_turso_url(), token=settings.TURSO_AUTH_TOKEN.strip())
         try:
+            if write:
+                from libsql_client import LibsqlError
+
+                # Acquire the write lock before OTP reads, including on deferred
+                # SDK transactions. The empty update changes no challenge rows.
+                deadline = time.monotonic() + 20
+                while True:
+                    try:
+                        conn.execute("UPDATE email_otps SET attempts = attempts WHERE 0")
+                        break
+                    except LibsqlError as exc:
+                        if not exc.code.startswith("SQLITE_BUSY") or time.monotonic() >= deadline:
+                            raise
+                        # Only retry lock acquisition, before caller statements.
+                        # Never replay writes after an uncertain commit/network error.
+                        conn.rollback()
+                        time.sleep(0.05)
             yield conn
             conn.commit()
         except Exception as e:
@@ -140,6 +176,8 @@ def get_db_connection():
         try:
             conn.execute("PRAGMA foreign_keys = ON;")
             conn.execute("PRAGMA journal_mode = WAL;")
+            if write:
+                conn.execute("BEGIN IMMEDIATE")
             yield conn
             conn.commit()
         except Exception as e:
@@ -316,6 +354,19 @@ def init_db():
                 created_at TEXT NOT NULL
             );
         """)
+
+        cursor.execute("PRAGMA table_info(email_otps)")
+        otp_columns = {row["name"] for row in cursor.fetchall()}
+        for name, definition in (
+            ("purpose", "TEXT NOT NULL DEFAULT 'legacy'"),
+            ("delivery_status", "TEXT NOT NULL DEFAULT 'legacy'"),
+            ("requested_at", "REAL NOT NULL DEFAULT 0"),
+        ):
+            if name not in otp_columns:
+                cursor.execute(f"ALTER TABLE email_otps ADD COLUMN {name} {definition}")
+        # Existing plaintext codes have no trustworthy purpose; revoke them.
+        cursor.execute("UPDATE email_otps SET is_used = 1, otp_code = '' WHERE purpose = 'legacy'")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_otp_email_requested ON email_otps(email, requested_at)")
 
         # Indexes for fast querying
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON chat_sessions(user_id);")

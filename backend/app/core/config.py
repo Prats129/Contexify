@@ -123,6 +123,7 @@ class Settings(BaseSettings):
     OTP_EXPIRY_SECONDS: int = 180  # 3 minutes
     OTP_RESEND_COOLDOWN_SECONDS: int = 30  # 0.5 minute between OTP resends
     OTP_MAX_ATTEMPTS: int = 3
+    OTP_MAX_SENDS_PER_HOUR: int = Field(default=5, ge=1)
 
     # Temporary Chat Retention Settings
     TEMPORARY_CHAT_RETENTION_DAYS: int = 3  # Temporary conversations automatically purged after 3 days

@@ -445,382 +445,135 @@ class UserService:
             logger.info(f"Password changed successfully for user '{row['username']}' ({user_id})")
             return True
 
-    async def send_login_otp(self, identifier: str) -> SendOtpResponse:
-        """
-        Generate and send a 6-digit OTP to the registered user's email address.
-        """
+    async def _send_otp(self, identifier: str, purpose: str) -> SendOtpResponse:
         clean_id = identifier.strip().lower()
-
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT id, username, email, display_name
-                FROM users
-                WHERE username = ? OR email = ?
-                """,
-                (clean_id, clean_id)
-            )
-            user = cursor.fetchone()
-
+        now = time.time()
+        otp_id = str(uuid.uuid4())
+        otp_code = f"{secrets.randbelow(900000) + 100000}"
+        with get_db_connection(write=True) as conn:
+            user = conn.execute(
+                "SELECT email, display_name FROM users WHERE username = ? OR email = ?",
+                (clean_id, clean_id),
+            ).fetchone()
             if not user:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"No registered account found matching '{clean_id}'. Please check your spelling or register a new account."
-                )
-
-            user_email = user["email"]
-            user_display_name = user["display_name"]
-            now_ts = time.time()
-
-            # Enforce cooldown on recent active OTP requests
-            cursor.execute(
-                """
-                SELECT expires_at, created_at, is_used
-                FROM email_otps
-                WHERE email = ? AND is_used = 0
-                ORDER BY expires_at DESC
-                LIMIT 1
-                """,
-                (user_email,)
+                raise HTTPException(404, "No registered account found.")
+            email = user["email"]
+            # Both purposes and failed deliveries share the provider-spend budget.
+            recent = conn.execute(
+                "SELECT COUNT(*) AS total, MAX(requested_at) AS latest FROM email_otps "
+                "WHERE email = ? AND requested_at > ?", (email, now - 3600),
+            ).fetchone()
+            if recent["latest"] is not None and now - float(recent["latest"]) < settings.OTP_RESEND_COOLDOWN_SECONDS:
+                raise HTTPException(429, "A code was recently requested. Please wait before requesting another.")
+            if int(recent["total"]) >= settings.OTP_MAX_SENDS_PER_HOUR:
+                raise HTTPException(429, "Too many code requests. Please try again later.")
+            conn.execute(
+                "UPDATE email_otps SET is_used = 1 WHERE email = ? AND purpose = ? AND is_used = 0",
+                (email, purpose),
             )
-            latest_otp = cursor.fetchone()
-
-            if latest_otp:
-                # Calculate time since this OTP was issued based on expires_at - OTP_EXPIRY_SECONDS
-                issued_at = float(latest_otp["expires_at"]) - settings.OTP_EXPIRY_SECONDS
-                elapsed = now_ts - issued_at
-                if elapsed < settings.OTP_RESEND_COOLDOWN_SECONDS:
-                    wait_sec = int(settings.OTP_RESEND_COOLDOWN_SECONDS - elapsed)
-                    raise HTTPException(
-                        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                        detail=f"A code was recently sent. Please wait {wait_sec} seconds before requesting a new code."
-                    )
-
-            # Invalidate all prior unused OTPs for this email
-            cursor.execute(
-                "UPDATE email_otps SET is_used = 1 WHERE email = ? AND is_used = 0",
-                (user_email,)
+            conn.execute(
+                "INSERT INTO email_otps "
+                "(id,email,otp_code,expires_at,attempts,is_used,created_at,purpose,delivery_status,requested_at) "
+                "VALUES (?,?,?,?,0,0,?,?, 'pending',?)",
+                (otp_id, email, hash_password(otp_code, otp_id), now + settings.OTP_EXPIRY_SECONDS,
+                 datetime.now(timezone.utc).replace(tzinfo=None).isoformat(), purpose, now),
             )
-
-            # Generate fresh 6-digit OTP
-            otp_code = f"{secrets.randbelow(900000) + 100000}"
-            otp_id = str(uuid.uuid4())
-            expires_at = now_ts + settings.OTP_EXPIRY_SECONDS
-            created_at = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
-
-            cursor.execute(
-                """
-                INSERT INTO email_otps (id, email, otp_code, expires_at, attempts, is_used, created_at)
-                VALUES (?, ?, ?, ?, 0, 0, ?)
-                """,
-                (otp_id, user_email, otp_code, expires_at, created_at)
-            )
-
-        # Dispatch email asynchronously in non-blocking background task for instant UI response
-        asyncio.create_task(
-            email_service.send_otp_email(
-                to_email=user_email,
-                otp_code=otp_code,
-                display_name=user_display_name
-            )
-        )
-
-        logger.info(f"Dispatched login OTP to '{user_email}' for user '{user['username']}'")
-        masked = mask_email(user_email)
-
+        # Never hold a database transaction open while contacting the provider.
+        sender = email_service.send_otp_email if purpose == "login" else email_service.send_password_reset_otp_email
+        try:
+            delivered = await sender(to_email=email, otp_code=otp_code, display_name=user["display_name"])
+        except Exception as exc:  # noqa: BLE001 - provider boundary; never log mail bodies or credentials
+            logger.error("OTP email delivery failed (%s)", type(exc).__name__)
+            delivered = False
+        with get_db_connection(write=True) as conn:
+            changed = conn.execute(
+                "UPDATE email_otps SET delivery_status = ?, is_used = ? "
+                "WHERE id = ? AND delivery_status = 'pending' AND is_used = 0",
+                ("sent" if delivered else "failed", 0 if delivered else 1, otp_id),
+            ).rowcount
+        if not delivered:
+            raise HTTPException(503, "Unable to send the verification email. Please try again later.")
+        if changed != 1:
+            raise HTTPException(409, "This code was superseded. Please use the most recently requested code.")
+        masked = mask_email(email)
         return SendOtpResponse(
-            message=f"A 6-digit verification code has been sent to {masked}.",
-            email=user_email,
-            masked_email=masked,
-            expires_in_seconds=settings.OTP_EXPIRY_SECONDS,
-            cooldown_seconds=settings.OTP_RESEND_COOLDOWN_SECONDS
+            message=f"A 6-digit {'password reset' if purpose == 'reset' else 'verification'} code has been sent to {masked}.",
+            email=email, masked_email=masked, expires_in_seconds=settings.OTP_EXPIRY_SECONDS,
+            cooldown_seconds=settings.OTP_RESEND_COOLDOWN_SECONDS,
         )
 
-    def verify_login_otp(self, identifier: str, otp: str) -> UserResponse:
-        """
-        Verify the OTP code and return the authenticated UserResponse.
-        """
-        clean_id = identifier.strip().lower()
-        clean_otp = otp.strip()
-
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT id, username, email, display_name, avatar_color, avatar_url, created_at
-                FROM users
-                WHERE username = ? OR email = ?
-                """,
-                (clean_id, clean_id)
-            )
-            user = cursor.fetchone()
-
-            if not user:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"No account found matching '{clean_id}'."
-                )
-
-            user_email = user["email"]
-            now_ts = time.time()
-
-            cursor.execute(
-                """
-                SELECT id, otp_code, expires_at, attempts, is_used
-                FROM email_otps
-                WHERE email = ? AND is_used = 0
-                ORDER BY expires_at DESC
-                LIMIT 1
-                """,
-                (user_email,)
-            )
-            otp_record = cursor.fetchone()
-
-            if not otp_record or float(otp_record["expires_at"]) < now_ts:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Verification code has expired or is invalid. Please request a new code."
-                )
-
-            current_attempts = int(otp_record["attempts"])
-            if current_attempts >= settings.OTP_MAX_ATTEMPTS:
-                cursor.execute("UPDATE email_otps SET is_used = 1 WHERE id = ?", (otp_record["id"],))
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Too many invalid attempts. This verification code has been revoked. Please request a new code."
-                )
-
-            if not secrets.compare_digest(otp_record["otp_code"].strip(), clean_otp):
-                new_attempts = current_attempts + 1
-                cursor.execute(
-                    "UPDATE email_otps SET attempts = ? WHERE id = ?",
-                    (new_attempts, otp_record["id"])
-                )
-                remaining = max(0, settings.OTP_MAX_ATTEMPTS - new_attempts)
-                if remaining > 0:
-                    detail_msg = f"Invalid verification code. {remaining} attempt{'s' if remaining != 1 else ''} remaining."
-                else:
-                    cursor.execute("UPDATE email_otps SET is_used = 1 WHERE id = ?", (otp_record["id"],))
-                    detail_msg = "Too many invalid attempts. Please request a new code."
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=detail_msg
-                )
-
-            # Mark OTP as successfully used
-            cursor.execute("UPDATE email_otps SET is_used = 1 WHERE id = ?", (otp_record["id"],))
-
-            logger.info(f"User authenticated successfully via OTP: '{user['username']}' ({user['id']})")
-            return UserResponse(
-                id=user["id"],
-                username=user["username"],
-                email=user["email"],
-                display_name=user["display_name"],
-                avatar_color=user["avatar_color"],
-                avatar_url=user["avatar_url"] or None,
-                created_at=user["created_at"]
-            )
+    async def send_login_otp(self, identifier: str) -> SendOtpResponse:
+        return await self._send_otp(identifier, "login")
 
     async def send_password_reset_otp(self, identifier: str) -> SendOtpResponse:
-        """
-        Generate and send a 6-digit password reset OTP to the user's registered email.
-        """
-        clean_id = identifier.strip().lower()
+        return await self._send_otp(identifier, "reset")
 
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT id, username, email, display_name
-                FROM users
-                WHERE username = ? OR email = ?
-                """,
-                (clean_id, clean_id)
+    def _consume_otp(self, conn, email: str, otp: str, purpose: str) -> str | None:
+        """Return an error for rejection so attempt updates commit before raising."""
+        now = time.time()
+        record = conn.execute(
+            "SELECT id,otp_code,expires_at,attempts FROM email_otps "
+            "WHERE email = ? AND purpose = ? AND delivery_status = 'sent' AND is_used = 0 "
+            "ORDER BY requested_at DESC LIMIT 1", (email, purpose),
+        ).fetchone()
+        invalid = "Verification code has expired or is invalid. Please request a new code."
+        if not record:
+            return invalid
+        if float(record["expires_at"]) <= now or int(record["attempts"]) >= settings.OTP_MAX_ATTEMPTS:
+            conn.execute("UPDATE email_otps SET is_used = 1 WHERE id = ?", (record["id"],))
+            return invalid
+        if not secrets.compare_digest(record["otp_code"], hash_password(otp.strip(), record["id"])):
+            attempts = int(record["attempts"]) + 1
+            conn.execute(
+                "UPDATE email_otps SET attempts = attempts + 1, is_used = ? WHERE id = ? AND is_used = 0",
+                (int(attempts >= settings.OTP_MAX_ATTEMPTS), record["id"]),
             )
-            user = cursor.fetchone()
+            remaining = max(0, settings.OTP_MAX_ATTEMPTS - attempts)
+            return f"Invalid verification code. {remaining} attempts remaining." if remaining else "Too many invalid attempts. Please request a new code."
+        consumed = conn.execute(
+            "UPDATE email_otps SET is_used = 1 WHERE id = ? AND is_used = 0 AND attempts < ? AND expires_at > ?",
+            (record["id"], settings.OTP_MAX_ATTEMPTS, now),
+        ).rowcount
+        return None if consumed == 1 else invalid
 
+    def verify_login_otp(self, identifier: str, otp: str) -> UserResponse:
+        with get_db_connection(write=True) as conn:
+            user = conn.execute(
+                "SELECT id,username,email,display_name,avatar_color,avatar_url,created_at "
+                "FROM users WHERE username = ? OR email = ?",
+                (identifier.strip().lower(), identifier.strip().lower()),
+            ).fetchone()
             if not user:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"No registered account found matching '{clean_id}'."
-                )
-
-            user_email = user["email"]
-            user_display_name = user["display_name"]
-            now_ts = time.time()
-
-            # Enforce cooldown on recent active OTP requests
-            cursor.execute(
-                """
-                SELECT expires_at, created_at, is_used
-                FROM email_otps
-                WHERE email = ? AND is_used = 0
-                ORDER BY expires_at DESC
-                LIMIT 1
-                """,
-                (user_email,)
-            )
-            latest_otp = cursor.fetchone()
-
-            if latest_otp:
-                issued_at = float(latest_otp["expires_at"]) - settings.OTP_EXPIRY_SECONDS
-                elapsed = now_ts - issued_at
-                if elapsed < settings.OTP_RESEND_COOLDOWN_SECONDS:
-                    wait_sec = int(settings.OTP_RESEND_COOLDOWN_SECONDS - elapsed)
-                    raise HTTPException(
-                        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                        detail=f"A code was recently sent. Please wait {wait_sec} seconds before requesting a new code."
-                    )
-
-            # Invalidate all prior unused OTPs for this email
-            cursor.execute(
-                "UPDATE email_otps SET is_used = 1 WHERE email = ? AND is_used = 0",
-                (user_email,)
-            )
-
-            # Generate fresh 6-digit OTP
-            otp_code = f"{secrets.randbelow(900000) + 100000}"
-            otp_id = str(uuid.uuid4())
-            expires_at = now_ts + settings.OTP_EXPIRY_SECONDS
-            created_at = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
-
-            cursor.execute(
-                """
-                INSERT INTO email_otps (id, email, otp_code, expires_at, attempts, is_used, created_at)
-                VALUES (?, ?, ?, ?, 0, 0, ?)
-                """,
-                (otp_id, user_email, otp_code, expires_at, created_at)
-            )
-
-        # Dispatch Password Reset email asynchronously in non-blocking background task for instant UI response
-        asyncio.create_task(
-            email_service.send_password_reset_otp_email(
-                to_email=user_email,
-                otp_code=otp_code,
-                display_name=user_display_name
-            )
-        )
-
-        logger.info(f"Dispatched password reset OTP to '{user_email}' for user '{user['username']}'")
-        masked = mask_email(user_email)
-
-        return SendOtpResponse(
-            message=f"A 6-digit password reset code has been sent to {masked}.",
-            email=user_email,
-            masked_email=masked,
-            expires_in_seconds=settings.OTP_EXPIRY_SECONDS,
-            cooldown_seconds=settings.OTP_RESEND_COOLDOWN_SECONDS
+                raise HTTPException(400, "Verification code has expired or is invalid. Please request a new code.")
+            error = self._consume_otp(conn, user["email"], otp, "login")
+        if error:
+            raise HTTPException(400, error)
+        return UserResponse(
+            id=user["id"], username=user["username"], email=user["email"], display_name=user["display_name"],
+            avatar_color=user["avatar_color"], avatar_url=user["avatar_url"] or None, created_at=user["created_at"],
         )
 
     def reset_password_with_otp(self, req: ResetPasswordWithOtpRequest) -> dict:
-        """
-        Verify OTP code and reset user's password without requiring login.
-        """
         clean_id = req.email_or_username.strip().lower()
-        clean_otp = req.otp.strip()
-        new_password = req.new_password
-
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT id, username, email, display_name, password_hash, password_salt
-                FROM users
-                WHERE username = ? OR email = ?
-                """,
-                (clean_id, clean_id)
-            )
-            user = cursor.fetchone()
-
+        with get_db_connection(write=True) as conn:
+            user = conn.execute("SELECT * FROM users WHERE username = ? OR email = ?", (clean_id, clean_id)).fetchone()
             if not user:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"No account found matching '{clean_id}'."
-                )
-
-            # Validate password strength against policy and user identity
-            is_valid, err_msg = validate_password_strength(
-                new_password,
-                username=user["username"],
-                email=user["email"],
-                display_name=user["display_name"]
+                raise HTTPException(400, "Verification code has expired or is invalid. Please request a new code.")
+            valid, message = validate_password_strength(
+                req.new_password, username=user["username"], email=user["email"], display_name=user["display_name"],
             )
-            if not is_valid:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=err_msg
-                )
-
-            # Prevent using the same existing password
-            if user["password_salt"] and user["password_hash"]:
-                if verify_password(new_password, user["password_salt"], user["password_hash"]):
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="New password cannot be the same as your current password. Please choose a different password."
-                    )
-
-            user_id = user["id"]
-            user_email = user["email"]
-            now_ts = time.time()
-
-            cursor.execute(
-                """
-                SELECT id, otp_code, expires_at, attempts, is_used
-                FROM email_otps
-                WHERE email = ? AND is_used = 0
-                ORDER BY expires_at DESC
-                LIMIT 1
-                """,
-                (user_email,)
-            )
-            otp_record = cursor.fetchone()
-
-            if not otp_record or float(otp_record["expires_at"]) < now_ts:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Verification code has expired or is invalid. Please request a new reset code."
-                )
-
-            current_attempts = int(otp_record["attempts"])
-            if current_attempts >= settings.OTP_MAX_ATTEMPTS:
-                cursor.execute("UPDATE email_otps SET is_used = 1 WHERE id = ?", (otp_record["id"],))
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Too many invalid attempts. This reset code has been revoked. Please request a new one."
-                )
-
-            if not secrets.compare_digest(otp_record["otp_code"].strip(), clean_otp):
-                new_attempts = current_attempts + 1
-                cursor.execute(
-                    "UPDATE email_otps SET attempts = ? WHERE id = ?",
-                    (new_attempts, otp_record["id"])
-                )
-                remaining = max(0, settings.OTP_MAX_ATTEMPTS - new_attempts)
-                if remaining > 0:
-                    detail_msg = f"Invalid verification code. {remaining} attempt{'s' if remaining != 1 else ''} remaining."
-                else:
-                    cursor.execute("UPDATE email_otps SET is_used = 1 WHERE id = ?", (otp_record["id"],))
-                    detail_msg = "Too many invalid attempts. Please request a new reset code."
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=detail_msg
-                )
-
-            # Mark OTP as used
-            cursor.execute("UPDATE email_otps SET is_used = 1 WHERE id = ?", (otp_record["id"],))
-
-            # Update password hash & salt
-            new_salt = secrets.token_hex(16)
-            new_hash = hash_password(new_password, new_salt)
-
-            cursor.execute(
-                "UPDATE users SET password_hash = ?, password_salt = ? WHERE id = ?",
-                (new_hash, new_salt, user_id)
-            )
-
-            logger.info(f"Password reset successfully via OTP for user '{user['username']}' ({user_id})")
-            return {"message": "Password reset successfully. You can now sign in with your new password."}
+            if not valid:
+                raise HTTPException(400, message)
+            if user["password_salt"] and verify_password(req.new_password, user["password_salt"], user["password_hash"]):
+                raise HTTPException(400, "New password cannot be the same as your current password.")
+            error = self._consume_otp(conn, user["email"], req.otp, "reset")
+            if not error:
+                salt = secrets.token_hex(16)
+                conn.execute("UPDATE users SET password_hash = ?, password_salt = ? WHERE id = ?",
+                             (hash_password(req.new_password, salt), salt, user["id"]))
+        if error:
+            raise HTTPException(400, error)
+        return {"message": "Password reset successfully. You can now sign in with your new password."}
 
     async def authenticate_with_google(self, req: GoogleAuthRequest) -> UserResponse:
         """

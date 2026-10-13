@@ -1,9 +1,11 @@
-import smtplib
 import asyncio
-from email.mime.text import MIMEText
+import smtplib
 from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+
 from app.core.config import settings
 from app.core.logging import logger
+
 
 class EmailService:
     """
@@ -83,13 +85,9 @@ class EmailService:
 
     def _send_smtp_sync(self, to_email: str, subject: str, text_content: str, html_content: str) -> bool:
         """Synchronous SMTP email delivery."""
-        if not settings.SMTP_HOST:
-            logger.info(
-                f"[DEV MODE / NO SMTP] Email to '{to_email}' skipped SMTP dispatch.\n"
-                f"Subject: {subject}\n"
-                f"Body: {text_content}"
-            )
-            return True
+        if not (settings.SMTP_HOST or "").strip():
+            logger.warning("Email delivery unavailable: SMTP is not configured")
+            return False
 
         smtp_host = (settings.SMTP_HOST or "").strip()
         smtp_user = (settings.SMTP_USER or "").strip().strip('"').strip("'")
@@ -128,8 +126,8 @@ class EmailService:
             _try_send(smtp_host, primary_port, use_ssl)
             logger.info(f"Successfully sent email to '{to_email}' via SMTP {smtp_host}:{primary_port}")
             return True
-        except Exception as primary_err:
-            logger.warning(f"Primary SMTP attempt to {smtp_host}:{primary_port} (SSL={use_ssl}) failed: {primary_err}")
+        except (smtplib.SMTPException, OSError) as primary_err:
+            logger.warning("Primary SMTP delivery failed (%s)", type(primary_err).__name__)
             # Cloud hosts frequently block port 587; retry via alternative port/mode (465 SSL vs 587 TLS)
             fallback_port = 465 if not use_ssl else 587
             fallback_ssl = not use_ssl
@@ -138,8 +136,8 @@ class EmailService:
                 _try_send(smtp_host, fallback_port, fallback_ssl)
                 logger.info(f"Fallback SMTP dispatch to '{to_email}' succeeded via {smtp_host}:{fallback_port}")
                 return True
-            except Exception as fallback_err:
-                logger.error(f"Both primary and fallback SMTP failed for '{to_email}'. Error: {fallback_err}", exc_info=True)
+            except (smtplib.SMTPException, OSError) as fallback_err:
+                logger.error("Both SMTP delivery attempts failed (%s)", type(fallback_err).__name__)
                 return False
 
     def _send_brevo_http(self, to_email: str, subject: str, text_content: str, html_content: str) -> bool:
@@ -170,8 +168,8 @@ class EmailService:
 
         try:
             import json
-            import urllib.request
             import urllib.error
+            import urllib.request
 
             data = json.dumps(payload).encode("utf-8")
             req = urllib.request.Request(
@@ -192,11 +190,10 @@ class EmailService:
                 logger.info(f"Successfully sent email to '{to_email}' via Brevo HTTPS API (id: {msg_id})")
                 return True
         except urllib.error.HTTPError as he:
-            err_body = he.read().decode("utf-8", errors="ignore")
-            logger.error(f"Brevo HTTPS API error [{he.code}] sending to '{to_email}': {err_body}")
+            logger.error("Brevo email delivery rejected (HTTP %s)", he.code)
             return False
-        except Exception as e:
-            logger.error(f"Failed to dispatch email via Brevo HTTPS API: {e}", exc_info=True)
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            logger.error("Brevo email delivery failed (%s)", type(e).__name__)
             return False
 
     def _send_email_sync(self, to_email: str, subject: str, text_content: str, html_content: str) -> bool:
