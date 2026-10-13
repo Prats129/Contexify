@@ -390,14 +390,54 @@ class SecurityTests(unittest.TestCase):
         distribution = root / "frontend/dist"
         distribution.mkdir(parents=True, exist_ok=True)
         (distribution / "index.html").write_text("fixture frontend", encoding="utf-8")
+        (distribution / "public.txt").write_text("fixture public file", encoding="utf-8")
+        assets = distribution / "assets"
+        assets.mkdir(exist_ok=True)
+        (assets / "main.js").write_text("fixture asset", encoding="utf-8")
         (root / "private-fixture.txt").write_text("private fixture", encoding="utf-8")
         production = runpy.run_path(str(Path(__file__).resolve().parents[1] / "app/main.py"))["app"]
 
         async def check():
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=production), base_url="http://fixture.invalid") as client:
                 self.assertEqual((await client.get("/c/alice-session")).text, "fixture frontend")
-                for path in ("/%2e%2e/%2e%2e/private-fixture.txt", "/api/v1/media/uploads/fixture.png"):
-                    self.assertEqual((await client.get(path)).status_code, 404)
+                self.assertEqual((await client.get("/public.txt")).text, "fixture public file")
+                self.assertEqual((await client.get("/assets/main.js")).text, "fixture asset")
+                for path in (
+                    "/%2e%2e/%2e%2e/private-fixture.txt",
+                    "/..%5c..%5cprivate-fixture.txt",
+                    "/assets/..%5c..%5c..%5cprivate-fixture.txt",
+                    "/api", "/api/", "/api/v1/not-a-route",
+                    "/api%5cv1%5cnot-a-route", "/%2e/api", "/other/%2e%2e/api",
+                    "/api/v1/media/uploads/fixture.png", "/docs/not-a-route",
+                ):
+                    with self.subTest(path=path):
+                        self.assertEqual((await client.get(path)).status_code, 404)
+
+        asyncio.run(check())
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows junction regression")
+    def test_production_spa_blocks_junction_escapes(self):
+        import _winapi
+
+        distribution = root / "frontend/dist"
+        assets = distribution / "assets"
+        assets.mkdir(parents=True, exist_ok=True)
+        (distribution / "index.html").write_text("fixture frontend", encoding="utf-8")
+        outside = root / (self.__class__.__name__ + "-junction-fixture")
+        outside.mkdir()
+        (outside / "private.txt").write_text("private fixture", encoding="utf-8")
+        link_name = self.__class__.__name__ + "-linked"
+        _winapi.CreateJunction(str(outside), str(distribution / link_name))
+        _winapi.CreateJunction(str(outside), str(assets / link_name))
+        production = runpy.run_path(str(Path(__file__).resolve().parents[1] / "app/main.py"))["app"]
+
+        async def check():
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=production), base_url="http://fixture.invalid") as client:
+                for path in (f"/{link_name}/private.txt", f"/assets/{link_name}/private.txt"):
+                    with self.subTest(path=path):
+                        response = await client.get(path)
+                        self.assertEqual(response.status_code, 404)
+                        self.assertNotIn("private fixture", response.text)
 
         asyncio.run(check())
 
