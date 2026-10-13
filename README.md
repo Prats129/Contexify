@@ -78,10 +78,10 @@ Built as a high-performance monorepo, Contexify provides synchronized clients ac
 ### 📱 Native Mobile Application (iOS & Android)
 
 - **Engineered with React Native 0.86 & Expo 57**: Pure 60fps native performance with zero webview wrappers.
-- **Gesture-Driven Interactions**: Left-edge swipe navigation to reveal sidebar, WhatsApp-style swipe-to-reply, long-press action popups, and floating scroll-to-latest button with haptic feedback (`expo-haptics`).
+- **Gesture-Driven Interactions**: Decoupled left-edge bezel swipe to open the sidebar alongside WhatsApp-style swipe-to-reply on message cards, long-press action menus, and floating scroll-to-bottom with haptic feedback (`expo-haptics`).
 - **Real-Time SSE Streaming**: Native `XMLHttpRequest` stream consumer with cancellation, token-by-token buffering, and haptic feedback.
 - **Session History Drawer**: Slide-out drawer with pinned session filtering, chronological sorting (newest/oldest), search, thread deletion, renaming, and document listings.
-- **Dynamic LAN IP Switcher**: In-app configuration modal allowing instant switching between production backends and local dev IP addresses (`http://192.168.x.x:8001/api/v1`).
+- **Dynamic LAN IP Switcher**: In-app modal for instant switching between cloud and local dev backends, automatically gated by environment flags (`EXPO_PUBLIC_APP_ENV`) and stripped from production builds.
 
 ### 👥 Enterprise Authentication & Profile Management
 
@@ -256,6 +256,14 @@ BREVO_FROM_NAME=Contexify
 VITE_GOOGLE_CLIENT_ID=your_google_client_id.apps.googleusercontent.com
 ```
 
+#### Mobile Configuration (`mobile/.env`)
+
+```env
+EXPO_PUBLIC_APP_ENV=development
+EXPO_PUBLIC_API_URL=http://<your-local-ip>:8001
+EXPO_PUBLIC_GOOGLE_CLIENT_ID=your_google_client_id.apps.googleusercontent.com
+```
+
 ---
 
 ### 3. Running the Applications
@@ -283,7 +291,7 @@ npm run dev:mobile
 ```
 
 - Scan the terminal QR code with **Expo Go** (Android) or the **Camera app** (iOS).
-- Ensure your mobile device and computer are on the same Wi-Fi network. Open the Server Config modal (gear icon) in the app to set your computer's local IP address (e.g. `http://192.168.1.50:8001/api/v1`).
+- Ensure your mobile device and computer are on the same Wi-Fi network. In dev mode, use the in-app server config button to set your computer's local IP address (e.g. `http://192.168.1.50:8001`).
 
 ---
 
@@ -369,6 +377,7 @@ Contexify/
 │   ├── assets/                # App icons, splash screens, and branding
 │   ├── src/
 │   │   ├── components/        # Header, ChatInput, MessageItem, DrawerMenu, Modals
+│   │   ├── config/            # Centralized environment governance (dev vs production)
 │   │   ├── services/          # Mobile API client with native XMLHttpRequest SSE
 │   │   ├── theme/             # 7-accent color tokens, light/dark palettes
 │   │   └── types/             # Mobile TypeScript interfaces
