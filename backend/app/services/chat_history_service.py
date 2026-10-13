@@ -1,13 +1,19 @@
 import json
 import uuid
-from datetime import datetime, timedelta
-from typing import List, Optional, Dict, Any, Tuple
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional, Tuple
+
 from app.core.config import settings
+from app.core.logging import logger
 from app.db.database import get_db_connection
 from app.schemas.chat import ChatMode, Citation, MediaAttachment, MessageReplyReference
 from app.schemas.document import DocumentMetadata
-from app.schemas.session import ChatSessionResponse, MessageResponse, SessionHistoryResponse
-from app.core.logging import logger
+from app.schemas.session import (
+    ChatSessionResponse,
+    MessageResponse,
+    SessionHistoryResponse,
+)
+
 
 def get_row_value(row: Any, key: str, default: Any = None) -> Any:
     """Safely extracts a column value from sqlite3.Row, libsql_client.Row, or dict without crashing."""
@@ -29,10 +35,10 @@ class ChatHistoryService:
         is_temporary: bool = False
     ) -> ChatSessionResponse:
         session_id = session_id or str(uuid.uuid4())
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
         expires_at = None
         if is_temporary:
-            expires_at = (datetime.utcnow() + timedelta(days=settings.TEMPORARY_CHAT_RETENTION_DAYS)).isoformat()
+            expires_at = (datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=settings.TEMPORARY_CHAT_RETENTION_DAYS)).isoformat()
         
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -163,7 +169,7 @@ class ChatHistoryService:
             return sessions, total
 
     def toggle_pin_session(self, session_id: str, is_pinned: bool) -> bool:
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
         pinned_at = now if is_pinned else None
         pin_val = 1 if is_pinned else 0
         with get_db_connection() as conn:
@@ -175,7 +181,7 @@ class ChatHistoryService:
             return cursor.rowcount > 0
 
     def update_session_title(self, session_id: str, title: str) -> bool:
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -185,7 +191,7 @@ class ChatHistoryService:
             return cursor.rowcount > 0
 
     def update_session_mode(self, session_id: str, mode: ChatMode) -> bool:
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
         mode_val = mode.value if hasattr(mode, 'value') else str(mode)
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -196,7 +202,7 @@ class ChatHistoryService:
             return cursor.rowcount > 0
 
     def touch_session(self, session_id: str):
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -211,7 +217,7 @@ class ChatHistoryService:
             return cursor.rowcount > 0
 
     def clear_session_messages(self, session_id: str) -> bool:
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
@@ -232,7 +238,7 @@ class ChatHistoryService:
         reply_to: Optional[Any] = None
     ) -> MessageResponse:
         message_id = str(uuid.uuid4())
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
         citations_json = json.dumps(citations) if citations else None
         
         # Serialize attachments to JSON
@@ -249,7 +255,7 @@ class ChatHistoryService:
                 attachments_json = json.dumps(dumped)
                 attachments_obj = [MediaAttachment(**a) if isinstance(a, dict) else a for a in dumped]
             except Exception as e:
-                logger.error(f"Error serializing attachments for session {session_id}: {e}")
+                logger.exception(f"Error serializing attachments for session {session_id}: {e}")
                 attachments_json = "[]"
 
         # Serialize reply_to to JSON
@@ -266,11 +272,12 @@ class ChatHistoryService:
                 reply_to_json = json.dumps(dumped_r)
                 reply_to_obj = MessageReplyReference(**dumped_r)
             except Exception as e:
-                logger.error(f"Error serializing reply_to for session {session_id}: {e}")
+                logger.exception(f"Error serializing reply_to for session {session_id}: {e}")
                 reply_to_json = None
 
         # Only persist to SQLite if the session is registered in the database (logged-in user)
-        if self.get_session(session_id) is not None:
+        db_session = self.get_session(session_id)
+        if db_session is not None and not db_session.user_id.startswith("guest_"):
             with get_db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
@@ -322,7 +329,7 @@ class ChatHistoryService:
                         raw_c = json.loads(row["citations_json"])
                         citations = [Citation(**c) for c in raw_c]
                     except Exception as e:
-                        logger.error(f"Error parsing citations for message {row['id']}: {e}")
+                        logger.exception(f"Error parsing citations for message {row['id']}: {e}")
 
                 attachments = None
                 attachments_json = get_row_value(row, "attachments_json")
@@ -332,7 +339,7 @@ class ChatHistoryService:
                         if raw_att:
                             attachments = [MediaAttachment(**a) for a in raw_att]
                     except Exception as e:
-                        logger.error(f"Error parsing attachments for message {row['id']}: {e}")
+                        logger.exception(f"Error parsing attachments for message {row['id']}: {e}")
                 
                 reply_to = None
                 reply_to_json = get_row_value(row, "reply_to_json")
@@ -342,7 +349,7 @@ class ChatHistoryService:
                         if raw_r and isinstance(raw_r, dict):
                             reply_to = MessageReplyReference(**raw_r)
                     except Exception as e:
-                        logger.error(f"Error parsing reply_to for message {row['id']}: {e}")
+                        logger.exception(f"Error parsing reply_to for message {row['id']}: {e}")
 
                 messages.append(MessageResponse(
                     id=row["id"],
@@ -367,7 +374,7 @@ class ChatHistoryService:
         total_chunks: int,
         storage_url: str = ""
     ) -> DocumentMetadata:
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
         # Only persist to SQLite if the session is registered in the database
         if self.get_session(session_id) is not None:
             with get_db_connection() as conn:
@@ -450,7 +457,7 @@ class ChatHistoryService:
         Purge all temporary chat sessions that have passed their expiration timestamp.
         Deletes vector store chunks, attached files, and cascades DB deletion.
         """
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
         purged_count = 0
         try:
             with get_db_connection() as conn:
@@ -475,14 +482,14 @@ class ChatHistoryService:
                     try:
                         vector_store_repo.delete_document(doc.document_id)
                     except Exception as ve:
-                        logger.warning(f"Error purging vector store for doc '{doc.document_id}': {ve}")
+                        logger.warning(f"Error purging vector store for doc '{doc.document_id}': {ve}", exc_info=True)
 
                 self.delete_session(sess_id)
                 purged_count += 1
 
             logger.info(f"Successfully purged {purged_count} expired temporary chat session(s).")
         except Exception as e:
-            logger.error(f"Error purging expired temporary sessions: {e}")
+            logger.exception(f"Error purging expired temporary sessions: {e}")
 
         return purged_count
 

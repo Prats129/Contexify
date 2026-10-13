@@ -1,15 +1,17 @@
 import json
 import re
-from typing import AsyncGenerator, Optional, List, Dict, Any
-from app.schemas.chat import ChatMode, ChatRequest, Citation, MediaAttachment
+from typing import Any, AsyncGenerator, Dict, List, Optional
+
+from app.core.logging import logger
 from app.repositories.session_store import session_store_repo
+from app.schemas.chat import ChatMode, ChatRequest, Citation, MediaAttachment
 from app.services.chat_history_service import chat_history_service
+from app.services.image_gen_service import image_gen_service
+from app.services.llm_service import llm_service
+from app.services.media_service import media_service
 from app.services.rag_service import rag_service
 from app.services.web_search_service import web_search_service
-from app.services.llm_service import llm_service
-from app.services.image_gen_service import image_gen_service
-from app.services.media_service import media_service
-from app.core.logging import logger
+
 
 class ChatOrchestrator:
     """
@@ -53,7 +55,7 @@ class ChatOrchestrator:
         )
         return cleaned.strip() if cleaned.strip() else q
 
-    def _find_recent_image_attachments(self, chat_history: Optional[List[Dict[str, Any]]]) -> List[MediaAttachment]:
+    def _find_recent_image_attachments(self, chat_history: Optional[List[Dict[str, Any]]], principal) -> List[MediaAttachment]:
         """Find the most recent image attachments from previous turns in the chat history."""
         if not chat_history:
             return []
@@ -66,8 +68,20 @@ class ChatOrchestrator:
                         image_atts.append(MediaAttachment(**a))
                 elif hasattr(a, "file_type") and a.file_type == "image":
                     image_atts.append(a)
-            if image_atts:
-                return image_atts
+            authorized = []
+            from fastapi import HTTPException
+
+            from app.core.security import check_asset
+            from app.services.storage_service import storage_service
+            for attachment in image_atts:
+                try:
+                    row = check_asset(attachment.id or "", principal)
+                    key = storage_service.owned_storage_key(row, "media")
+                    authorized.append(attachment.model_copy(update={"url": key}))
+                except HTTPException:
+                    continue
+            if authorized:
+                return authorized
         return []
 
     def _is_visual_query(self, query: str) -> bool:
@@ -148,7 +162,7 @@ class ChatOrchestrator:
                 full_answer += token
                 yield f"data: {json.dumps({'event': 'token', 'data': token})}\n\n"
         except Exception as e:
-            logger.error(f"Error during Conversational LLM streaming: {e}")
+            logger.exception(f"Error during Conversational LLM streaming: {e}")
             err_str = f"Error generating response: {str(e)}"
             yield f"data: {json.dumps({'event': 'error', 'data': err_str})}\n\n"
             full_answer = err_str
@@ -161,24 +175,8 @@ class ChatOrchestrator:
         session_store_repo.record_message(session_id, "assistant", full_answer)
         yield f"data: {json.dumps({'event': 'done', 'data': '[DONE]'})}\n\n"
 
-    async def route_and_stream(self, request: ChatRequest) -> AsyncGenerator[str, None]:
+    async def route_and_stream(self, request: ChatRequest, principal) -> AsyncGenerator[str, None]:
         session_id = request.session_id
-
-        # Self-healing defense-in-depth: if an authenticated user_id is provided and the session doesn't exist in DB,
-        # create it immediately so all messages are 100% persisted and foreign key constraints are met.
-        if request.user_id and not request.user_id.startswith("guest"):
-            existing_db_session = chat_history_service.get_session(session_id)
-            if not existing_db_session:
-                first_msg = (request.message or "New Conversation").strip().replace("\n", " ")
-                initial_title = (first_msg[:32] + "...") if len(first_msg) > 35 else (first_msg or "New Conversation")
-                chat_history_service.create_session(
-                    user_id=request.user_id,
-                    session_id=session_id,
-                    title=initial_title,
-                    mode=request.mode or ChatMode.AUTO,
-                    is_temporary=False
-                )
-                logger.info(f"Self-healed: auto-created session '{session_id}' for user '{request.user_id}' in DB.")
 
         session = session_store_repo.get_or_create_session(session_id)
         
@@ -217,7 +215,7 @@ class ChatOrchestrator:
             chat_history_service.update_session_title(session_id, summary_title)
 
         query = request.message or ""
-        recent_images = self._find_recent_image_attachments(chat_history)
+        recent_images = self._find_recent_image_attachments(chat_history, principal)
 
         # =========================================================================
         # 3. Explicit Mode Handlers (with graceful conversational Q&A fallback)
@@ -378,7 +376,7 @@ class ChatOrchestrator:
                 full_answer += token
                 yield f"data: {json.dumps({'event': 'token', 'data': token})}\n\n"
         except Exception as e:
-            logger.error(f"Error during LLM streaming: {e}")
+            logger.exception(f"Error during LLM streaming: {e}")
             err_str = f"Error generating answer: {str(e)}"
             yield f"data: {json.dumps({'event': 'error', 'data': err_str})}\n\n"
             full_answer = err_str
@@ -435,7 +433,7 @@ class ChatOrchestrator:
                 full_answer += token
                 yield f"data: {json.dumps({'event': 'token', 'data': token})}\n\n"
         except Exception as e:
-            logger.error(f"Error during Web Search LLM streaming: {e}")
+            logger.exception(f"Error during Web Search LLM streaming: {e}")
             err_str = f"Error generating web search answer: {str(e)}"
             yield f"data: {json.dumps({'event': 'error', 'data': err_str})}\n\n"
             full_answer = err_str
@@ -507,7 +505,7 @@ class ChatOrchestrator:
             )
 
         except Exception as e:
-            logger.error(f"Image generation execution error: {e}")
+            logger.exception(f"Image generation execution error: {e}")
             err_msg = f"⚠️ Sorry, could not generate image: {str(e)}"
             yield f"data: {json.dumps({'event': 'error', 'data': err_msg})}\n\n"
             chat_history_service.save_message(session_id=session_id, role="assistant", content=err_msg)
@@ -532,7 +530,7 @@ class ChatOrchestrator:
                 full_answer += token
                 yield f"data: {json.dumps({'event': 'token', 'data': token})}\n\n"
         except Exception as e:
-            logger.error(f"Multimodal vision execution error: {e}")
+            logger.exception(f"Multimodal vision execution error: {e}")
             err_msg = f"⚠️ Error analyzing image/document: {str(e)}"
             yield f"data: {json.dumps({'event': 'error', 'data': err_msg})}\n\n"
             full_answer = err_msg

@@ -1,8 +1,8 @@
 import sqlite3
-import os
-from pathlib import Path
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, List, Optional
+
 from app.core.config import settings
 from app.core.logging import logger
 
@@ -67,7 +67,7 @@ class TursoCursor:
             self.rowcount = getattr(self._last_result, "rows_affected", 0)
             self._idx = 0
         except Exception as e:
-            logger.error(f"Turso query error on SQL: {clean_sql[:100]}... Error: {e}")
+            logger.exception(f"Turso query error on SQL: {clean_sql[:100]}... Error: {e}")
             raise e
         return self
 
@@ -110,7 +110,7 @@ class TursoConnection:
         try:
             self._client.close()
         except Exception:
-            pass
+            logger.warning("Could not close database connection", exc_info=True)
 
 def get_db_path() -> Path:
     settings.DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -129,7 +129,7 @@ def get_db_connection():
             conn.commit()
         except Exception as e:
             conn.rollback()
-            logger.error(f"Turso database transaction error: {e}")
+            logger.exception(f"Turso database transaction error: {e}")
             raise
         finally:
             conn.close()
@@ -144,7 +144,7 @@ def get_db_connection():
             conn.commit()
         except Exception as e:
             conn.rollback()
-            logger.error(f"Local SQLite transaction error: {e}")
+            logger.exception(f"Local SQLite transaction error: {e}")
             raise
         finally:
             conn.close()
@@ -186,6 +186,32 @@ def init_db():
         if "avatar_url" not in columns:
             cursor.execute("ALTER TABLE users ADD COLUMN avatar_url TEXT DEFAULT '';")
         
+        if "google_subject" not in columns:
+            cursor.execute("ALTER TABLE users ADD COLUMN google_subject TEXT;")
+        cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_subject ON users(google_subject);")
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS auth_sessions (
+                token_hash TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                credential_hash TEXT NOT NULL,
+                expires_at REAL NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_auth_expiry ON auth_sessions(expires_at);")
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS download_tickets (
+                ticket_hash TEXT PRIMARY KEY,
+                token_hash TEXT NOT NULL,
+                asset_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                expires_at REAL NOT NULL,
+                FOREIGN KEY (token_hash) REFERENCES auth_sessions(token_hash) ON DELETE CASCADE
+            );
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_download_expiry ON download_tickets(expires_at);")
+
         # 2. Chat Sessions Table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS chat_sessions (

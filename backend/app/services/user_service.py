@@ -1,33 +1,31 @@
-import os
-import re
-import json
-import base64
-import uuid
-import random
+import asyncio
 import hashlib
+import random
+import re
 import secrets
 import time
-import asyncio
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
-from datetime import datetime
 from typing import Optional
+
 from fastapi import HTTPException, status
+
 from app.core.config import settings
+from app.core.logging import logger
 from app.db.database import get_db_connection
 from app.schemas.user import (
-    UserResponse,
-    UserRegisterRequest,
-    UserLoginRequest,
-    SendOtpRequest,
-    SendOtpResponse,
-    VerifyOtpLoginRequest,
-    ResetPasswordWithOtpRequest,
     GoogleAuthRequest,
-    validate_password_strength
+    ResetPasswordWithOtpRequest,
+    SendOtpResponse,
+    UserLoginRequest,
+    UserRegisterRequest,
+    UserResponse,
+    validate_password_strength,
 )
 from app.services.email_service import email_service
+from app.services.google_auth import verify_google_credential
 from app.services.storage_service import storage_service
-from app.core.logging import logger
 
 AVATAR_COLORS = [
     "#3B82F6", "#10B981", "#8B5CF6", "#F59E0B", "#EC4899", "#06B6D4", "#6366F1"
@@ -35,23 +33,6 @@ AVATAR_COLORS = [
 
 MAX_AVATAR_SIZE_BYTES = 2 * 1024 * 1024  # 2MB maximum file size
 ALLOWED_AVATAR_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
-
-def parse_google_id_token(token: str) -> dict:
-    """Parse Google ID token JWT payload."""
-    try:
-        parts = token.split(".")
-        if len(parts) != 3:
-            return {}
-        payload_b64 = parts[1]
-        padding = len(payload_b64) % 4
-        if padding != 0:
-            payload_b64 += "=" * (4 - padding)
-        payload_json = base64.urlsafe_b64decode(payload_b64.encode("utf-8")).decode("utf-8")
-        return json.loads(payload_json)
-    except Exception as e:
-        logger.warning(f"Failed to parse Google ID token: {e}")
-        return {}
-
 
 def mask_email(email: str) -> str:
     """Mask email for privacy display (e.g., a***x@domain.com)."""
@@ -131,7 +112,7 @@ class UserService:
             pwd_hash = hash_password(req.password, salt)
             user_id = str(uuid.uuid4())
             avatar_color = random.choice(AVATAR_COLORS)
-            created_at = datetime.utcnow().isoformat()
+            created_at = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
 
             cursor.execute(
                 """
@@ -292,8 +273,8 @@ class UserService:
         for old_file in avatars_dir.glob(f"{user_id}.*"):
             try:
                 old_file.unlink()
-            except Exception:
-                pass
+            except OSError:
+                logger.warning("Could not remove local avatar file", exc_info=True)
 
         target_file = avatars_dir / f"{user_id}{ext}"
         target_file.write_bytes(file_bytes)
@@ -306,7 +287,7 @@ class UserService:
                     try:
                         storage_service.delete_file(f"avatars/{user_id}{old_ext}")
                     except Exception:
-                        pass
+                        logger.warning("Could not remove previous cloud avatar", exc_info=True)
 
         media_map = {
             ".png": "image/png",
@@ -331,7 +312,10 @@ class UserService:
             conn.execute("UPDATE users SET avatar_url = ? WHERE id = ?", (avatar_url, user_id))
 
         logger.info(f"Saved custom avatar image for user '{user.username}' ({user_id}) -> {avatar_url}")
-        return self.get_user_by_id(user_id)
+        updated_user = self.get_user_by_id(user_id)
+        if updated_user is None:
+            raise HTTPException(status_code=404, detail="User account not found.")
+        return updated_user
 
     def delete_user_avatar(self, user_id: str) -> UserResponse:
         """Delete custom avatar image from disk and cloud storage, resetting to default avatar color."""
@@ -348,8 +332,8 @@ class UserService:
             for old_file in avatars_dir.glob(f"{user_id}.*"):
                 try:
                     old_file.unlink()
-                except Exception:
-                    pass
+                except OSError:
+                    logger.warning("Could not remove local avatar file", exc_info=True)
 
         # Remove from cloud storage
         if storage_service.is_r2_active:
@@ -357,13 +341,16 @@ class UserService:
                 try:
                     storage_service.delete_file(f"avatars/{user_id}{ext}")
                 except Exception:
-                    pass
+                    logger.warning("Could not remove cloud avatar", exc_info=True)
 
         with get_db_connection() as conn:
             conn.execute("UPDATE users SET avatar_url = '' WHERE id = ?", (user_id,))
 
         logger.info(f"Removed custom avatar image for user '{user.username}' ({user_id})")
-        return self.get_user_by_id(user_id)
+        updated_user = self.get_user_by_id(user_id)
+        if updated_user is None:
+            raise HTTPException(status_code=404, detail="User account not found.")
+        return updated_user
 
     def get_user_avatar_path(self, user_id: str) -> Optional[Path]:
         """
@@ -398,7 +385,7 @@ class UserService:
                         logger.info(f"Self-healed missing local avatar for user {user_id} from R2 ({found_key})")
                         return cached_file
             except Exception as e:
-                logger.warning(f"Failed to query R2 storage for avatar of user {user_id}: {e}")
+                logger.warning(f"Failed to query R2 storage for avatar of user {user_id}: {e}", exc_info=True)
 
         return None
 
@@ -520,7 +507,7 @@ class UserService:
             otp_code = f"{secrets.randbelow(900000) + 100000}"
             otp_id = str(uuid.uuid4())
             expires_at = now_ts + settings.OTP_EXPIRY_SECONDS
-            created_at = datetime.utcnow().isoformat()
+            created_at = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
 
             cursor.execute(
                 """
@@ -696,7 +683,7 @@ class UserService:
             otp_code = f"{secrets.randbelow(900000) + 100000}"
             otp_id = str(uuid.uuid4())
             expires_at = now_ts + settings.OTP_EXPIRY_SECONDS
-            created_at = datetime.utcnow().isoformat()
+            created_at = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
 
             cursor.execute(
                 """
@@ -839,26 +826,11 @@ class UserService:
         """
         Authenticate or automatically register a user via Google Sign-In.
         """
-        google_email = None
-        google_name = None
-        google_picture = None
-
-        if req.credential:
-            payload = parse_google_id_token(req.credential)
-            google_email = payload.get("email")
-            google_name = payload.get("name") or payload.get("given_name")
-            google_picture = payload.get("picture")
-
-        if not google_email and req.email:
-            google_email = req.email
-            google_name = req.name or google_name
-            google_picture = req.picture or google_picture
-
-        if not google_email:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Google authentication failed: Email address could not be verified from Google credential."
-            )
+        payload = await asyncio.to_thread(verify_google_credential, req.credential, req.nonce)
+        google_email = payload["email"]
+        google_name = payload.get("name") or payload.get("given_name")
+        google_picture = payload.get("picture")
+        google_subject = payload["sub"]
 
         clean_email = google_email.strip().lower()
         display_name = (google_name or clean_email.split("@")[0]).strip()
@@ -866,15 +838,20 @@ class UserService:
 
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT id, username, email, display_name, avatar_color, avatar_url, created_at
-                FROM users
-                WHERE email = ?
-                """,
-                (clean_email,)
-            )
+            cursor.execute("SELECT * FROM users WHERE google_subject = ?", (google_subject,))
             user = cursor.fetchone()
+            if not user:
+                cursor.execute("SELECT * FROM users WHERE email = ?", (clean_email,))
+                user = cursor.fetchone()
+                if user:
+                    # Google is not authoritative for an arbitrary third-party email.
+                    authoritative = clean_email.endswith("@gmail.com") or bool(payload.get("hd"))
+                    if user["google_subject"] or not authoritative:
+                        raise HTTPException(409, "Sign in with your existing account to verify account ownership.")
+                    cursor.execute("UPDATE users SET google_subject = ? WHERE id = ? AND google_subject IS NULL",
+                                   (google_subject, user["id"]))
+                    if cursor.rowcount != 1:
+                        raise HTTPException(409, "Google account linking changed. Please sign in again.")
 
             if user:
                 # Existing user -> Update avatar if not set
@@ -897,7 +874,7 @@ class UserService:
 
             # New user -> Auto-register with Google profile details
             user_id = str(uuid.uuid4())
-            created_at = datetime.utcnow().isoformat()
+            created_at = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
             avatar_color = random.choice(AVATAR_COLORS)
 
             # Generate clean, unique username
@@ -922,6 +899,8 @@ class UserService:
                 """,
                 (user_id, final_username, clean_email, display_name, pwd_hash, pwd_salt, avatar_color, picture_url, created_at)
             )
+
+            cursor.execute("UPDATE users SET google_subject = ? WHERE id = ?", (google_subject, user_id))
 
             logger.info(f"Successfully auto-registered new user via Google: '{final_username}' ({clean_email})")
             return UserResponse(

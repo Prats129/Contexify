@@ -2,16 +2,21 @@
  * Core TypeScript definitions for Contexify AI
  */
 
-export type ChatMode = 'AUTO' | 'DOCUMENT_RAG' | 'WEB_SEARCH' | 'MULTIMODAL' | 'IMAGE_GENERATION';
+export type ChatMode =
+  | "AUTO"
+  | "DOCUMENT_RAG"
+  | "WEB_SEARCH"
+  | "MULTIMODAL"
+  | "IMAGE_GENERATION";
 
 export interface MediaAttachment {
   id?: string;
   url: string;
-  file_type: 'image' | 'document';
+  file_type: "image" | "document";
   file_name?: string;
   mime_type?: string;
   file_size_bytes?: number;
-  media_type?: 'upload' | 'generated';
+  media_type?: "upload" | "generated";
   prompt?: string;
 }
 
@@ -22,10 +27,10 @@ export interface AssetItem {
   session_title?: string | null;
   name: string;
   url: string;
-  file_type: 'image' | 'document';
+  file_type: "image" | "document";
   mime_type?: string | null;
   size_bytes: number;
-  origin: 'upload' | 'generated';
+  origin: "upload" | "generated";
   prompt?: string;
   created_at: string;
 }
@@ -41,8 +46,8 @@ export interface PaginatedAssetsResponse {
 export interface AssetQueryParams {
   userId?: string | null;
   sessionId?: string | null;
-  origin?: 'upload' | 'generated' | 'all';
-  fileType?: 'image' | 'document' | 'all';
+  origin?: "upload" | "generated" | "all";
+  fileType?: "image" | "document" | "all";
   search?: string;
   limit?: number;
   offset?: number;
@@ -107,13 +112,13 @@ export interface ResetPasswordWithOtpRequest {
 }
 
 export interface GoogleAuthRequest {
-  credential?: string;
+  credential: string;
+  nonce?: string;
   email?: string;
   name?: string;
   picture?: string;
   google_id?: string;
 }
-
 
 export interface Citation {
   document_id: string;
@@ -126,7 +131,7 @@ export interface Citation {
 
 export interface MessageReplyReference {
   id: string;
-  role: 'user' | 'assistant';
+  role: "user" | "assistant";
   content: string;
   sender_name?: string | null;
 }
@@ -134,7 +139,7 @@ export interface MessageReplyReference {
 export interface Message {
   id: string;
   session_id: string;
-  role: 'user' | 'assistant';
+  role: "user" | "assistant";
   content: string;
   reply_to?: MessageReplyReference | null;
   citations?: Citation[] | null;
@@ -157,7 +162,7 @@ export interface ChatSession {
   document_count?: number;
 }
 
-export type SessionSortOrder = 'last_created' | 'first_created';
+export type SessionSortOrder = "last_created" | "first_created";
 
 export interface SessionListParams {
   limit?: number;
@@ -209,7 +214,6 @@ export interface DocumentChunksResponse {
   chunks: DocumentChunkItem[];
 }
 
-
 export interface SessionHistoryResponse {
   session: ChatSession;
   messages: Message[];
@@ -225,7 +229,7 @@ export interface StreamHandlers {
 }
 
 export interface StreamingMessageState {
-  role: 'assistant';
+  role: "assistant";
   content: string;
   citations?: Citation[] | null;
   attachments?: MediaAttachment[] | null;

@@ -23,7 +23,8 @@ export interface User {
 }
 
 export interface GoogleAuthRequest {
-  credential?: string;
+  credential: string;
+  nonce?: string;
   email?: string;
   name?: string;
   picture?: string;

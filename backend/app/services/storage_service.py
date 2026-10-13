@@ -1,8 +1,9 @@
-import os
 import mimetypes
 from pathlib import Path
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple
+
 import httpx
+
 from app.core.config import settings
 from app.core.logging import logger
 
@@ -58,7 +59,7 @@ class StorageService:
             self._initialized = True
             logger.info(f"Initialized Cloudflare R2 Storage client for bucket '{settings.CLOUDFLARE_R2_BUCKET_NAME}' at {endpoint}")
         except Exception as e:
-            logger.error(f"Failed to initialize Cloudflare R2 client: {e}. Falling back to local disk storage.")
+            logger.exception(f"Failed to initialize Cloudflare R2 client: {e}. Falling back to local disk storage.")
             self._s3_client = None
             self._initialized = False
 
@@ -117,7 +118,7 @@ class StorageService:
             content_type = guessed or "application/octet-stream"
 
         # Try Cloudflare R2 Upload
-        if self.is_r2_active:
+        if self.is_r2_active and self._s3_client is not None:
             try:
                 self._s3_client.put_object(
                     Bucket=settings.CLOUDFLARE_R2_BUCKET_NAME,
@@ -129,7 +130,7 @@ class StorageService:
                 logger.info(f"Uploaded {len(file_bytes)} bytes to Cloudflare R2: {clean_key} -> {public_url}")
                 return public_url, clean_key
             except Exception as e:
-                logger.error(f"Cloudflare R2 upload error for key '{clean_key}': {e}. Falling back to local disk.")
+                logger.exception(f"Cloudflare R2 upload error for key '{clean_key}': {e}. Falling back to local disk.")
 
         # Local Disk Storage Fallback
         local_target = settings.DATA_DIR / clean_key
@@ -149,9 +150,9 @@ class StorageService:
             return None
 
         # 1. If it's a full HTTP(S) URL
-        if key_or_url.startswith("http://") or key_or_url.startswith("https://"):
+        if key_or_url.startswith(("http://", "https://")):
             # If R2 is active and the URL contains our public URL or bucket, extract key
-            if self.is_r2_active:
+            if self.is_r2_active and self._s3_client is not None:
                 key = self._extract_key_from_url(key_or_url)
                 if key:
                     try:
@@ -161,7 +162,7 @@ class StorageService:
                         )
                         return resp["Body"].read()
                     except Exception as e:
-                        logger.warning(f"Failed to fetch key '{key}' directly from R2: {e}. Trying HTTP fetch...")
+                        logger.warning(f"Failed to fetch key '{key}' directly from R2: {e}. Trying HTTP fetch...", exc_info=True)
 
             # Otherwise fetch over HTTP
             try:
@@ -170,10 +171,10 @@ class StorageService:
                     if resp.status_code == 200:
                         return resp.content
             except Exception as e:
-                logger.error(f"HTTP download failed for {key_or_url}: {e}")
+                logger.exception(f"HTTP download failed for {key_or_url}: {e}")
 
         # 2. If it's a key and R2 is active
-        if self.is_r2_active and not key_or_url.startswith("/"):
+        if self.is_r2_active and self._s3_client is not None and not key_or_url.startswith("/"):
             try:
                 resp = self._s3_client.get_object(
                     Bucket=settings.CLOUDFLARE_R2_BUCKET_NAME,
@@ -181,7 +182,7 @@ class StorageService:
                 )
                 return resp["Body"].read()
             except Exception as e:
-                logger.warning(f"R2 key fetch failed for '{key_or_url}': {e}")
+                logger.warning(f"R2 key fetch failed for '{key_or_url}': {e}", exc_info=True)
 
         # 3. Local disk resolution
         clean_path = key_or_url.split("?")[0]
@@ -209,8 +210,37 @@ class StorageService:
                     with open(cand, "rb") as f:
                         return f.read()
                 except Exception as e:
-                    logger.warning(f"Error reading local file {cand}: {e}")
+                    logger.warning(f"Error reading local file {cand}: {e}", exc_info=True)
 
+        return None
+
+    def owned_storage_key(self, row: dict, kind: str) -> str:
+        """Resolve only a database-owned storage key, never a caller's URL/path."""
+        from fastapi import HTTPException
+        value = row.get("storage_url") if kind == "document" else row.get("file_path")
+        key = self._extract_key_from_url(value or "") or value or ""
+        expected = "documents/" if kind == "document" else "media/"
+        if not key.startswith(expected) or "\\" in key or any(part in {".", ".."} for part in key.split("/")):
+            raise HTTPException(404, "Asset storage is unavailable.")
+        return key
+
+    def download_owned_file(self, key: str) -> Optional[bytes]:
+        """Read the exact owned object without remote HTTP or arbitrary-path fallback."""
+        target = (settings.DATA_DIR / key).resolve()
+        if not target.is_relative_to(settings.DATA_DIR.resolve()):
+            return None
+        if target.is_file():
+            return target.read_bytes()
+        if self.is_r2_active and self._s3_client is not None:
+            try:
+                response = self._s3_client.get_object(Bucket=settings.CLOUDFLARE_R2_BUCKET_NAME, Key=key)
+                body = response["Body"]
+                try:
+                    return body.read()
+                finally:
+                    body.close()
+            except Exception:
+                logger.warning("Owned object could not be downloaded from storage", exc_info=True)
         return None
 
     def delete_file(self, key_or_url: str) -> bool:
@@ -221,7 +251,7 @@ class StorageService:
         key = self._extract_key_from_url(key_or_url) or key_or_url.lstrip("/")
 
         # Delete from R2
-        if self.is_r2_active:
+        if self.is_r2_active and self._s3_client is not None:
             try:
                 self._s3_client.delete_object(
                     Bucket=settings.CLOUDFLARE_R2_BUCKET_NAME,
@@ -230,7 +260,7 @@ class StorageService:
                 logger.info(f"Deleted from Cloudflare R2: {key}")
                 return True
             except Exception as e:
-                logger.warning(f"Failed to delete '{key}' from Cloudflare R2: {e}")
+                logger.warning(f"Failed to delete '{key}' from Cloudflare R2: {e}", exc_info=True)
 
         # Also delete local file if it exists
         local_path = settings.DATA_DIR / key
@@ -240,7 +270,7 @@ class StorageService:
                 logger.info(f"Deleted local file: {local_path}")
                 return True
             except Exception as e:
-                logger.warning(f"Failed to delete local file {local_path}: {e}")
+                logger.warning(f"Failed to delete local file {local_path}: {e}", exc_info=True)
 
         return False
 

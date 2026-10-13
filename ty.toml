@@ -1,0 +1,4 @@
+[environment]
+python = "./backend/venv"
+python-version = "3.11"
+root = ["./backend"]

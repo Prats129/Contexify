@@ -87,6 +87,7 @@ export const App: React.FC = () => {
   // --- Global State ---
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const currentUserRef = useRef<User | null>(null);
+  const authVersionRef = useRef(0);
   const [isAuthReady, setIsAuthReady] = useState<boolean>(false);
 
   useEffect(() => {
@@ -219,6 +220,7 @@ export const App: React.FC = () => {
       isUnauthenticated: boolean = false,
     ) => {
       if (!sessionId) return;
+      const authVersion = authVersionRef.current;
       if (typeof window !== "undefined" && window.innerWidth < 768) {
         setIsSidebarOpen(false);
       }
@@ -234,6 +236,7 @@ export const App: React.FC = () => {
         }
         try {
           const history = await apiService.getSessionHistory(sessionId);
+          if (authVersion !== authVersionRef.current) return;
           if (history.session?.mode) {
             setCurrentMode(history.session.mode);
           }
@@ -264,14 +267,10 @@ export const App: React.FC = () => {
       if (savedUserStr) {
         try {
           parsedUser = JSON.parse(savedUserStr);
-          if (parsedUser?.id) {
+          if (parsedUser?.id && (await apiService.hasUserSession())) {
             user = await apiService
               .getCurrentUser(parsedUser.id)
               .catch(() => null);
-            // Retain cached credentials if backend cold start or temporary offline occurred
-            if (!user && parsedUser) {
-              user = parsedUser;
-            }
           }
         } catch {
           user = null;
@@ -323,12 +322,14 @@ export const App: React.FC = () => {
   // --- 3. Load Sessions when Logged In ---
   const loadSessions = useCallback(
     async (userId: string) => {
+      const authVersion = authVersionRef.current;
       try {
         const paginated = await apiService.listSessions(userId, {
           limit: 12,
           offset: 0,
         });
         const sessionList = paginated.sessions || [];
+        if (authVersion !== authVersionRef.current) return;
         setSessionsDirect(sessionList);
 
         const { sessionId: urlSessionId, isUnauthenticated } =
@@ -346,6 +347,7 @@ export const App: React.FC = () => {
           // If not directly in list, attempt to fetch history directly (e.g. valid session)
           try {
             const hist = await apiService.getSessionHistory(urlSessionId);
+            if (authVersion !== authVersionRef.current) return;
             if (hist.session) {
               ensureSessionInList(hist.session);
               await selectSession(hist.session.id, false, false);
@@ -500,6 +502,7 @@ export const App: React.FC = () => {
 
   // --- 7. Document & Media Upload / Delete ---
   const handleFileUpload = async (file: File) => {
+    const authVersion = authVersionRef.current;
     const userToUse = currentUserRef.current || currentUser;
     let targetSessionId = activeSessionId;
     if (!targetSessionId) {
@@ -513,6 +516,7 @@ export const App: React.FC = () => {
             isTemporaryChat,
             clientSessionId,
           );
+          if (authVersion !== authVersionRef.current) return;
           targetSessionId = newSess.id;
           setActiveSessionId(newSess.id);
           if (!isTemporaryChat) {
@@ -521,6 +525,7 @@ export const App: React.FC = () => {
           }
           updateUrlForSession(newSess.id, false);
         } catch (err) {
+          if (authVersion !== authVersionRef.current) return;
           console.warn(
             "Failed to create session explicitly on file upload, using clientSessionId for self-healing:",
             err,
@@ -551,13 +556,17 @@ export const App: React.FC = () => {
           targetSessionId,
           currentUser?.id,
         );
+        if (authVersion !== authVersionRef.current) return;
         setAttachedMedia((prev) => [...prev, mediaRes]);
       } catch (e: unknown) {
+        if (authVersion !== authVersionRef.current) return;
         const err = e instanceof Error ? e.message : String(e);
         await showAlert({ title: "Image Upload Failed", message: err });
       } finally {
-        setIsUploading(false);
-        setUploadStatusText("");
+        if (authVersion === authVersionRef.current) {
+          setIsUploading(false);
+          setUploadStatusText("");
+        }
       }
       return;
     }
@@ -571,6 +580,7 @@ export const App: React.FC = () => {
         targetSessionId,
         currentUser?.id,
       );
+      if (authVersion !== authVersionRef.current) return;
       // Update local document state
       setDocuments((prev) => {
         const exists = prev.some(
@@ -579,11 +589,14 @@ export const App: React.FC = () => {
         return exists ? prev : [res.document, ...prev];
       });
     } catch (e: unknown) {
+      if (authVersion !== authVersionRef.current) return;
       const err = e instanceof Error ? e.message : String(e);
       await showAlert({ title: "Upload Failed", message: err });
     } finally {
-      setIsUploading(false);
-      setUploadStatusText("");
+      if (authVersion === authVersionRef.current) {
+        setIsUploading(false);
+        setUploadStatusText("");
+      }
     }
   };
 
@@ -877,8 +890,26 @@ export const App: React.FC = () => {
   };
 
   // --- 9. User Authentication & Guest Handlers ---
+  const resetConversationForAuthChange = () => {
+    authVersionRef.current++;
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    setIsSending(false);
+    setIsUploading(false);
+    setUploadStatusText("");
+    setStreamingMessage(null);
+    setMessages([]);
+    setDocuments([]);
+    setAttachedMedia([]);
+    setReplyingTo(null);
+    setInputQuery("");
+    setIsTemporaryChat(false);
+    setActiveSessionId(null);
+  };
+
   const handleLogin = async (usernameOrEmail: string, password: string) => {
     const user = await apiService.login(usernameOrEmail, password);
+    resetConversationForAuthChange();
     currentUserRef.current = user;
     setCurrentUser(user);
     localStorage.setItem("contexify_user", JSON.stringify(user));
@@ -889,6 +920,7 @@ export const App: React.FC = () => {
 
   const handleLoginWithOtp = async (usernameOrEmail: string, otp: string) => {
     const user = await apiService.loginWithOtp(usernameOrEmail, otp);
+    resetConversationForAuthChange();
     currentUserRef.current = user;
     setCurrentUser(user);
     localStorage.setItem("contexify_user", JSON.stringify(user));
@@ -899,6 +931,7 @@ export const App: React.FC = () => {
 
   const handleGoogleAuth = async (data: GoogleAuthRequest) => {
     const user = await apiService.loginWithGoogle(data);
+    resetConversationForAuthChange();
     currentUserRef.current = user;
     setCurrentUser(user);
     localStorage.setItem("contexify_user", JSON.stringify(user));
@@ -939,6 +972,7 @@ export const App: React.FC = () => {
       email,
       password,
     );
+    resetConversationForAuthChange();
     currentUserRef.current = user;
     setCurrentUser(user);
     localStorage.setItem("contexify_user", JSON.stringify(user));
@@ -987,17 +1021,19 @@ export const App: React.FC = () => {
   };
 
   const handleLogout = () => {
+    resetConversationForAuthChange();
+    void apiService.logout();
     localStorage.removeItem("contexify_user");
     localStorage.removeItem("contexify_active_session");
     currentUserRef.current = null;
     setCurrentUser(null);
-    setIsTemporaryChat(false);
-    setMessages([]);
-    setDocuments([]);
     setActiveSessionId(generateGuestSessionId());
+    updateUrlForSession(null);
     setIsUserModalOpen(false);
     setMode("light");
   };
+
+  useEffect(() => apiService.onSessionExpired(handleLogout), []);
 
   const handleContinueAsGuest = () => {
     handleLogout();

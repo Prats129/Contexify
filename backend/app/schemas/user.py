@@ -1,6 +1,7 @@
-from pydantic import BaseModel, Field, field_validator
-from typing import Optional, Tuple
 import re
+from typing import Optional, Tuple
+
+from pydantic import BaseModel, Field, field_validator
 
 EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")
 
@@ -121,6 +122,19 @@ class UserResponse(BaseModel):
     class Config:
         from_attributes = True
 
+class AuthResponse(UserResponse):
+    access_token: str
+    token_type: str = "bearer"
+    expires_at: float
+
+
+class GuestAuthResponse(BaseModel):
+    principal_id: str
+    access_token: str
+    token_type: str = "bearer"
+    expires_at: float
+
+
 class UserProfileUpdateRequest(BaseModel):
     user_id: str = Field(..., description="ID of the user to update")
     display_name: Optional[str] = Field(None, min_length=2, max_length=50, description="New display name")
@@ -212,7 +226,8 @@ class ResetPasswordWithOtpRequest(BaseModel):
         return clean
 
 class GoogleAuthRequest(BaseModel):
-    credential: Optional[str] = Field(default=None, description="Google ID Token JWT")
+    nonce: Optional[str] = Field(None, min_length=1, max_length=128)
+    credential: str = Field(..., min_length=1, max_length=16384, description="Google ID Token JWT")
     email: Optional[str] = Field(default=None, description="Google account email")
     name: Optional[str] = Field(default=None, description="Google account display name")
     picture: Optional[str] = Field(default=None, description="Google avatar image URL")

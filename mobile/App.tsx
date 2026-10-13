@@ -94,6 +94,7 @@ export default function App() {
   // Global State
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const currentUserRef = useRef<User | null>(null);
+  const authVersionRef = useRef(0);
   const [isAuthReady, setIsAuthReady] = useState(false);
 
   useEffect(() => {
@@ -358,26 +359,17 @@ export default function App() {
         setSessionSortOrder(savedSort);
       }
 
-      if (savedUserStr) {
-        const user: User = JSON.parse(savedUserStr);
+      if (savedUserStr && (await apiService.hasUserSession())) {
+        const cached: User = JSON.parse(savedUserStr);
+        const user = await apiService.getCurrentUser(cached.id);
+        if (!user) throw new Error("Please sign in again.");
         currentUserRef.current = user;
         setCurrentUser(user);
+        await AsyncStorage.setItem(
+          "contexify_mobile_user",
+          JSON.stringify(user),
+        );
         await loadUserSessions(user.id, user, initialSort);
-
-        // Refresh profile in background to fetch latest avatar / settings from server
-        apiService
-          .getCurrentUser(user.id)
-          .then((fresh) => {
-            if (fresh) {
-              currentUserRef.current = fresh;
-              setCurrentUser(fresh);
-              AsyncStorage.setItem(
-                "contexify_mobile_user",
-                JSON.stringify(fresh),
-              );
-            }
-          })
-          .catch(() => {});
       } else {
         currentUserRef.current = null;
         setCurrentUser(null);
@@ -411,6 +403,7 @@ export default function App() {
     sortOverride?: SessionSortOrder,
   ) => {
     const activeSort = sortOverride || sessionSortOrder;
+    const authVersion = authVersionRef.current;
     try {
       const res = await apiService.getUserSessions(userId, {
         limit: SESSIONS_PAGE_SIZE,
@@ -418,12 +411,14 @@ export default function App() {
         sort_by: activeSort,
       });
       const safeList = Array.isArray(res.sessions) ? res.sessions : [];
+      if (authVersion !== authVersionRef.current) return;
       setSessions(sortMobileSessions(safeList, activeSort));
       setTotalSessions(res.total ?? safeList.length);
       setHasMoreSessions(Boolean(res.has_more));
       // Always start in a fresh new chat on app launch
       handleNewChat(userOverride);
     } catch (err) {
+      if (authVersion !== authVersionRef.current) return;
       console.warn("Failed to load sessions:", err);
       setSessions([]);
       setTotalSessions(0);
@@ -542,6 +537,7 @@ export default function App() {
 
   // --- 2. Switch Conversation ---
   const selectSession = async (sessionId: string, sessionMode?: ChatMode) => {
+    const authVersion = authVersionRef.current;
     setIsTemporaryChat(false);
     setActiveSessionId(sessionId);
     setStreamingMessage(null);
@@ -553,10 +549,12 @@ export default function App() {
 
     try {
       const hist = await apiService.getSessionHistory(sessionId);
+      if (authVersion !== authVersionRef.current) return;
       if (hist?.session?.mode) setCurrentMode(hist.session.mode);
       setMessages(Array.isArray(hist?.messages) ? hist.messages : []);
       setDocuments(Array.isArray(hist?.documents) ? hist.documents : []);
     } catch {
+      if (authVersion !== authVersionRef.current) return;
       setMessages([]);
       setDocuments([]);
     }
@@ -917,6 +915,7 @@ export default function App() {
     name: string;
     mimeType: string;
   }) => {
+    const authVersion = authVersionRef.current;
     const userToUse = currentUserRef.current || currentUser;
     let sessionId = activeSessionId;
     if (!sessionId) {
@@ -930,6 +929,7 @@ export default function App() {
             isTempActive,
             clientSessionId,
           );
+          if (authVersion !== authVersionRef.current) return;
           sessionId = newSession.id;
           setActiveSessionId(sessionId);
           if (!isTempActive) {
@@ -937,6 +937,7 @@ export default function App() {
             setTotalSessions((prev) => prev + 1);
           }
         } catch (err) {
+          if (authVersion !== authVersionRef.current) return;
           console.warn(
             "Session creation on file attach failed; using clientSessionId for self-healing:",
             err,
@@ -963,16 +964,18 @@ export default function App() {
           file.name,
           file.mimeType,
         );
+        if (authVersion !== authVersionRef.current) return;
         setAttachedMedia((prev) => [...prev, media]);
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         if (currentMode !== "IMAGE_GENERATION" && currentMode !== "AUTO") {
           setCurrentMode("MULTIMODAL");
         }
       } catch (err: unknown) {
+        if (authVersion !== authVersionRef.current) return;
         const msg = err instanceof Error ? err.message : String(err);
         Alert.alert("Image Upload Failed", msg);
       } finally {
-        setIsUploading(false);
+        if (authVersion === authVersionRef.current) setIsUploading(false);
       }
       return;
     }
@@ -986,6 +989,7 @@ export default function App() {
         file.mimeType,
         currentUser?.id,
       );
+      if (authVersion !== authVersionRef.current) return;
       setDocuments((prev) => [...(Array.isArray(prev) ? prev : []), doc]);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       // Auto-switch to Document RAG if uploaded and not in AUTO mode
@@ -993,10 +997,11 @@ export default function App() {
         setCurrentMode("DOCUMENT_RAG");
       }
     } catch (err: unknown) {
+      if (authVersion !== authVersionRef.current) return;
       const msg = err instanceof Error ? err.message : String(err);
       Alert.alert("Upload Failed", msg);
     } finally {
-      setIsUploading(false);
+      if (authVersion === authVersionRef.current) setIsUploading(false);
     }
   };
 
@@ -1081,7 +1086,19 @@ export default function App() {
   };
 
   // --- 10. Auth Success / Logout ---
+  const cancelStreamForAuthChange = () => {
+    authVersionRef.current++;
+    isSendingRef.current = false;
+    streamAbortRef.current?.();
+    streamAbortRef.current = null;
+    setIsSending(false);
+    setIsUploading(false);
+    setStreamingMessage(null);
+  };
+
   const handleAuthSuccess = async (user: User) => {
+    cancelStreamForAuthChange();
+    handleNewChat(user);
     currentUserRef.current = user;
     setCurrentUser(user);
     await AsyncStorage.setItem("contexify_mobile_user", JSON.stringify(user));
@@ -1089,6 +1106,9 @@ export default function App() {
   };
 
   const handleLogout = async () => {
+    cancelStreamForAuthChange();
+    handleNewChat(null);
+    void apiService.logout();
     currentUserRef.current = null;
     setCurrentUser(null);
     setIsTemporaryChat(false);
@@ -1096,8 +1116,15 @@ export default function App() {
     setSessions([]);
     setTotalSessions(0);
     setHasMoreSessions(false);
-    handleNewChat(null);
   };
+
+  useEffect(
+    () =>
+      apiService.onSessionExpired(() => {
+        void handleLogout();
+      }),
+    [],
+  );
 
   const keyExtractor = useCallback((item: Message) => item.id, []);
 

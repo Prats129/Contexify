@@ -1,3 +1,4 @@
+import { apiService } from "../../services/api";
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import {
   LuShieldCheck,
@@ -794,10 +795,9 @@ export const UserModal: React.FC<UserModalProps> = ({
 
     // Direct Centered Popup Window with explicit width & height
     if (clientId) {
+      let popup: Window | null = null;
       try {
         setIsSubmitting(true);
-        const redirectUri = window.location.origin;
-        const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=token&scope=${encodeURIComponent("openid email profile")}&prompt=select_account`;
         const width = 460;
         const height = 520;
         const left = Math.max(
@@ -808,45 +808,58 @@ export const UserModal: React.FC<UserModalProps> = ({
           0,
           Math.round(window.screenY + (window.outerHeight - height) / 2),
         );
-        const popup = window.open(
-          authUrl,
+        popup = window.open(
+          "about:blank",
           "google_oauth_popup",
           `popup=1,width=${width},height=${height},left=${left},top=${top},toolbar=0,menubar=0,location=0,status=0,scrollbars=1,resizable=1`,
         );
 
+        if (!popup)
+          throw new Error("Please allow popups to use Google Sign-In.");
+        const nonce = await apiService.getGoogleNonce();
+        const redirectUri = window.location.origin;
+        const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=id_token&nonce=${encodeURIComponent(nonce)}&state=${encodeURIComponent(nonce)}&scope=${encodeURIComponent("openid email profile")}&prompt=select_account`;
+        popup.location.href = authUrl;
+        const startedAt = Date.now();
         if (popup) {
           const interval = setInterval(async () => {
             try {
-              if (!popup || popup.closed) {
+              if (!popup || popup.closed || Date.now() - startedAt > 180000) {
+                if (popup && !popup.closed) popup.close();
                 clearInterval(interval);
                 setIsSubmitting(false);
                 return;
               }
-              if (popup.location.href.includes(window.location.origin)) {
-                const hash = popup.location.hash;
-                if (hash.includes("access_token=")) {
-                  clearInterval(interval);
-                  popup.close();
-                  const params = new URLSearchParams(hash.replace("#", ""));
-                  const accessToken = params.get("access_token");
-                  if (accessToken) {
-                    const res = await fetch(
-                      "https://www.googleapis.com/oauth2/v3/userinfo",
-                      {
-                        headers: { Authorization: `Bearer ${accessToken}` },
-                      },
-                    );
-                    if (res.ok) {
-                      const info = await res.json();
-                      await onGoogleAuth({
-                        email: info.email,
-                        name: info.name,
-                        picture: info.picture,
-                        google_id: info.sub,
-                      });
-                      onClose();
-                    }
-                  }
+              if (
+                new URL(popup.location.href).origin === window.location.origin
+              ) {
+                const params = new URLSearchParams(
+                  popup.location.hash.replace("#", ""),
+                );
+                if (!params.has("id_token") && !params.has("error")) return;
+                clearInterval(interval);
+                popup.close();
+                if (params.get("state") !== nonce || !params.get("id_token")) {
+                  setErrorMessage(
+                    "Google Sign-In could not be verified. Please try again.",
+                  );
+                  setIsSubmitting(false);
+                  return;
+                }
+                try {
+                  await onGoogleAuth({
+                    credential: params.get("id_token")!,
+                    nonce,
+                  });
+                  onClose();
+                } catch (error) {
+                  setErrorMessage(
+                    error instanceof Error
+                      ? error.message
+                      : "Google Sign-In failed.",
+                  );
+                } finally {
+                  setIsSubmitting(false);
                 }
               }
             } catch {
@@ -856,8 +869,10 @@ export const UserModal: React.FC<UserModalProps> = ({
           return;
         }
       } catch (err) {
-        console.warn("Popup window error:", err);
-      } finally {
+        popup?.close();
+        setErrorMessage(
+          err instanceof Error ? err.message : "Google Sign-In failed.",
+        );
         setIsSubmitting(false);
       }
     }

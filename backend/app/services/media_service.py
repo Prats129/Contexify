@@ -1,9 +1,9 @@
-import os
-import uuid
 import mimetypes
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
-from datetime import datetime
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
 from app.core.config import settings
 from app.core.logging import logger
 from app.db.database import get_db_connection
@@ -45,7 +45,7 @@ class MediaService:
         detected_mime, _ = mimetypes.guess_type(original_filename)
         final_mime = mime_type or detected_mime or "image/png"
         file_size = len(file_bytes)
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
 
         # Upload to Storage (Cloudflare R2 or local fallback)
         file_url, storage_key = storage_service.upload_file(
@@ -77,7 +77,7 @@ class MediaService:
                     )
                 )
         except Exception as e:
-            logger.warning(f"Could not register media asset in database: {e}")
+            logger.warning(f"Could not register media asset in database: {e}", exc_info=True)
 
         return MediaAttachment(
             id=asset_id,
@@ -105,7 +105,7 @@ class MediaService:
 
         file_size = len(image_bytes)
         mime_type = "image/png" if ext.lower() == ".png" else "image/jpeg"
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
 
         # Upload to Storage (Cloudflare R2 or local fallback)
         file_url, storage_key = storage_service.upload_file(
@@ -136,7 +136,7 @@ class MediaService:
                     )
                 )
         except Exception as e:
-            logger.warning(f"Could not register generated media asset in database: {e}")
+            logger.warning(f"Could not register generated media asset in database: {e}", exc_info=True)
 
         return MediaAttachment(
             id=asset_id,
@@ -153,34 +153,15 @@ class MediaService:
         """Fetch binary content of a media asset from Cloudflare R2 or local disk."""
         if not url_or_path:
             return None
-        return storage_service.download_file(url_or_path)
+        return storage_service.download_owned_file(url_or_path)
 
     def resolve_local_path(self, url_or_path: str) -> Optional[Path]:
         """Convert a media URL or relative path to its actual local filesystem Path if present."""
         if not url_or_path:
             return None
 
-        # If it's already an absolute file path that exists
-        p = Path(url_or_path)
-        if p.is_file() and p.exists():
-            return p
-
-        # Check /api/v1/media/uploads/ or /api/v1/media/generated/
-        clean_url = url_or_path.split("?")[0]
-        if "/api/v1/media/uploads/" in clean_url:
-            filename = clean_url.split("/api/v1/media/uploads/")[-1]
-            candidate = settings.UPLOAD_IMAGE_DIR / filename
-            if candidate.exists():
-                return candidate
-        elif "/api/v1/media/generated/" in clean_url:
-            filename = clean_url.split("/api/v1/media/generated/")[-1]
-            candidate = settings.GENERATED_IMAGE_DIR / filename
-            if candidate.exists():
-                return candidate
-        
-        # Check standard upload directory
-        candidate = settings.UPLOAD_DIR / Path(clean_url).name
-        if candidate.exists():
+        candidate = (settings.DATA_DIR / url_or_path).resolve()
+        if candidate.is_relative_to(settings.MEDIA_DIR.resolve()) and candidate.is_file():
             return candidate
 
         return None
@@ -199,14 +180,14 @@ class MediaService:
         Query unified assets (uploaded & AI-generated images, plus documents).
         Returns: (items, total_count)
         """
-        conditions = []
-        params = []
+        conditions = ["(session_id IS NULL OR session_id IN (SELECT id FROM chat_sessions WHERE expires_at IS NULL OR expires_at > ?))"]
+        params = [datetime.now(timezone.utc).replace(tzinfo=None).isoformat()]
 
         if session_id:
             conditions.append("session_id = ?")
             params.append(session_id)
-        elif user_id:
-            conditions.append("user_id = ?")
+        if user_id:
+            conditions.append("owner_id = ?")
             params.append(user_id)
 
         if origin and origin != "all":
@@ -230,7 +211,8 @@ class MediaService:
             WITH combined_assets AS (
                 SELECT 
                     m.id, 
-                    m.user_id, 
+                    m.user_id,
+                    COALESCE(m.user_id, s.user_id) AS owner_id,
                     m.session_id, 
                     s.title AS session_title, 
                     m.filename AS name, 
@@ -248,7 +230,8 @@ class MediaService:
 
                 SELECT 
                     d.id, 
-                    d.user_id, 
+                    d.user_id,
+                    COALESCE(d.user_id, s.user_id) AS owner_id,
                     d.session_id, 
                     s.title AS session_title, 
                     d.filename AS name, 
@@ -334,7 +317,7 @@ class MediaService:
                 try:
                     vector_store_repo.delete_document(asset_id)
                 except Exception as e:
-                    logger.warning(f"Error purging vectors for document {asset_id}: {e}")
+                    logger.warning(f"Error purging vectors for document {asset_id}: {e}", exc_info=True)
                 session_store_repo.remove_document(asset_id)
                 return True
 

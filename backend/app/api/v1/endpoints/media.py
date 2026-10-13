@@ -1,24 +1,85 @@
+import asyncio
 from pathlib import Path
-from typing import Optional, List
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status, Query
-from app.core.config import settings
+from typing import List, Optional
+
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    UploadFile,
+    status,
+)
+from fastapi.responses import FileResponse, Response
+from fastapi.security import HTTPAuthorizationCredentials
+
 from app.core.logging import logger
-from app.schemas.chat import MediaAttachment
-from app.schemas.media import AssetItem, PaginatedAssetsResponse, AssetDeleteResponse
-from app.services.media_service import media_service, ALLOWED_IMAGE_EXTENSIONS, MAX_FILE_SIZE_BYTES
+from app.core.security import (
+    Principal,
+    bearer,
+    check_asset,
+    check_session,
+    check_user_claim,
+    download_principal,
+    download_url,
+    ensure_session,
+    present_attachment,
+    require_principal,
+)
 from app.db.database import get_db_connection
+from app.schemas.chat import MediaAttachment
+from app.schemas.media import AssetDeleteResponse, AssetItem, PaginatedAssetsResponse
+from app.services.media_service import (
+    ALLOWED_IMAGE_EXTENSIONS,
+    MAX_FILE_SIZE_BYTES,
+    media_service,
+)
+from app.services.storage_service import storage_service
+from app.services.user_service import user_service
 
 router = APIRouter()
+
+
+@router.get("/content/{kind}/{asset_id}")
+async def download_asset(asset_id: str, kind: str, ticket: Optional[str] = None,
+                         credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer)):
+    principal = download_principal(asset_id, kind, ticket, credentials)
+    headers = {"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff",
+               "Content-Security-Policy": "sandbox", "Referrer-Policy": "no-referrer"}
+    if kind == "avatar":
+        check_user_claim(asset_id, principal)
+        path = await asyncio.to_thread(user_service.get_user_avatar_path, asset_id)
+        if not path:
+            raise HTTPException(404, "Avatar not found.")
+        return FileResponse(path, headers=headers)
+    row = check_asset(asset_id, principal, kind)
+    key = storage_service.owned_storage_key(row, kind)
+    data = await asyncio.to_thread(storage_service.download_owned_file, key)
+    if data is None:
+        raise HTTPException(404, "Asset not found.")
+    media_type = row.get("mime_type") or "application/octet-stream"
+    if kind == "document" or media_type not in {"image/png", "image/jpeg", "image/webp", "image/gif", "image/bmp"}:
+        headers["Content-Disposition"] = "attachment"
+        media_type = "application/octet-stream"
+    return Response(data, media_type=media_type, headers=headers)
+
 
 @router.post("/upload", response_model=MediaAttachment, status_code=status.HTTP_201_CREATED)
 async def upload_media(
     file: UploadFile = File(...),
     session_id: Optional[str] = Form(None),
-    user_id: Optional[str] = Form(None)
+    user_id: Optional[str] = Form(None),
+    principal: Principal = Depends(require_principal)
 ):
     """
     Upload an image or media asset to be attached to a chat query or analyzed by Gemini Vision.
     """
+    check_user_claim(user_id, principal)
+    if session_id:
+        ensure_session(session_id, principal)
+    user_id = principal.user_id
     filename = file.filename or "uploaded_media.png"
     ext = Path(filename).suffix.lower()
 
@@ -43,19 +104,20 @@ async def upload_media(
             user_id=user_id,
             mime_type=file.content_type
         )
-        return attachment
+        return present_attachment(attachment, principal)
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to process media upload: {e}")
+        logger.exception(f"Failed to process media upload: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to save and process media file: {str(e)}"
         )
 
 @router.get("/session/{session_id}", response_model=List[MediaAttachment])
-async def get_session_media(session_id: str):
+async def get_session_media(session_id: str, principal: Principal = Depends(require_principal)):
     """Retrieve all media assets associated with a specific session."""
+    check_session(session_id, principal)
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -69,7 +131,7 @@ async def get_session_media(session_id: str):
                 (session_id,)
             )
             rows = cursor.fetchall()
-            return [
+            attachments = [
                 MediaAttachment(
                 id=row["id"],
                 url=row["file_url"],
@@ -82,8 +144,11 @@ async def get_session_media(session_id: str):
             )
             for row in rows
         ]
+        return [present_attachment(a, principal) for a in attachments]
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error fetching session media: {e}")
+        logger.exception(f"Error fetching session media: {e}")
         return []
 
 @router.get("/assets", response_model=PaginatedAssetsResponse)
@@ -94,12 +159,17 @@ async def list_unified_assets(
     file_type: Optional[str] = Query(None, description="Filter by type: 'image' | 'document' | 'all'"),
     search: Optional[str] = Query(None, description="Search by filename or prompt"),
     limit: int = Query(50, ge=1, le=100, description="Items per page"),
-    offset: int = Query(0, ge=0, description="Pagination offset")
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+    principal: Principal = Depends(require_principal)
 ):
     """
     Unified Attachments & Media library endpoint.
     Retrieves user uploads and AI generated media with high performance indexing.
     """
+    check_user_claim(user_id, principal)
+    user_id = principal.user_id
+    if session_id:
+        check_session(session_id, principal)
     items, total = media_service.list_assets(
         user_id=user_id,
         session_id=session_id,
@@ -110,6 +180,8 @@ async def list_unified_assets(
         offset=offset
     )
 
+    for item in items:
+        item["url"] = download_url(item["id"], principal, "document" if item["file_type"] == "document" else "media")
     has_more = (offset + len(items)) < total
     return PaginatedAssetsResponse(
         items=[AssetItem(**item) for item in items],
@@ -120,10 +192,12 @@ async def list_unified_assets(
     )
 
 @router.delete("/assets/{asset_id}", response_model=AssetDeleteResponse)
-async def delete_unified_asset(asset_id: str):
+async def delete_unified_asset(asset_id: str, principal: Principal = Depends(require_principal)):
     """
     Delete an asset (uploaded image, document, or generated media) and purge from storage.
     """
+    from app.core.security import asset_record
+    check_asset(asset_id, principal, "media" if asset_record(asset_id) else "document")
     success = media_service.delete_asset(asset_id)
     if not success:
         raise HTTPException(

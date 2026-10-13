@@ -1,0 +1,568 @@
+"""Focused auth regressions with disposable SQL/files and mocked providers.
+
+Run with backend/venv/Scripts/python.exe -B backend/tests/test_auth_security.py.
+No application .env, production database, mail or AI provider is used.
+"""
+import asyncio
+import io
+import json
+import logging
+import runpy
+import sqlite3
+import sys
+import tempfile
+import time
+import types
+import unittest
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, cast
+from unittest.mock import Mock, patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+fixture = tempfile.TemporaryDirectory(prefix="contexify-auth-")
+root = Path(fixture.name)
+
+
+def module(name, **attrs):
+    stub = types.ModuleType(name)
+    stub.__dict__.update(attrs)
+    sys.modules[name] = stub
+
+
+settings = types.SimpleNamespace(
+    DATA_DIR=root, MEDIA_DIR=root / "media", UPLOAD_IMAGE_DIR=root / "media/uploads",
+    GENERATED_IMAGE_DIR=root / "media/generated", UPLOAD_DIR=root / "uploads",
+    DATABASE_TYPE="sqlite", DB_MODE="local", TURSO_DATABASE_URL="", TURSO_AUTH_TOKEN="",
+    GOOGLE_CLIENT_ID="fixture-client", AUTH_SESSION_TTL_SECONDS=3600,
+    GUEST_SESSION_TTL_SECONDS=600, DOWNLOAD_TICKET_TTL_SECONDS=300, ADMIN_USER_IDS=[],
+    TEMPORARY_CHAT_RETENTION_DAYS=3, OTP_MAX_ATTEMPTS=3, OTP_EXPIRY_SECONDS=180,
+    OTP_RESEND_COOLDOWN_SECONDS=30, is_cloudflare_r2_configured=False,
+    CLOUDFLARE_R2_PUBLIC_URL="", CLOUDFLARE_R2_BUCKET_NAME="fixture",
+    API_V1_STR="/api/v1", PROJECT_NAME="Offline auth tests", CORS_ORIGINS=[], WORKSPACE_DIR=root,
+)
+for directory in (settings.UPLOAD_DIR, settings.MEDIA_DIR, settings.UPLOAD_IMAGE_DIR, settings.GENERATED_IMAGE_DIR):
+    directory.mkdir(parents=True, exist_ok=True)
+module("app.core.config", settings=settings)
+logger = logging.getLogger("offline-auth")
+logger.addHandler(logging.NullHandler())
+logger.propagate = False
+module("app.core.logging", logger=logger)
+module("app.services.email_service", email_service=Mock())
+vectors = Mock()
+vectors.get_document_chunks.return_value = []
+module("app.repositories.vector_store", vector_store_repo=vectors)
+module("app.services.rag_service", rag_service=Mock())
+
+
+class Orchestrator:
+    emit_media = False
+    last_request = None
+
+    async def route_and_stream(self, request, principal):
+        from app.services.chat_history_service import chat_history_service
+        self.last_request = request
+        chat_history_service.save_message(request.session_id, "user", request.message)
+        if self.emit_media:
+            yield 'data: {"event":"media","media":{"id":"image","url":"/api/v1/media/uploads/fixture.png","file_type":"image"}}\n\n'
+        yield 'data: {"event":"done","data":"[DONE]"}\n\n'
+
+
+fixture_orchestrator = Orchestrator()
+module("app.services.orchestrator", chat_orchestrator=fixture_orchestrator)
+
+# Outbound HTTP is forbidden even if a stub is accidentally bypassed.
+outbound = patch("requests.sessions.Session.request", side_effect=AssertionError("Unexpected network request"))
+outbound.start()
+import httpx
+
+from app.core import security
+from app.db import database
+from app.main import app
+from app.schemas.user import UserRegisterRequest
+from app.services import google_auth
+from app.services.user_service import user_service
+
+
+class SecurityTests(unittest.TestCase):
+    def setUp(self):
+        from app.repositories.session_store import session_store_repo
+        session_store_repo._sessions.clear()
+        session_store_repo._documents.clear()
+        fixture_orchestrator.emit_media = False
+        database.DB_FILE = root / (self.__class__.__name__ + self._testMethodName + ".db")
+        database.init_db()
+        self.alice = user_service.register_user(UserRegisterRequest(
+            username="alice", email="alice@example.invalid", display_name="First Person", password="Durable!482Strong"))
+        self.bob = user_service.register_user(UserRegisterRequest(
+            username="bobby", email="bobby@example.invalid", display_name="Second Person", password="Durable!482Strong"))
+        self.token = security.issue_credentials(self.alice.id)["access_token"]
+        self.other_token = security.issue_credentials(self.bob.id)["access_token"]
+        self.principal = security.resolve_principal(security.digest(self.token))
+        security.ensure_session("alice-session", self.principal)
+        with database.get_db_connection() as conn:
+            conn.execute("INSERT INTO media_assets (id,user_id,session_id,filename,file_path,file_url,mime_type,created_at) "
+                         "VALUES ('image',?,'alice-session','fixture.png','media/uploads/fixture.png','/api/v1/media/uploads/fixture.png','image/png',?)",
+                         (self.alice.id, datetime.now(timezone.utc).replace(tzinfo=None).isoformat()))
+            conn.execute("INSERT INTO documents (id,user_id,session_id,filename,file_type,file_size_bytes,total_chunks,storage_url,created_at) "
+                         "VALUES ('document',?,'alice-session','fixture.txt','txt',7,1,'/api/v1/media/documents/alice-session/fixture.txt',?)",
+                         (self.alice.id, datetime.now(timezone.utc).replace(tzinfo=None).isoformat()))
+        (settings.UPLOAD_IMAGE_DIR / "fixture.png").write_bytes(b"fixture-image")
+        directory = root / "documents/alice-session"
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "fixture.txt").write_bytes(b"fixture")
+
+    def request(self, method, path, token=None, **kwargs):
+        async def send():
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://fixture.invalid") as client:
+                return await client.request(method, "/api/v1" + path,
+                                            headers={"Authorization": "Bearer " + token} if token else {}, **kwargs)
+        return asyncio.run(send())
+
+    def test_lifespan_initializes_and_stops_background_cleanup(self):
+        from app import main
+
+        async def exercise():
+            started = asyncio.Event()
+            stopped = asyncio.Event()
+
+            async def cleanup():
+                started.set()
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    stopped.set()
+
+            with patch.object(main, "init_db") as initialize, patch.object(
+                main.chat_history_service, "purge_expired_temporary_sessions"
+            ) as purge, patch.object(main, "_periodic_temporary_cleanup", cleanup):
+                async with app.router.lifespan_context(app):
+                    await asyncio.wait_for(started.wait(), timeout=1)
+                    initialize.assert_called_once_with()
+                    purge.assert_called_once_with()
+                self.assertTrue(stopped.is_set())
+
+        asyncio.run(exercise())
+
+    def test_anonymous_resource_matrix(self):
+        cases = [("GET", "/user/me", {}), ("PATCH", "/user/profile", {"json": {"user_id": self.alice.id}}),
+                 ("GET", "/user/avatar/" + self.alice.id, {}),
+                 ("GET", "/session/list?user_id=" + self.alice.id, {}),
+                 ("POST", "/session/create", {"json": {"user_id": self.alice.id}}),
+                 ("GET", "/session/alice-session/history", {}),
+                 ("PATCH", "/session/alice-session/title", {"json": {"title": "Changed"}}),
+                 ("PATCH", "/session/alice-session/pin", {"json": {"is_pinned": True}}),
+                 ("PATCH", "/session/alice-session/mode", {"json": {"mode": "AUTO"}}),
+                 ("DELETE", "/session/alice-session/messages", {}), ("DELETE", "/session/alice-session", {}),
+                 ("GET", "/document/list?session_id=alice-session", {}),
+                 ("GET", "/document/document/chunks", {}),
+                 ("DELETE", "/document/document?session_id=alice-session", {}),
+                 ("GET", "/media/assets", {}), ("GET", "/media/session/alice-session", {}),
+                 ("DELETE", "/media/assets/image", {}),
+                 ("GET", "/media/content/media/image", {}),
+                 ("POST", "/chat/stream", {"json": {"session_id": "alice-session", "message": "hello"}}),
+                 ("POST", "/document/upload", {"data": {"session_id": "alice-session"}, "files": {"file": ("fixture.txt", b"fixture")}}),
+                 ("POST", "/media/upload", {"files": {"file": ("fixture.png", b"fixture", "image/png")}}),
+                 ("POST", "/user/avatar", {"data": {"user_id": self.alice.id}, "files": {"file": ("fixture.png", b"fixture", "image/png")}}),
+                 ("DELETE", "/user/avatar?user_id=" + self.alice.id, {}),
+                 ("POST", "/user/change-password", {"json": {"user_id": self.alice.id, "old_password": "Durable!482Strong", "new_password": "Another!482Strong"}})]
+        for method, path, kwargs in cases:
+            with self.subTest(path=path):
+                self.assertEqual(self.request(method, path, **kwargs).status_code, 401)
+
+    def test_cross_user_matrix(self):
+        cases = [("GET", "/session/alice-session/history", {}),
+                 ("PATCH", "/session/alice-session/title", {"json": {"title": "Changed"}}),
+                 ("DELETE", "/session/alice-session", {}),
+                 ("GET", "/document/document/chunks", {}),
+                 ("DELETE", "/document/document?session_id=alice-session", {}),
+                 ("DELETE", "/media/assets/image", {}),
+                 ("GET", "/media/content/media/image", {}),
+                 ("GET", "/media/assets?session_id=alice-session", {}),
+                 ("GET", "/user/me?user_id=" + self.alice.id, {}),
+                 ("POST", "/session/create", {"json": {"session_id": "alice-session", "user_id": self.bob.id}}),
+                 ("POST", "/chat/stream", {"json": {"session_id": "alice-session", "message": "hello"}})]
+        for method, path, kwargs in cases:
+            with self.subTest(path=path):
+                self.assertIn(self.request(method, path, self.other_token, **kwargs).status_code, (403, 404))
+
+    def test_owned_reads_and_default_library_are_scoped(self):
+        for path in ("/user/me", "/session/alice-session/history", "/document/document/chunks", "/media/session/alice-session"):
+            self.assertEqual(self.request("GET", path, self.token).status_code, 200)
+        self.assertEqual(self.request("GET", "/media/assets", self.other_token).json()["total"], 0)
+        self.assertEqual(self.request("GET", "/media/assets", self.token).json()["total"], 2)
+
+    def test_forged_and_expired_credentials(self):
+        self.assertEqual(self.request("GET", "/user/me", "forged").status_code, 401)
+        with database.get_db_connection() as conn:
+            conn.execute("UPDATE auth_sessions SET expires_at=0 WHERE token_hash=?", (self.principal.token_hash,))
+        self.assertEqual(self.request("GET", "/user/me", self.token).status_code, 401)
+
+    def test_logout_revokes_download_and_api_credentials(self):
+        url = security.download_url("image", self.principal)
+        self.assertEqual(self.request("GET", url.removeprefix("/api/v1")).content, b"fixture-image")
+        self.assertEqual(self.request("POST", "/user/logout", self.token).status_code, 200)
+        self.assertEqual(self.request("GET", "/user/me", self.token).status_code, 401)
+        self.assertEqual(self.request("GET", url.removeprefix("/api/v1")).status_code, 401)
+
+    def test_password_change_invalidates_existing_sessions(self):
+        with database.get_db_connection() as conn:
+            conn.execute("UPDATE users SET password_hash='changed' WHERE id=?", (self.alice.id,))
+        self.assertEqual(self.request("GET", "/user/me", self.token).status_code, 401)
+
+    def test_download_scope_expiry_and_static_bypass(self):
+        url = security.download_url("document", self.principal, "document").removeprefix("/api/v1")
+        self.assertEqual(self.request("GET", url).content, b"fixture")
+        self.assertEqual(self.request("GET", url.replace("/document/document", "/media/image")).status_code, 401)
+        with database.get_db_connection() as conn:
+            conn.execute("UPDATE download_tickets SET expires_at=0")
+        self.assertEqual(self.request("GET", url).status_code, 401)
+        self.assertEqual(self.request("GET", "/media/uploads/fixture.png").status_code, 404)
+
+    def test_guests_are_isolated_and_cannot_use_user_or_admin_features(self):
+        first = self.request("POST", "/user/guest").json()
+        second = self.request("POST", "/user/guest").json()
+        payload = {"session_id": "guest-fixture", "message": "guest message"}
+        self.assertEqual(self.request("POST", "/chat/stream", first["access_token"], json=payload).status_code, 200)
+        self.assertEqual(self.request("POST", "/chat/stream", second["access_token"], json=payload).status_code, 404)
+        self.assertEqual(self.request("GET", "/user/me", first["access_token"]).status_code, 403)
+        with database.get_db_connection() as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM messages WHERE session_id='guest-fixture'").fetchone()[0], 0)
+        for path in ("/document/clear-all", "/session/purge-temporary"):
+            self.assertEqual(self.request("POST", path, self.token).status_code, 403)
+            settings.ADMIN_USER_IDS = [self.alice.id]
+            try:
+                self.assertEqual(self.request("POST", path, self.token).status_code, 200)
+            finally:
+                settings.ADMIN_USER_IDS = []
+
+    def test_duplicate_session_creation_preserves_children_and_owner(self):
+        from app.services.chat_history_service import chat_history_service
+        chat_history_service.save_message("alice-session", "user", "Keep me")
+        response = self.request("POST", "/session/create", self.token, json={"user_id": self.alice.id, "session_id": "alice-session"})
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["message_count"], 1)
+
+    def test_attachment_id_is_authorized_and_url_cannot_choose_a_fetch_target(self):
+        payload = {"session_id": "bob-session", "message": "hello", "attachments": [{"id": "image", "url": "http://private.invalid", "file_type": "image"}]}
+        self.assertEqual(self.request("POST", "/chat/stream", self.other_token, json=payload).status_code, 404)
+        payload["session_id"] = "alice-session"
+        self.assertEqual(self.request("POST", "/chat/stream", self.token, json=payload).status_code, 200)
+
+    def test_registration_and_password_login_issue_credentials(self):
+        registered = self.request("POST", "/user/register", json={
+            "username": "newperson", "email": "newperson@example.invalid",
+            "display_name": "Third Person", "password": "Durable!482Strong",
+        })
+        self.assertEqual(registered.status_code, 201)
+        self.assertEqual(self.request("GET", "/user/me", registered.json()["access_token"]).json()["id"], registered.json()["id"])
+        response = self.request("POST", "/user/login", json={"username_or_email": "alice", "password": "Durable!482Strong"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.request("GET", "/user/me", response.json()["access_token"]).json()["id"], self.alice.id)
+        self.assertNotIn("access_token", self.request("GET", "/user/me", self.token).json())
+
+    def test_upgrade_preserves_existing_users_sessions_and_assets(self):
+        # Recreate the prior schema using only this test's disposable database.
+        with database.get_db_connection() as conn:
+            conn.execute("DROP TABLE download_tickets")
+            conn.execute("DROP TABLE auth_sessions")
+            conn.execute("DROP INDEX idx_users_google_subject")
+            conn.execute("ALTER TABLE users DROP COLUMN google_subject")
+        database.init_db()
+        database.init_db()
+        response = self.request("POST", "/user/login", json={
+            "username_or_email": "alice", "password": "Durable!482Strong",
+        })
+        self.assertEqual(response.status_code, 200)
+        token = response.json()["access_token"]
+        self.assertEqual(response.json()["id"], self.alice.id)
+        self.assertEqual(self.request("GET", "/session/alice-session/history", token).status_code, 200)
+        self.assertEqual(self.request("GET", "/media/assets", token).json()["total"], 2)
+        self.assertEqual(self.request("GET", "/media/content/media/image", token).content, b"fixture-image")
+
+    def test_otp_login_and_password_reset_credentials(self):
+        def otp(identifier):
+            with database.get_db_connection() as conn:
+                conn.execute(
+                    "INSERT INTO email_otps(id,email,otp_code,expires_at,created_at) VALUES(?,?,?,?,?)",
+                    (identifier, self.alice.email, "123456", time.time() + 300, "2026-01-01"),
+                )
+
+        otp("login-code")
+        response = self.request("POST", "/user/otp/verify", json={
+            "email_or_username": "alice", "otp": "123456",
+        })
+        self.assertEqual(response.status_code, 200)
+        otp_token = response.json()["access_token"]
+        self.assertEqual(self.request("GET", "/user/me", otp_token).status_code, 200)
+        self.assertEqual(self.request("POST", "/user/otp/verify", json={
+            "email_or_username": "alice", "otp": "123456",
+        }).status_code, 400)
+        otp("reset-code")
+        response = self.request("POST", "/user/password-reset/verify", json={
+            "email_or_username": "alice", "otp": "123456", "new_password": "Another!482Strong",
+        })
+        self.assertEqual(response.status_code, 200)
+        for token in (self.token, otp_token):
+            self.assertEqual(self.request("GET", "/user/me", token).status_code, 401)
+        self.assertEqual(self.request("POST", "/user/login", json={
+            "username_or_email": "alice", "password": "Another!482Strong",
+        }).status_code, 200)
+
+    def test_owned_image_avatar_uploads_and_protected_downloads(self):
+        response = self.request("POST", "/media/upload", self.token,
+                                data={"session_id": "alice-session"},
+                                files={"file": ("../../fixture.png", b"uploaded image", "image/png")})
+        self.assertEqual(response.status_code, 201)
+        attachment = response.json()
+        url = attachment["url"].removeprefix("/api/v1")
+        self.assertEqual(self.request("GET", url).content, b"uploaded image")
+        self.assertEqual(self.request("GET", "/media/content/media/" + attachment["id"], self.other_token).status_code, 404)
+        avatar = self.request("POST", "/user/avatar", self.token, data={"user_id": self.alice.id},
+                              files={"file": ("fixture.png", b"uploaded avatar", "image/png")})
+        self.assertEqual(avatar.status_code, 200)
+        avatar_url = avatar.json()["avatar_url"].removeprefix("/api/v1")
+        self.assertEqual(self.request("GET", avatar_url).content, b"uploaded avatar")
+        self.assertEqual(self.request("GET", "/media/content/avatar/" + self.alice.id, self.other_token).status_code, 403)
+        self.assertEqual(self.request("DELETE", "/user/avatar?user_id=" + self.alice.id, self.token).status_code, 200)
+        self.assertEqual(self.request("GET", avatar_url).status_code, 404)
+
+    def test_document_upload_sanitizes_paths_and_removes_temporary_files(self):
+        from app.repositories.session_store import session_store_repo
+        from app.schemas.document import DocumentMetadata
+        from app.services.rag_service import rag_service
+
+        temporary_paths = []
+
+        def index(file_path, filename, session_id, user_id, storage_url):
+            temporary_paths.append(file_path)
+            self.assertTrue(file_path.resolve().is_relative_to(settings.UPLOAD_DIR.resolve()))
+            metadata = DocumentMetadata(
+                document_id="uploaded-document", filename=filename, file_type="txt",
+                file_size_bytes=len(file_path.read_bytes()), total_chunks=1,
+                storage_url=storage_url, uploaded_at="2026-01-01",
+            )
+            session_store_repo.save_document_metadata(metadata, user_id, session_id)
+            session_store_repo.attach_document_to_session(session_id, metadata.document_id)
+            return metadata
+
+        with patch.object(rag_service, "process_and_index_document", side_effect=index):
+            response = self.request("POST", "/document/upload", self.token,
+                                    data={"session_id": "alice-session"},
+                                    files={"file": ("../../fixture.txt", b"uploaded document", "text/plain")})
+        self.assertEqual(response.status_code, 201)
+        document = response.json()["document"]
+        self.assertEqual(document["filename"], "fixture.txt")
+        self.assertTrue(temporary_paths)
+        self.assertTrue(all(not path.exists() for path in temporary_paths))
+        self.assertEqual(self.request("GET", document["storage_url"].removeprefix("/api/v1")).content, b"uploaded document")
+
+    def test_real_orchestrator_streams_owned_media_without_external_requests(self):
+        from app.api.v1.endpoints import chat
+        from app.services.media_service import media_service
+
+        async def answer(*args, **kwargs):
+            yield "Offline answer"
+
+        async def vision(*args, **kwargs):
+            self.assertEqual(media_service.get_media_bytes(kwargs["attachments"][0].url), b"fixture-image")
+            yield "Offline vision"
+
+        providers = {}
+        for name, attribute in (("llm_service", "llm_service"), ("image_gen_service", "image_gen_service"),
+                                ("web_search_service", "web_search_service")):
+            stub = types.ModuleType("app.services." + name)
+            setattr(stub, attribute, Mock(stream_conversational_answer=answer, stream_multimodal_answer=vision))
+            providers[stub.__name__] = stub
+        with patch.dict(sys.modules, providers):
+            implementation = runpy.run_path(str(Path(__file__).resolve().parents[1] / "app/services/orchestrator.py"))
+        with patch.object(chat, "chat_orchestrator", implementation["chat_orchestrator"]):
+            for mode, attachments, expected in (("AUTO", [], "Offline answer"),
+                                               ("MULTIMODAL", [{"id": "image", "file_type": "image", "url": "http://internal.invalid"}], "Offline vision")):
+                response = self.request("POST", "/chat/stream", self.token, json={
+                    "session_id": "alice-session", "message": "hello", "mode": mode, "attachments": attachments,
+                })
+                self.assertEqual(response.status_code, 200)
+                self.assertIn(expected, response.text)
+                self.assertNotIn('"event": "error"', response.text)
+
+    def test_production_spa_serves_build_and_blocks_private_paths(self):
+        distribution = root / "frontend/dist"
+        distribution.mkdir(parents=True, exist_ok=True)
+        (distribution / "index.html").write_text("fixture frontend", encoding="utf-8")
+        (root / "private-fixture.txt").write_text("private fixture", encoding="utf-8")
+        production = runpy.run_path(str(Path(__file__).resolve().parents[1] / "app/main.py"))["app"]
+
+        async def check():
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=production), base_url="http://fixture.invalid") as client:
+                self.assertEqual((await client.get("/c/alice-session")).text, "fixture frontend")
+                for path in ("/%2e%2e/%2e%2e/private-fixture.txt", "/api/v1/media/uploads/fixture.png"):
+                    self.assertEqual((await client.get(path)).status_code, 404)
+
+        asyncio.run(check())
+
+    def test_direct_email_google_login_is_rejected(self):
+        self.assertEqual(self.request("POST", "/user/auth/google", json={"email": self.alice.email}).status_code, 422)
+
+    def test_profile_and_upload_identity_cannot_be_overridden(self):
+        for method, path, kwargs in (
+            ("PATCH", "/user/profile", {"json": {"user_id": self.alice.id, "display_name": "Attacker"}}),
+            ("POST", "/media/upload", {"data": {"user_id": self.alice.id}, "files": {"file": ("fixture.png", b"fixture", "image/png")}}),
+            ("POST", "/document/upload", {"data": {"session_id": "alice-session"}, "files": {"file": ("fixture.txt", b"fixture")}}),
+        ):
+            with self.subTest(path=path):
+                self.assertIn(self.request(method, path, self.other_token, **kwargs).status_code, (403, 404))
+
+    def test_guest_document_metadata_has_owned_downloads(self):
+        from app.services.chat_history_service import chat_history_service
+        guest = security.create_guest()
+        principal = security.resolve_principal(security.digest(guest["access_token"]))
+        security.ensure_session("guest-document-session", principal)
+        chat_history_service.save_document("guest-document", principal.user_id, "guest-document-session",
+                                           "fixture.txt", "txt", 7, 1, "documents/alice-session/fixture.txt")
+        url = security.download_url("guest-document", principal, "document").removeprefix("/api/v1")
+        self.assertEqual(self.request("GET", url).content, b"fixture")
+        self.assertEqual(self.request("GET", "/document/guest-document/chunks", self.token).status_code, 404)
+
+    def test_unowned_legacy_assets_are_denied_and_missing_attachments_do_not_break_history(self):
+        from app.services.chat_history_service import chat_history_service
+        with database.get_db_connection() as conn:
+            conn.execute("UPDATE media_assets SET user_id=NULL,session_id=NULL WHERE id='image'")
+        self.assertEqual(self.request("GET", "/media/content/media/image", self.token).status_code, 404)
+        chat_history_service.save_message("alice-session", "user", "Old message", attachments=[{"url": "/legacy.png"}])
+        response = self.request("GET", "/session/alice-session/history", self.token)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["messages"][0]["attachments"], [])
+
+    def test_legacy_generated_asset_derives_owner_from_session(self):
+        with database.get_db_connection() as conn:
+            conn.execute("UPDATE media_assets SET user_id=NULL WHERE id='image'")
+        response = self.request("GET", "/media/assets", self.token)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["total"], 2)
+        self.assertEqual(self.request("GET", "/media/content/media/image", self.token).content, b"fixture-image")
+
+    def test_verified_google_subject_is_persistent_and_client_email_is_ignored(self):
+        import app.services.user_service as service_module
+        claims = {"sub": "google-fixture", "email": "new@gmail.com", "name": "Google Person", "email_verified": True}
+        with patch.object(service_module, "verify_google_credential", return_value=claims):
+            first = self.request("POST", "/user/auth/google", json={"credential": "verified-by-fixture", "email": self.alice.email})
+            self.assertEqual(first.status_code, 200)
+            self.assertEqual(first.json()["email"], "new@gmail.com")
+            claims["email"] = "changed@gmail.com"
+            second = self.request("POST", "/user/auth/google", json={"credential": "verified-by-fixture"})
+            self.assertEqual(second.json()["id"], first.json()["id"])
+
+    def test_third_party_email_cannot_automatically_link_to_existing_account(self):
+        import app.services.user_service as service_module
+        claims = {"sub": "google-fixture", "email": self.alice.email, "email_verified": True}
+        with patch.object(service_module, "verify_google_credential", return_value=claims):
+            self.assertEqual(self.request("POST", "/user/auth/google", json={"credential": "verified-by-fixture"}).status_code, 409)
+
+    def test_cloud_file_download_uses_exact_owned_key_without_http_fallback(self):
+        from app.services.storage_service import storage_service
+        with database.get_db_connection() as conn:
+            conn.execute("UPDATE media_assets SET file_path='media/uploads/cloud-fixture.png' WHERE id='image'")
+        body = io.BytesIO(b"cloud fixture")
+        client = Mock()
+        client.get_object.return_value = {"Body": body}
+        with patch.object(storage_service, "_s3_client", client), patch.object(storage_service, "_initialized", True):
+            response = self.request("GET", "/media/content/media/image", self.token)
+        self.assertEqual(response.content, b"cloud fixture")
+        client.get_object.assert_called_once_with(Bucket="fixture", Key="media/uploads/cloud-fixture.png")
+        self.assertTrue(body.closed)
+
+    def test_generated_stream_media_gets_an_owned_download_ticket(self):
+        fixture_orchestrator.emit_media = True
+        response = self.request("POST", "/chat/stream", self.token, json={"session_id": "alice-session", "message": "hello"})
+        event = json.loads(response.text.split("\n\n")[0].removeprefix("data: "))
+        url = event["media"]["url"].removeprefix("/api/v1")
+        self.assertEqual(self.request("GET", url).content, b"fixture-image")
+
+    def test_incoming_attachment_url_is_replaced_with_owned_storage_key(self):
+        response = self.request("POST", "/chat/stream", self.token, json={
+            "session_id": "alice-session", "message": "hello",
+            "attachments": [{"id": "image", "file_type": "image", "url": "http://internal.invalid/secret"}],
+        })
+        self.assertEqual(response.status_code, 200)
+        assert fixture_orchestrator.last_request is not None
+        self.assertEqual(fixture_orchestrator.last_request.attachments[0].url, "media/uploads/fixture.png")
+
+
+class CloudAdapterSecurityTests(SecurityTests):
+    """Exercise the actual Turso adapter with an offline, autocommit SQL client.
+
+    This verifies statement/row compatibility, not remote Turso or its FK setup.
+    """
+    def setUp(self):
+        super().setUp()
+        original = database.TursoConnection
+
+        class SqlClient:
+            def __init__(self):
+                self.connection = sqlite3.connect(database.DB_FILE, isolation_level=None)
+                self.connection.row_factory = sqlite3.Row
+
+            def execute(self, sql, args):
+                cursor = self.connection.execute(sql, args)
+                return types.SimpleNamespace(rows=cursor.fetchall(), rows_affected=cursor.rowcount)
+
+            def close(self):
+                self.connection.close()
+
+        def connection(**kwargs):
+            adapter = original.__new__(original)
+            adapter._client = cast(Any, SqlClient())
+            return adapter
+
+        for replacement in (patch.object(database, "is_turso_configured", return_value=True),
+                            patch.object(database, "get_turso_url", return_value="https://fixture.invalid"),
+                            patch.object(database, "TursoConnection", side_effect=connection)):
+            replacement.start()
+            self.addCleanup(replacement.stop)
+
+    def test_cloud_initializer_is_repeatable(self):
+        database.init_db()
+        self.assertEqual(self.request("GET", "/user/me", self.token).status_code, 200)
+
+
+class GoogleVerificationTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from google.auth.crypt import RSASigner
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        private = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+        cls.signer = RSASigner.from_string(private, key_id="fixture-key")
+        cls.public = key.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo).decode()
+
+    def token(self, **updates):
+        from google.auth import jwt
+        claims = {"iss": "https://accounts.google.com", "aud": "fixture-client", "sub": "fixture-subject",
+                  "email": "fixture@gmail.com", "email_verified": True, "iat": int(time.time()), "exp": int(time.time()) + 3600}
+        claims.update(updates)
+        return jwt.encode(self.signer, claims).decode()
+
+    def test_real_google_library_validates_signed_claims(self):
+        from fastapi import HTTPException
+        response = types.SimpleNamespace(status=200, data=json.dumps({"fixture-key": self.public}).encode())
+        with patch.object(google_auth, "Request", return_value=lambda *args, **kwargs: response):
+            self.assertEqual(google_auth.verify_google_credential(self.token())["sub"], "fixture-subject")
+            for updates in ({"aud": "wrong"}, {"iss": "attacker.invalid"}, {"exp": 1},
+                            {"email_verified": False}, {"sub": ""}, {"email": ""}):
+                with self.subTest(updates=updates), self.assertRaises(HTTPException):
+                    google_auth.verify_google_credential(self.token(**updates))
+            with self.assertRaises(HTTPException):
+                google_auth.verify_google_credential(self.token()[:-10] + "forged")
+            self.assertEqual(google_auth.verify_google_credential(self.token(nonce="challenge"), "challenge")["nonce"], "challenge")
+            with self.assertRaises(HTTPException):
+                google_auth.verify_google_credential(self.token(nonce="different"), "challenge")
+
+
+if __name__ == "__main__":
+    try:
+        unittest.main()
+    finally:
+        outbound.stop()
+        fixture.cleanup()

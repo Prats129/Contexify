@@ -94,13 +94,21 @@ export const resolveBackendMode = (
  * Bypasses Expo 57's WinterCG fetch polyfill which throws
  * "Unsupported FormDataPart implementation" when passing React Native's { uri, name, type } object.
  */
-function uploadMultipart<T>(url: string, formData: FormData): Promise<T> {
+async function uploadMultipart<T>(url: string, formData: FormData): Promise<T> {
+  const authorization = await authHeaders(url);
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', url, true);
+    xhr.setRequestHeader('Authorization', authorization.Authorization);
     xhr.timeout = 60000;
 
-    xhr.onload = () => {
+    xhr.onload = async () => {
+      if (xhr.status === 401) void expireSession(authorization.Authorization);
+      const current = await readAuth();
+      if (!current || authorization.Authorization !== `Bearer ${current.access_token}`) {
+        reject(new Error('Your session changed. Please retry.'));
+        return;
+      }
       if (xhr.status >= 200 && xhr.status < 300) {
         try {
           const data = JSON.parse(xhr.responseText);
@@ -151,12 +159,118 @@ export function extractErrorMessage(errData: any, fallback = 'Operation failed')
   return fallback;
 }
 
+interface AuthSession { access_token: string; expires_at: number; is_guest: boolean; host: string; }
+const AUTH_KEY = 'contexify_auth_session';
+const publicAuthPaths = new Set(['/user/register', '/user/login', '/user/auth/google', '/user/otp/send',
+  '/user/otp/verify', '/user/auth/google/challenge', '/user/password-reset/send', '/user/password-reset/verify', '/user/guest']);
+const expiredHandlers = new Set<() => void>();
+let guestRequest: Promise<AuthSession> | null = null;
+let authGeneration = 0;
+
+const readAuth = async (): Promise<AuthSession | null> => {
+  try { return JSON.parse(await AsyncStorage.getItem(AUTH_KEY) || 'null'); } catch { return null; }
+};
+const saveAuth = async (session: AuthSession): Promise<void> => {
+  await AsyncStorage.setItem(AUTH_KEY, JSON.stringify(session));
+};
+const clearAuth = async (): Promise<void> => { authGeneration++; await AsyncStorage.removeItem(AUTH_KEY); };
+const authHost = getCleanHost;
+
+const getAuthSession = async (): Promise<AuthSession> => {
+  const host = await authHost();
+  const saved = await readAuth();
+  if (saved?.access_token && saved.host === host && saved.expires_at * 1000 > Date.now()) return saved;
+  if (saved && !saved.is_guest) {
+    await clearAuth();
+    expiredHandlers.forEach(handler => handler());
+    throw new Error('Your session expired. Please sign in again.');
+  }
+  if (!guestRequest) {
+    const generation = authGeneration;
+    guestRequest = (async () => {
+      const response = await fetch(`${host}/api/v1/user/guest`, { method: 'POST' });
+      if (!response.ok) throw new Error('Unable to start a guest session.');
+      const data = await response.json();
+      if (generation !== authGeneration) {
+        const current = await readAuth();
+        if (current) return current;
+        throw new Error('Your session changed. Please retry.');
+      }
+      const session: AuthSession = { access_token: data.access_token, expires_at: data.expires_at, is_guest: true, host };
+      await saveAuth(session);
+      return session;
+    })().finally(() => { guestRequest = null; });
+  }
+  return guestRequest;
+};
+
+const authHeaders = async (url: string): Promise<Record<string, string>> => {
+  const session = await getAuthSession();
+  if (session.host !== url.split('/api/v1')[0]) throw new Error('The server changed. Please retry.');
+  return { Authorization: `Bearer ${session.access_token}` };
+};
+
+const expireSession = async (authorization: string): Promise<void> => {
+  const current = await readAuth();
+  if (current && authorization === `Bearer ${current.access_token}`) {
+    await clearAuth();
+    expiredHandlers.forEach(handler => handler());
+  }
+};
+
+const authenticatedFetch = async (url: string, options: RequestInit = {}): Promise<Response> => {
+  const path = url.split('/api/v1')[1]?.split('?')[0] || '';
+  if (path === '/health' || publicAuthPaths.has(path)) return fetch(url, options);
+  const headers = new Headers(options.headers);
+  const authorization = await authHeaders(url);
+  headers.set('Authorization', authorization.Authorization);
+  const response = await fetch(url, { ...options, headers });
+  if (response.status === 401) await expireSession(authorization.Authorization);
+  const current = await readAuth();
+  if (!current || authorization.Authorization !== `Bearer ${current.access_token}`)
+    throw new Error('Your session changed. Please retry.');
+  return response;
+};
+
+const acceptLogin = async (response: Response, requestUrl: string): Promise<User> => {
+  const host = requestUrl.split('/api/v1')[0];
+  if (host !== await authHost()) throw new Error('The server changed. Please sign in again.');
+  const { access_token, token_type: _tokenType, expires_at, ...user } = await response.json();
+  if (!access_token || !expires_at) throw new Error('The server did not issue authentication credentials.');
+  authGeneration++;
+  await saveAuth({ access_token, expires_at, is_guest: false, host });
+  return user as User;
+};
+
 export const apiService = {
+  async getGoogleNonce(): Promise<string> {
+    const response = await authenticatedFetch(await getEndpoint('/user/auth/google/challenge'));
+    if (!response.ok) throw new Error('Unable to start Google Sign-In.');
+    return (await response.json()).nonce as string;
+  },
+  onSessionExpired(handler: () => void): () => void {
+    expiredHandlers.add(handler);
+    return () => { expiredHandlers.delete(handler); };
+  },
+  async hasUserSession(): Promise<boolean> {
+    const session = await readAuth();
+    return Boolean(session && !session.is_guest && session.access_token && session.host === await authHost()
+      && session.expires_at * 1000 > Date.now());
+  },
+  async logout(): Promise<void> {
+    const session = await readAuth();
+    await clearAuth();
+    if (session?.access_token && session.host === await authHost()) {
+      await fetch(`${session.host}/api/v1/user/logout`, {
+        method: 'POST', headers: { Authorization: `Bearer ${session.access_token}` },
+      }).catch(() => undefined);
+    }
+  },
   // --- Health Check ---
   async pingHealth(): Promise<boolean> {
     try {
       const url = await getEndpoint('/health');
-      const res = await fetch(url, { method: 'GET' });
+      const res = await authenticatedFetch(url, { method: 'GET' });
       return res.ok;
     } catch {
       return false;
@@ -171,7 +285,7 @@ export const apiService = {
     password: string
   ): Promise<User> {
     const url = await getEndpoint('/user/register');
-    const res = await fetch(url, {
+    const res = await authenticatedFetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -185,12 +299,12 @@ export const apiService = {
       const err = await res.json().catch(() => null);
       throw new Error(extractErrorMessage(err, 'Registration failed'));
     }
-    return res.json();
+    return acceptLogin(res, url);
   },
 
   async login(usernameOrEmail: string, password: string): Promise<User> {
     const url = await getEndpoint('/user/login');
-    const res = await fetch(url, {
+    const res = await authenticatedFetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -202,12 +316,12 @@ export const apiService = {
       const err = await res.json().catch(() => null);
       throw new Error(extractErrorMessage(err, 'Invalid credentials'));
     }
-    return res.json();
+    return acceptLogin(res, url);
   },
 
   async loginWithGoogle(data: GoogleAuthRequest): Promise<User> {
     const url = await getEndpoint('/user/auth/google');
-    const res = await fetch(url, {
+    const res = await authenticatedFetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
@@ -216,12 +330,12 @@ export const apiService = {
       const err = await res.json().catch(() => null);
       throw new Error(extractErrorMessage(err, 'Google authentication failed'));
     }
-    return res.json();
+    return acceptLogin(res, url);
   },
 
   async sendOtp(emailOrUsername: string): Promise<{ message: string; cooldown_seconds: number }> {
     const url = await getEndpoint('/user/otp/send');
-    const res = await fetch(url, {
+    const res = await authenticatedFetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email_or_username: emailOrUsername }),
@@ -235,7 +349,7 @@ export const apiService = {
 
   async loginWithOtp(emailOrUsername: string, otp: string): Promise<User> {
     const url = await getEndpoint('/user/otp/verify');
-    const res = await fetch(url, {
+    const res = await authenticatedFetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -247,7 +361,7 @@ export const apiService = {
       const err = await res.json().catch(() => null);
       throw new Error(extractErrorMessage(err, 'Invalid or expired OTP'));
     }
-    return res.json();
+    return acceptLogin(res, url);
   },
 
   async updateUserProfile(
@@ -256,7 +370,7 @@ export const apiService = {
     avatarColor?: string
   ): Promise<User> {
     const url = await getEndpoint('/user/profile');
-    const res = await fetch(url, {
+    const res = await authenticatedFetch(url, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -278,7 +392,7 @@ export const apiService = {
     newPassword: string
   ): Promise<{ message: string }> {
     const url = await getEndpoint('/user/change-password');
-    const res = await fetch(url, {
+    const res = await authenticatedFetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -297,7 +411,7 @@ export const apiService = {
   async getCurrentUser(userId: string): Promise<User | null> {
     try {
       const url = await getEndpoint(`/user/me?user_id=${encodeURIComponent(userId)}`);
-      const res = await fetch(url);
+      const res = await authenticatedFetch(url);
       if (!res.ok) return null;
       return res.json();
     } catch {
@@ -339,7 +453,7 @@ export const apiService = {
 
   async deleteAvatar(userId: string): Promise<User> {
     const url = await getEndpoint(`/user/avatar?user_id=${encodeURIComponent(userId)}`);
-    const res = await fetch(url, {
+    const res = await authenticatedFetch(url, {
       method: 'DELETE',
     });
     if (!res.ok) {
@@ -401,7 +515,7 @@ export const apiService = {
       }
 
       const url = await getEndpoint(`/session/list?${query.toString()}`);
-      const res = await fetch(url, { signal: params?.signal });
+      const res = await authenticatedFetch(url, { signal: params?.signal });
       if (!res.ok) {
         return {
           sessions: [],
@@ -442,7 +556,7 @@ export const apiService = {
   async getSessionHistory(sessionId: string): Promise<SessionHistoryResponse> {
     try {
       const url = await getEndpoint(`/session/${encodeURIComponent(sessionId)}/history`);
-      const res = await fetch(url);
+      const res = await authenticatedFetch(url);
       if (!res.ok) {
         return { session: null as any, messages: [], documents: [] };
       }
@@ -505,7 +619,7 @@ export const apiService = {
     if (params?.offset !== undefined) query.append('offset', String(params.offset));
 
     const url = await getEndpoint(`/media/assets?${query.toString()}`);
-    const res = await fetch(url);
+    const res = await authenticatedFetch(url);
     if (!res.ok) {
       const err = await res.json().catch(() => null);
       throw new Error(extractErrorMessage(err, 'Failed to fetch media assets'));
@@ -523,7 +637,7 @@ export const apiService = {
 
   async deleteAsset(assetId: string): Promise<{ message: string; id: string }> {
     const url = await getEndpoint(`/media/assets/${encodeURIComponent(assetId)}`);
-    const res = await fetch(url, { method: 'DELETE' });
+    const res = await authenticatedFetch(url, { method: 'DELETE' });
     if (!res.ok) {
       const err = await res.json().catch(() => null);
       throw new Error(extractErrorMessage(err, 'Failed to delete asset'));
@@ -540,7 +654,7 @@ export const apiService = {
   ): Promise<ChatSession> {
     const backendMode = resolveBackendMode(mode);
     const url = await getEndpoint('/session/create');
-    const res = await fetch(url, {
+    const res = await authenticatedFetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -563,7 +677,7 @@ export const apiService = {
       throw new Error('Session ID is required to delete a conversation.');
     }
     const url = await getEndpoint(`/session/${encodeURIComponent(sessionId.trim())}`);
-    const res = await fetch(url, { method: 'DELETE' });
+    const res = await authenticatedFetch(url, { method: 'DELETE' });
     if (!res.ok) {
       const err = await res.json().catch(() => null);
       throw new Error(extractErrorMessage(err, 'Failed to delete conversation'));
@@ -576,7 +690,7 @@ export const apiService = {
     }
     const backendMode = resolveBackendMode(mode);
     const url = await getEndpoint(`/session/${encodeURIComponent(sessionId.trim())}/mode`);
-    const res = await fetch(url, {
+    const res = await authenticatedFetch(url, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ mode: backendMode }),
@@ -603,7 +717,7 @@ export const apiService = {
     }
 
     const url = await getEndpoint(`/session/${encodeURIComponent(sessionId.trim())}/title`);
-    const res = await fetch(url, {
+    const res = await authenticatedFetch(url, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title: cleanTitle }),
@@ -621,7 +735,7 @@ export const apiService = {
     isPinned: boolean
   ): Promise<{ message: string; session_id: string; is_pinned: boolean }> {
     const url = await getEndpoint(`/session/${encodeURIComponent(sessionId.trim())}/pin`);
-    const res = await fetch(url, {
+    const res = await authenticatedFetch(url, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ is_pinned: isPinned }),
@@ -638,7 +752,7 @@ export const apiService = {
   async getSessionDocuments(sessionId: string): Promise<DocumentMetadata[]> {
     try {
       const url = await getEndpoint(`/document/session/${encodeURIComponent(sessionId)}`);
-      const res = await fetch(url);
+      const res = await authenticatedFetch(url);
       if (!res.ok) return [];
       return res.json();
     } catch {
@@ -676,7 +790,7 @@ export const apiService = {
     const url = await getEndpoint(
       `/document/${encodeURIComponent(documentId)}?session_id=${encodeURIComponent(sessionId)}`
     );
-    const res = await fetch(url, { method: 'DELETE' });
+    const res = await authenticatedFetch(url, { method: 'DELETE' });
     if (!res.ok) throw new Error('Failed to remove document');
   },
 
@@ -714,6 +828,9 @@ export const apiService = {
       xhr.open('POST', url, true);
       xhr.setRequestHeader('Content-Type', 'application/json');
       xhr.setRequestHeader('Accept', 'text/event-stream');
+      const authorization = await authHeaders(url);
+      if (isAborted || hasEnded) return;
+      xhr.setRequestHeader('Authorization', authorization.Authorization);
 
       let lastIndex = 0;
 
@@ -772,6 +889,7 @@ export const apiService = {
       };
 
       xhr.onload = () => {
+        if (xhr.status === 401) void expireSession(authorization.Authorization);
         if (isAborted || hasEnded) return;
         if (xhr.status >= 400) {
           let errorMsg = `Server error: ${xhr.status}`;

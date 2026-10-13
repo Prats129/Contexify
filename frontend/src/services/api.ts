@@ -14,21 +14,24 @@ import type {
   PaginatedAssetsResponse,
   AssetQueryParams,
   MessageReplyReference,
-} from '../types';
+} from "../types";
 
-const BACKEND_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
+const BACKEND_BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(
+  /\/+$/,
+  "",
+);
 const API_BASE_URL = `${BACKEND_BASE}/api/v1`;
 
 export const formatMediaUrl = (url?: string): string => {
-  if (!url) return '';
-  if (url.startsWith('/')) {
+  if (!url) return "";
+  if (url.startsWith("/")) {
     return `${BACKEND_BASE}${url}`;
   }
   return url;
 };
 
 const formatUser = (user: User): User => {
-  if (user && user.avatar_url && user.avatar_url.startsWith('/')) {
+  if (user && user.avatar_url && user.avatar_url.startsWith("/")) {
     return {
       ...user,
       avatar_url: `${BACKEND_BASE}${user.avatar_url}`,
@@ -37,35 +40,206 @@ const formatUser = (user: User): User => {
   return user;
 };
 
-export function extractErrorMessage(errData: any, fallback = 'Operation failed'): string {
+export function extractErrorMessage(
+  errData: any,
+  fallback = "Operation failed",
+): string {
   if (!errData) return fallback;
-  if (typeof errData === 'string') return errData;
-  if (typeof errData.detail === 'string') return errData.detail;
+  if (typeof errData === "string") return errData;
+  if (typeof errData.detail === "string") return errData.detail;
   if (Array.isArray(errData.detail) && errData.detail.length > 0) {
     const messages = errData.detail.map((d: any) => {
-      if (typeof d === 'string') return d;
-      if (d && typeof d.msg === 'string') {
-        return d.msg.replace(/^Value error,\s*/i, '');
+      if (typeof d === "string") return d;
+      if (d && typeof d.msg === "string") {
+        return d.msg.replace(/^Value error,\s*/i, "");
       }
       return JSON.stringify(d);
     });
-    return messages.join('. ');
+    return messages.join(". ");
   }
-  if (typeof errData.message === 'string') return errData.message;
+  if (typeof errData.message === "string") return errData.message;
   return fallback;
 }
 
+interface AuthSession {
+  access_token: string;
+  expires_at: number;
+  is_guest: boolean;
+  host: string;
+}
+const AUTH_KEY = "contexify_auth_session";
+const publicAuthPaths = new Set([
+  "/user/register",
+  "/user/login",
+  "/user/auth/google",
+  "/user/otp/send",
+  "/user/otp/verify",
+  "/user/auth/google/challenge",
+  "/user/password-reset/send",
+  "/user/password-reset/verify",
+  "/user/guest",
+]);
+const expiredHandlers = new Set<() => void>();
+let guestRequest: Promise<AuthSession> | null = null;
+let authGeneration = 0;
+
+const readAuth = async (): Promise<AuthSession | null> => {
+  try {
+    return JSON.parse(localStorage.getItem(AUTH_KEY) || "null");
+  } catch {
+    return null;
+  }
+};
+const saveAuth = async (session: AuthSession): Promise<void> => {
+  localStorage.setItem(AUTH_KEY, JSON.stringify(session));
+};
+const clearAuth = async (): Promise<void> => {
+  authGeneration++;
+  localStorage.removeItem(AUTH_KEY);
+};
+const authHost = async (): Promise<string> => BACKEND_BASE;
+
+const getAuthSession = async (): Promise<AuthSession> => {
+  const host = await authHost();
+  const saved = await readAuth();
+  if (
+    saved?.access_token &&
+    saved.host === host &&
+    saved.expires_at * 1000 > Date.now()
+  )
+    return saved;
+  if (saved && !saved.is_guest) {
+    await clearAuth();
+    expiredHandlers.forEach((handler) => handler());
+    throw new Error("Your session expired. Please sign in again.");
+  }
+  if (!guestRequest) {
+    const generation = authGeneration;
+    guestRequest = (async () => {
+      const response = await fetch(`${host}/api/v1/user/guest`, {
+        method: "POST",
+      });
+      if (!response.ok) throw new Error("Unable to start a guest session.");
+      const data = await response.json();
+      if (generation !== authGeneration) {
+        const current = await readAuth();
+        if (current) return current;
+        throw new Error("Your session changed. Please retry.");
+      }
+      const session: AuthSession = {
+        access_token: data.access_token,
+        expires_at: data.expires_at,
+        is_guest: true,
+        host,
+      };
+      await saveAuth(session);
+      return session;
+    })().finally(() => {
+      guestRequest = null;
+    });
+  }
+  return guestRequest;
+};
+
+const authHeaders = async (url: string): Promise<Record<string, string>> => {
+  const session = await getAuthSession();
+  if (session.host !== url.split("/api/v1")[0])
+    throw new Error("The server changed. Please retry.");
+  return { Authorization: `Bearer ${session.access_token}` };
+};
+
+const expireSession = async (authorization: string): Promise<void> => {
+  const current = await readAuth();
+  if (current && authorization === `Bearer ${current.access_token}`) {
+    await clearAuth();
+    expiredHandlers.forEach((handler) => handler());
+  }
+};
+
+const authenticatedFetch = async (
+  url: string,
+  options: RequestInit = {},
+): Promise<Response> => {
+  const path = url.split("/api/v1")[1]?.split("?")[0] || "";
+  if (path === "/health" || publicAuthPaths.has(path))
+    return fetch(url, options);
+  const headers = new Headers(options.headers);
+  const authorization = await authHeaders(url);
+  headers.set("Authorization", authorization.Authorization);
+  const response = await fetch(url, { ...options, headers });
+  if (response.status === 401) await expireSession(authorization.Authorization);
+  const current = await readAuth();
+  if (
+    !current ||
+    authorization.Authorization !== `Bearer ${current.access_token}`
+  )
+    throw new Error("Your session changed. Please retry.");
+  return response;
+};
+
+const acceptLogin = async (response: Response): Promise<User> => {
+  const {
+    access_token,
+    token_type: _tokenType,
+    expires_at,
+    ...user
+  } = await response.json();
+  if (!access_token || !expires_at)
+    throw new Error("The server did not issue authentication credentials.");
+  authGeneration++;
+  await saveAuth({
+    access_token,
+    expires_at,
+    is_guest: false,
+    host: await authHost(),
+  });
+  return user as User;
+};
+
 export const apiService = {
+  async getGoogleNonce(): Promise<string> {
+    const response = await authenticatedFetch(
+      `${API_BASE_URL}/user/auth/google/challenge`,
+    );
+    if (!response.ok) throw new Error("Unable to start Google Sign-In.");
+    return (await response.json()).nonce as string;
+  },
+  onSessionExpired(handler: () => void): () => void {
+    expiredHandlers.add(handler);
+    return () => {
+      expiredHandlers.delete(handler);
+    };
+  },
+  async hasUserSession(): Promise<boolean> {
+    const session = await readAuth();
+    return Boolean(
+      session &&
+      !session.is_guest &&
+      session.access_token &&
+      session.host === (await authHost()) &&
+      session.expires_at * 1000 > Date.now(),
+    );
+  },
+  async logout(): Promise<void> {
+    const session = await readAuth();
+    await clearAuth();
+    if (session?.access_token && session.host === (await authHost())) {
+      await fetch(`${session.host}/api/v1/user/logout`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      }).catch(() => undefined);
+    }
+  },
   // --- User Authentication Endpoints ---
   async register(
     displayName: string,
     username: string,
     email: string,
-    password: string
+    password: string,
   ): Promise<User> {
-    const response = await fetch(`${API_BASE_URL}/user/register`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+    const response = await authenticatedFetch(`${API_BASE_URL}/user/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         display_name: displayName,
         username,
@@ -75,18 +249,15 @@ export const apiService = {
     });
     if (!response.ok) {
       const err = await response.json().catch(() => null);
-      throw new Error(extractErrorMessage(err, 'Registration failed'));
+      throw new Error(extractErrorMessage(err, "Registration failed"));
     }
-    return formatUser(await response.json());
+    return formatUser(await acceptLogin(response));
   },
 
-  async login(
-    usernameOrEmail: string,
-    password: string
-  ): Promise<User> {
-    const response = await fetch(`${API_BASE_URL}/user/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+  async login(usernameOrEmail: string, password: string): Promise<User> {
+    const response = await authenticatedFetch(`${API_BASE_URL}/user/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         username_or_email: usernameOrEmail,
         password,
@@ -94,69 +265,83 @@ export const apiService = {
     });
     if (!response.ok) {
       const err = await response.json().catch(() => null);
-      throw new Error(extractErrorMessage(err, 'Invalid username/email or password'));
+      throw new Error(
+        extractErrorMessage(err, "Invalid username/email or password"),
+      );
     }
-    return formatUser(await response.json());
+    return formatUser(await acceptLogin(response));
   },
 
   async loginWithGoogle(data: GoogleAuthRequest): Promise<User> {
-    const response = await fetch(`${API_BASE_URL}/user/auth/google`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
+    const response = await authenticatedFetch(
+      `${API_BASE_URL}/user/auth/google`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      },
+    );
     if (!response.ok) {
       const err = await response.json().catch(() => null);
-      throw new Error(extractErrorMessage(err, 'Google authentication failed'));
+      throw new Error(extractErrorMessage(err, "Google authentication failed"));
     }
-    return formatUser(await response.json());
+    return formatUser(await acceptLogin(response));
   },
 
   async sendLoginOtp(emailOrUsername: string): Promise<SendOtpResponse> {
-    const response = await fetch(`${API_BASE_URL}/user/otp/send`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+    const response = await authenticatedFetch(`${API_BASE_URL}/user/otp/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         email_or_username: emailOrUsername,
       }),
     });
     if (!response.ok) {
       const err = await response.json().catch(() => null);
-      throw new Error(extractErrorMessage(err, 'Failed to send verification code'));
+      throw new Error(
+        extractErrorMessage(err, "Failed to send verification code"),
+      );
     }
     return await response.json();
   },
 
-  async loginWithOtp(
-    emailOrUsername: string,
-    otp: string
-  ): Promise<User> {
-    const response = await fetch(`${API_BASE_URL}/user/otp/verify`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        email_or_username: emailOrUsername,
-        otp,
-      }),
-    });
+  async loginWithOtp(emailOrUsername: string, otp: string): Promise<User> {
+    const response = await authenticatedFetch(
+      `${API_BASE_URL}/user/otp/verify`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email_or_username: emailOrUsername,
+          otp,
+        }),
+      },
+    );
     if (!response.ok) {
       const err = await response.json().catch(() => null);
-      throw new Error(extractErrorMessage(err, 'Invalid verification code'));
+      throw new Error(extractErrorMessage(err, "Invalid verification code"));
     }
-    return formatUser(await response.json());
+    return formatUser(await acceptLogin(response));
   },
 
-  async sendPasswordResetOtp(emailOrUsername: string): Promise<SendOtpResponse> {
-    const response = await fetch(`${API_BASE_URL}/user/password-reset/send`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        email_or_username: emailOrUsername,
-      }),
-    });
+  async sendPasswordResetOtp(
+    emailOrUsername: string,
+  ): Promise<SendOtpResponse> {
+    const response = await authenticatedFetch(
+      `${API_BASE_URL}/user/password-reset/send`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email_or_username: emailOrUsername,
+        }),
+      },
+    );
     if (!response.ok) {
       const err = await response.json().catch(() => null);
-      throw new Error(extractErrorMessage(err, 'Failed to send password reset code'));
+      throw new Error(
+        extractErrorMessage(err, "Failed to send password reset code"),
+      );
     }
     return await response.json();
   },
@@ -164,28 +349,33 @@ export const apiService = {
   async resetPasswordWithOtp(
     emailOrUsername: string,
     otp: string,
-    newPassword: string
+    newPassword: string,
   ): Promise<{ message: string }> {
-    const response = await fetch(`${API_BASE_URL}/user/password-reset/verify`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        email_or_username: emailOrUsername,
-        otp,
-        new_password: newPassword,
-      }),
-    });
+    const response = await authenticatedFetch(
+      `${API_BASE_URL}/user/password-reset/verify`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email_or_username: emailOrUsername,
+          otp,
+          new_password: newPassword,
+        }),
+      },
+    );
     if (!response.ok) {
       const err = await response.json().catch(() => null);
-      throw new Error(extractErrorMessage(err, 'Failed to reset password'));
+      throw new Error(extractErrorMessage(err, "Failed to reset password"));
     }
     return await response.json();
   },
 
   async getCurrentUser(userId: string): Promise<User> {
-    const response = await fetch(`${API_BASE_URL}/user/me?user_id=${encodeURIComponent(userId)}`);
+    const response = await authenticatedFetch(
+      `${API_BASE_URL}/user/me?user_id=${encodeURIComponent(userId)}`,
+    );
     if (!response.ok) {
-      throw new Error('User not found');
+      throw new Error("User not found");
     }
     return formatUser(await response.json());
   },
@@ -193,11 +383,11 @@ export const apiService = {
   async updateUserProfile(
     userId: string,
     displayName?: string,
-    avatarColor?: string
+    avatarColor?: string,
   ): Promise<User> {
-    const response = await fetch(`${API_BASE_URL}/user/profile`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+    const response = await authenticatedFetch(`${API_BASE_URL}/user/profile`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         user_id: userId,
         display_name: displayName,
@@ -206,7 +396,7 @@ export const apiService = {
     });
     if (!response.ok) {
       const err = await response.json().catch(() => null);
-      throw new Error(extractErrorMessage(err, 'Profile update failed'));
+      throw new Error(extractErrorMessage(err, "Profile update failed"));
     }
     return formatUser(await response.json());
   },
@@ -214,20 +404,23 @@ export const apiService = {
   async changePassword(
     userId: string,
     oldPassword: string,
-    newPassword: string
+    newPassword: string,
   ): Promise<{ message: string }> {
-    const response = await fetch(`${API_BASE_URL}/user/change-password`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        user_id: userId,
-        old_password: oldPassword,
-        new_password: newPassword,
-      }),
-    });
+    const response = await authenticatedFetch(
+      `${API_BASE_URL}/user/change-password`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: userId,
+          old_password: oldPassword,
+          new_password: newPassword,
+        }),
+      },
+    );
     if (!response.ok) {
       const err = await response.json().catch(() => null);
-      throw new Error(extractErrorMessage(err, 'Password change failed'));
+      throw new Error(extractErrorMessage(err, "Password change failed"));
     }
     return await response.json();
   },
@@ -235,39 +428,57 @@ export const apiService = {
   async uploadAvatar(userId: string, file: File): Promise<User> {
     const MAX_SIZE = 2 * 1024 * 1024; // 2MB
     if (file.size > MAX_SIZE) {
-      throw new Error('Avatar image exceeds maximum file size limit of 2MB.');
+      throw new Error("Avatar image exceeds maximum file size limit of 2MB.");
     }
 
-    const allowedTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif'];
-    if (!allowedTypes.includes(file.type.toLowerCase()) && !/\.(png|jpg|jpeg|webp|gif)$/i.test(file.name)) {
-      throw new Error('Invalid image format. Allowed formats: PNG, JPG, JPEG, WEBP, GIF.');
+    const allowedTypes = [
+      "image/png",
+      "image/jpeg",
+      "image/jpg",
+      "image/webp",
+      "image/gif",
+    ];
+    if (
+      !allowedTypes.includes(file.type.toLowerCase()) &&
+      !/\.(png|jpg|jpeg|webp|gif)$/i.test(file.name)
+    ) {
+      throw new Error(
+        "Invalid image format. Allowed formats: PNG, JPG, JPEG, WEBP, GIF.",
+      );
     }
 
     const formData = new FormData();
-    formData.append('user_id', userId);
-    formData.append('file', file);
+    formData.append("user_id", userId);
+    formData.append("file", file);
 
-    const response = await fetch(`${API_BASE_URL}/user/avatar`, {
-      method: 'POST',
+    const response = await authenticatedFetch(`${API_BASE_URL}/user/avatar`, {
+      method: "POST",
       body: formData,
     });
 
     if (!response.ok) {
-      const err = await response.json().catch(() => ({ detail: 'Avatar upload failed' }));
-      throw new Error(err.detail || 'Avatar upload failed');
+      const err = await response
+        .json()
+        .catch(() => ({ detail: "Avatar upload failed" }));
+      throw new Error(err.detail || "Avatar upload failed");
     }
 
     return formatUser(await response.json());
   },
 
   async deleteAvatar(userId: string): Promise<User> {
-    const response = await fetch(`${API_BASE_URL}/user/avatar?user_id=${encodeURIComponent(userId)}`, {
-      method: 'DELETE',
-    });
+    const response = await authenticatedFetch(
+      `${API_BASE_URL}/user/avatar?user_id=${encodeURIComponent(userId)}`,
+      {
+        method: "DELETE",
+      },
+    );
 
     if (!response.ok) {
-      const err = await response.json().catch(() => ({ detail: 'Avatar deletion failed' }));
-      throw new Error(err.detail || 'Avatar deletion failed');
+      const err = await response
+        .json()
+        .catch(() => ({ detail: "Avatar deletion failed" }));
+      throw new Error(err.detail || "Avatar deletion failed");
     }
 
     return formatUser(await response.json());
@@ -276,28 +487,31 @@ export const apiService = {
   // --- Session Endpoints ---
   async listSessions(
     userId: string,
-    params?: SessionListParams
+    params?: SessionListParams,
   ): Promise<PaginatedChatSessions> {
     const query = new URLSearchParams({ user_id: userId });
     if (params?.limit !== undefined) {
-      query.set('limit', String(params.limit));
+      query.set("limit", String(params.limit));
     }
     if (params?.offset !== undefined) {
-      query.set('offset', String(params.offset));
+      query.set("offset", String(params.offset));
     }
     if (params?.search && params.search.trim()) {
-      query.set('search', params.search.trim());
+      query.set("search", params.search.trim());
     }
     if (params?.sort_by) {
-      query.set('sort_by', params.sort_by);
+      query.set("sort_by", params.sort_by);
     }
 
-    const response = await fetch(`${API_BASE_URL}/session/list?${query.toString()}`, {
-      signal: params?.signal,
-    });
+    const response = await authenticatedFetch(
+      `${API_BASE_URL}/session/list?${query.toString()}`,
+      {
+        signal: params?.signal,
+      },
+    );
     if (!response.ok) {
       const err = await response.json().catch(() => null);
-      throw new Error(extractErrorMessage(err, 'Failed to fetch session list'));
+      throw new Error(extractErrorMessage(err, "Failed to fetch session list"));
     }
     const data = await response.json();
     if (Array.isArray(data)) {
@@ -314,33 +528,40 @@ export const apiService = {
 
   async createSession(
     userId: string,
-    title: string = 'New Conversation',
-    mode: ChatMode = 'AUTO',
+    title: string = "New Conversation",
+    mode: ChatMode = "AUTO",
     isTemporary: boolean = false,
-    sessionId?: string
+    sessionId?: string,
   ): Promise<ChatSession> {
-    const response = await fetch(`${API_BASE_URL}/session/create`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        user_id: userId,
-        session_id: sessionId || undefined,
-        title,
-        mode,
-        is_temporary: isTemporary,
-      }),
-    });
+    const response = await authenticatedFetch(
+      `${API_BASE_URL}/session/create`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: userId,
+          session_id: sessionId || undefined,
+          title,
+          mode,
+          is_temporary: isTemporary,
+        }),
+      },
+    );
     if (!response.ok) {
-      const err = await response.json().catch(() => ({ detail: 'Failed to create session' }));
-      throw new Error(err.detail || 'Failed to create session');
+      const err = await response
+        .json()
+        .catch(() => ({ detail: "Failed to create session" }));
+      throw new Error(err.detail || "Failed to create session");
     }
     return await response.json();
   },
 
   async getSessionHistory(sessionId: string): Promise<SessionHistoryResponse> {
-    const response = await fetch(`${API_BASE_URL}/session/${encodeURIComponent(sessionId)}/history`);
+    const response = await authenticatedFetch(
+      `${API_BASE_URL}/session/${encodeURIComponent(sessionId)}/history`,
+    );
     if (!response.ok) {
-      throw new Error('Failed to fetch session history');
+      throw new Error("Failed to fetch session history");
     }
     const data: SessionHistoryResponse = await response.json();
     if (data && data.messages) {
@@ -357,19 +578,23 @@ export const apiService = {
     return data;
   },
 
-  async uploadMedia(file: File, sessionId?: string, userId?: string): Promise<MediaAttachment> {
+  async uploadMedia(
+    file: File,
+    sessionId?: string,
+    userId?: string,
+  ): Promise<MediaAttachment> {
     const formData = new FormData();
-    formData.append('file', file);
-    if (sessionId) formData.append('session_id', sessionId);
-    if (userId) formData.append('user_id', userId);
+    formData.append("file", file);
+    if (sessionId) formData.append("session_id", sessionId);
+    if (userId) formData.append("user_id", userId);
 
-    const response = await fetch(`${API_BASE_URL}/media/upload`, {
-      method: 'POST',
+    const response = await authenticatedFetch(`${API_BASE_URL}/media/upload`, {
+      method: "POST",
       body: formData,
     });
     if (!response.ok) {
       const err = await response.json().catch(() => null);
-      throw new Error(extractErrorMessage(err, 'Media upload failed'));
+      throw new Error(extractErrorMessage(err, "Media upload failed"));
     }
     const attachment: MediaAttachment = await response.json();
     return {
@@ -380,18 +605,23 @@ export const apiService = {
 
   async getAssets(params?: AssetQueryParams): Promise<PaginatedAssetsResponse> {
     const query = new URLSearchParams();
-    if (params?.userId) query.append('user_id', params.userId);
-    if (params?.sessionId) query.append('session_id', params.sessionId);
-    if (params?.origin && params.origin !== 'all') query.append('origin', params.origin);
-    if (params?.fileType && params.fileType !== 'all') query.append('file_type', params.fileType);
-    if (params?.search?.trim()) query.append('search', params.search.trim());
-    if (params?.limit) query.append('limit', String(params.limit));
-    if (params?.offset !== undefined) query.append('offset', String(params.offset));
+    if (params?.userId) query.append("user_id", params.userId);
+    if (params?.sessionId) query.append("session_id", params.sessionId);
+    if (params?.origin && params.origin !== "all")
+      query.append("origin", params.origin);
+    if (params?.fileType && params.fileType !== "all")
+      query.append("file_type", params.fileType);
+    if (params?.search?.trim()) query.append("search", params.search.trim());
+    if (params?.limit) query.append("limit", String(params.limit));
+    if (params?.offset !== undefined)
+      query.append("offset", String(params.offset));
 
-    const response = await fetch(`${API_BASE_URL}/media/assets?${query.toString()}`);
+    const response = await authenticatedFetch(
+      `${API_BASE_URL}/media/assets?${query.toString()}`,
+    );
     if (!response.ok) {
       const err = await response.json().catch(() => null);
-      throw new Error(extractErrorMessage(err, 'Failed to fetch assets'));
+      throw new Error(extractErrorMessage(err, "Failed to fetch assets"));
     }
     const data: PaginatedAssetsResponse = await response.json();
     return {
@@ -404,125 +634,173 @@ export const apiService = {
   },
 
   async deleteAsset(assetId: string): Promise<{ message: string; id: string }> {
-    const response = await fetch(`${API_BASE_URL}/media/assets/${encodeURIComponent(assetId)}`, {
-      method: 'DELETE',
-    });
+    const response = await authenticatedFetch(
+      `${API_BASE_URL}/media/assets/${encodeURIComponent(assetId)}`,
+      {
+        method: "DELETE",
+      },
+    );
     if (!response.ok) {
       const err = await response.json().catch(() => null);
-      throw new Error(extractErrorMessage(err, 'Failed to delete asset'));
+      throw new Error(extractErrorMessage(err, "Failed to delete asset"));
     }
     return await response.json();
   },
 
-  async updateSessionTitle(sessionId: string, title: string): Promise<{ message: string; title: string }> {
-    const response = await fetch(`${API_BASE_URL}/session/${encodeURIComponent(sessionId)}/title`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title }),
-    });
+  async updateSessionTitle(
+    sessionId: string,
+    title: string,
+  ): Promise<{ message: string; title: string }> {
+    const response = await authenticatedFetch(
+      `${API_BASE_URL}/session/${encodeURIComponent(sessionId)}/title`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title }),
+      },
+    );
     if (!response.ok) {
       const err = await response.json().catch(() => null);
-      throw new Error(extractErrorMessage(err, 'Failed to update session title'));
+      throw new Error(
+        extractErrorMessage(err, "Failed to update session title"),
+      );
     }
     return await response.json();
   },
 
-  async togglePinSession(sessionId: string, isPinned: boolean): Promise<{ message: string; session_id: string; is_pinned: boolean }> {
-    const response = await fetch(`${API_BASE_URL}/session/${encodeURIComponent(sessionId)}/pin`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ is_pinned: isPinned }),
-    });
+  async togglePinSession(
+    sessionId: string,
+    isPinned: boolean,
+  ): Promise<{ message: string; session_id: string; is_pinned: boolean }> {
+    const response = await authenticatedFetch(
+      `${API_BASE_URL}/session/${encodeURIComponent(sessionId)}/pin`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ is_pinned: isPinned }),
+      },
+    );
     if (!response.ok) {
       const err = await response.json().catch(() => null);
-      throw new Error(extractErrorMessage(err, 'Failed to update session pin status'));
+      throw new Error(
+        extractErrorMessage(err, "Failed to update session pin status"),
+      );
     }
     return await response.json();
   },
 
-  async updateSessionMode(sessionId: string, mode: ChatMode): Promise<{ message: string; mode: ChatMode }> {
-    const response = await fetch(`${API_BASE_URL}/session/${encodeURIComponent(sessionId)}/mode`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode }),
-    });
+  async updateSessionMode(
+    sessionId: string,
+    mode: ChatMode,
+  ): Promise<{ message: string; mode: ChatMode }> {
+    const response = await authenticatedFetch(
+      `${API_BASE_URL}/session/${encodeURIComponent(sessionId)}/mode`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode }),
+      },
+    );
     if (!response.ok) {
-      throw new Error('Failed to update session mode');
+      throw new Error("Failed to update session mode");
     }
     return await response.json();
   },
 
   async clearSessionMessages(sessionId: string): Promise<{ message: string }> {
-    const response = await fetch(`${API_BASE_URL}/session/${encodeURIComponent(sessionId)}/messages`, {
-      method: 'DELETE',
-    });
+    const response = await authenticatedFetch(
+      `${API_BASE_URL}/session/${encodeURIComponent(sessionId)}/messages`,
+      {
+        method: "DELETE",
+      },
+    );
     if (!response.ok) {
-      throw new Error('Failed to clear messages');
+      throw new Error("Failed to clear messages");
     }
     return await response.json();
   },
 
   async deleteSession(sessionId: string): Promise<{ message: string }> {
-    const response = await fetch(`${API_BASE_URL}/session/${encodeURIComponent(sessionId)}`, {
-      method: 'DELETE',
-    });
+    const response = await authenticatedFetch(
+      `${API_BASE_URL}/session/${encodeURIComponent(sessionId)}`,
+      {
+        method: "DELETE",
+      },
+    );
     if (!response.ok) {
-      throw new Error('Failed to delete session');
+      throw new Error("Failed to delete session");
     }
     return await response.json();
   },
 
   // --- Document Endpoints ---
-  async uploadDocument(file: File, sessionId: string, userId?: string): Promise<DocumentUploadResponse> {
+  async uploadDocument(
+    file: File,
+    sessionId: string,
+    userId?: string,
+  ): Promise<DocumentUploadResponse> {
     const formData = new FormData();
-    formData.append('file', file);
-    formData.append('session_id', sessionId);
+    formData.append("file", file);
+    formData.append("session_id", sessionId);
     if (userId) {
-      formData.append('user_id', userId);
+      formData.append("user_id", userId);
     }
 
-    const response = await fetch(`${API_BASE_URL}/document/upload`, {
-      method: 'POST',
-      body: formData,
-    });
+    const response = await authenticatedFetch(
+      `${API_BASE_URL}/document/upload`,
+      {
+        method: "POST",
+        body: formData,
+      },
+    );
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({ detail: 'Upload failed' }));
-      throw new Error(errorData.detail || 'Upload failed');
+      const errorData = await response
+        .json()
+        .catch(() => ({ detail: "Upload failed" }));
+      throw new Error(errorData.detail || "Upload failed");
     }
 
     return await response.json();
   },
 
   async listDocuments(sessionId: string): Promise<DocumentListResponse> {
-    const response = await fetch(`${API_BASE_URL}/document/list?session_id=${encodeURIComponent(sessionId)}`);
-    if (!response.ok) {
-      throw new Error('Failed to fetch document list');
-    }
-    return await response.json();
-  },
-
-  async getDocumentChunks(documentId: string): Promise<import('../types').DocumentChunksResponse> {
-    const response = await fetch(`${API_BASE_URL}/document/${encodeURIComponent(documentId)}/chunks`);
-    if (!response.ok) {
-      throw new Error('Failed to fetch document chunks');
-    }
-    return await response.json();
-  },
-
-  async deleteDocument(documentId: string, sessionId: string): Promise<{ message: string }> {
-    const response = await fetch(
-      `${API_BASE_URL}/document/${encodeURIComponent(documentId)}?session_id=${encodeURIComponent(sessionId)}`,
-      {
-        method: 'DELETE',
-      }
+    const response = await authenticatedFetch(
+      `${API_BASE_URL}/document/list?session_id=${encodeURIComponent(sessionId)}`,
     );
     if (!response.ok) {
-      throw new Error('Failed to delete document');
+      throw new Error("Failed to fetch document list");
     }
     return await response.json();
   },
 
+  async getDocumentChunks(
+    documentId: string,
+  ): Promise<import("../types").DocumentChunksResponse> {
+    const response = await authenticatedFetch(
+      `${API_BASE_URL}/document/${encodeURIComponent(documentId)}/chunks`,
+    );
+    if (!response.ok) {
+      throw new Error("Failed to fetch document chunks");
+    }
+    return await response.json();
+  },
+
+  async deleteDocument(
+    documentId: string,
+    sessionId: string,
+  ): Promise<{ message: string }> {
+    const response = await authenticatedFetch(
+      `${API_BASE_URL}/document/${encodeURIComponent(documentId)}?session_id=${encodeURIComponent(sessionId)}`,
+      {
+        method: "DELETE",
+      },
+    );
+    if (!response.ok) {
+      throw new Error("Failed to delete document");
+    }
+    return await response.json();
+  },
 
   // --- Streaming Chat (SSE) ---
   async streamChat(
@@ -533,14 +811,14 @@ export const apiService = {
     signal?: AbortSignal,
     attachments?: MediaAttachment[],
     userId?: string | null,
-    reply_to?: MessageReplyReference | null
+    reply_to?: MessageReplyReference | null,
   ): Promise<void> {
     const { onCitations, onMedia, onToken, onError, onDone } = handlers;
 
     try {
-      const response = await fetch(`${API_BASE_URL}/chat/stream`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const response = await authenticatedFetch(`${API_BASE_URL}/chat/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           session_id: sessionId,
           user_id: userId || undefined,
@@ -557,12 +835,12 @@ export const apiService = {
       }
 
       if (!response.body) {
-        throw new Error('Response body is null');
+        throw new Error("Response body is null");
       }
 
       const reader = response.body.getReader();
-      const decoder = new TextDecoder('utf-8');
-      let buffer = '';
+      const decoder = new TextDecoder("utf-8");
+      let buffer = "";
       let hasCompleted = false;
 
       const triggerDone = () => {
@@ -586,35 +864,35 @@ export const apiService = {
         if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n\n');
-        buffer = lines.pop() || '';
+        const lines = buffer.split("\n\n");
+        buffer = lines.pop() || "";
 
         for (const line of lines) {
           if (signal?.aborted) break;
-          if (line.startsWith('data: ')) {
-            const jsonStr = line.replace('data: ', '').trim();
+          if (line.startsWith("data: ")) {
+            const jsonStr = line.replace("data: ", "").trim();
             if (!jsonStr) continue;
 
             try {
               const parsed = JSON.parse(jsonStr);
 
-              if (parsed.event === 'citations' && onCitations) {
+              if (parsed.event === "citations" && onCitations) {
                 onCitations(parsed.citations);
-              } else if (parsed.event === 'media' && onMedia) {
+              } else if (parsed.event === "media" && onMedia) {
                 const mediaItem: MediaAttachment = {
                   ...parsed.media,
                   url: formatMediaUrl(parsed.media?.url),
                 };
                 onMedia(mediaItem);
-              } else if (parsed.event === 'token' && onToken) {
+              } else if (parsed.event === "token" && onToken) {
                 onToken(parsed.data);
-              } else if (parsed.event === 'error' && onError) {
+              } else if (parsed.event === "error" && onError) {
                 onError(parsed.data);
-              } else if (parsed.event === 'done') {
+              } else if (parsed.event === "done") {
                 triggerDone();
               }
             } catch (e) {
-              console.error('Failed to parse SSE line:', line, e);
+              console.error("Failed to parse SSE line:", line, e);
             }
           }
         }
@@ -625,8 +903,8 @@ export const apiService = {
       }
     } catch (err: unknown) {
       if (
-        (err instanceof DOMException && err.name === 'AbortError') ||
-        (err instanceof Error && err.name === 'AbortError') ||
+        (err instanceof DOMException && err.name === "AbortError") ||
+        (err instanceof Error && err.name === "AbortError") ||
         signal?.aborted
       ) {
         // Stream was stopped by the user - do not treat as an error
@@ -637,4 +915,3 @@ export const apiService = {
     }
   },
 };
-

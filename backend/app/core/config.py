@@ -1,7 +1,8 @@
 import os
 from pathlib import Path
-from pydantic_settings import BaseSettings, SettingsConfigDict
+
 from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 WORKSPACE_DIR = BASE_DIR.parent
@@ -112,6 +113,11 @@ class Settings(BaseSettings):
     SMTP_FROM_NAME: str = Field(default="Contexify", env="SMTP_FROM_NAME")
     SMTP_USE_TLS: bool = Field(default=True, env="SMTP_USE_TLS")
     SMTP_USE_SSL: bool = Field(default=False, env="SMTP_USE_SSL")
+
+    AUTH_SESSION_TTL_SECONDS: int = Field(default=604800, ge=60)
+    GUEST_SESSION_TTL_SECONDS: int = Field(default=86400, ge=60)
+    DOWNLOAD_TICKET_TTL_SECONDS: int = Field(default=3600, ge=60, le=86400)
+    ADMIN_USER_IDS: list[str] = []
 
     # OTP Authentication Settings
     OTP_EXPIRY_SECONDS: int = 180  # 3 minutes
