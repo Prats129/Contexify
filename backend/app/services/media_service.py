@@ -151,9 +151,9 @@ class MediaService:
 
     def get_media_bytes(self, url_or_path: str) -> Optional[bytes]:
         """Fetch binary content of a media asset from Cloudflare R2 or local disk."""
-        if not url_or_path:
+        if not url_or_path or not url_or_path.startswith("media/"):
             return None
-        return storage_service.download_owned_file(url_or_path)
+        return storage_service.download_owned_file(url_or_path, max_bytes=MAX_FILE_SIZE_BYTES)
 
     def resolve_local_path(self, url_or_path: str) -> Optional[Path]:
         """Convert a media URL or relative path to its actual local filesystem Path if present."""

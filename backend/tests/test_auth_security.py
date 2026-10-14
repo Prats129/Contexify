@@ -696,6 +696,140 @@ class SecurityTests(unittest.TestCase):
         url = event["media"]["url"].removeprefix("/api/v1")
         self.assertEqual(self.request("GET", url).content, b"fixture-image")
 
+    def test_storage_reads_reject_urls_paths_and_unsafe_keys_before_r2(self):
+        from app.services.storage_service import storage_service
+
+        private = root / "private-read-fixture.txt"
+        private.write_bytes(b"private fixture")
+        client = Mock()
+        keys = ["", str(private), "../private-read-fixture.txt", "media/../private-read-fixture.txt",
+                "media//uploads/fixture.png", r"media\uploads\fixture.png", "media/uploads/CON.txt",
+                "media/uploads/fixture.png:stream", "media/uploads/fixture.png.", "private-read-fixture.txt",
+                "http://127.0.0.1/private", "http://169.254.169.254/latest/meta-data/",
+                "file:///private", "//internal.invalid/media/uploads/fixture.png"]
+        with patch.object(storage_service, "_s3_client", client), patch.object(storage_service, "_initialized", True):
+            for key in keys:
+                with self.subTest(key=key):
+                    self.assertIsNone(storage_service.download_owned_file(key))
+                    self.assertIsNone(storage_service.download_file(key))
+            client.get_object.assert_not_called()
+
+    def test_storage_url_resolution_requires_exact_configured_origin_and_prefix(self):
+        from app.services.storage_service import storage_service
+
+        key = "media/uploads/fixture.png"
+        with patch.object(settings, "CLOUDFLARE_R2_PUBLIC_URL", "https://cdn.fixture.invalid/files"), patch.object(
+            settings, "r2_endpoint_url", "https://r2.fixture.invalid"
+        ), patch.object(storage_service, "download_owned_file", return_value=b"fixture") as read:
+            for url in ("https://cdn.fixture.invalid/files/" + key,
+                        "https://r2.fixture.invalid/fixture/" + key,
+                        "/api/v1/media/uploads/fixture.png?ticket=fixture"):
+                self.assertEqual(storage_service.download_file(url), b"fixture")
+                read.assert_called_with(key)
+            for url in ("https://cdn.fixture.invalid.evil.invalid/files/" + key,
+                        "https://evil.invalid/fixture/" + key,
+                        "https://evil.invalid/https://cdn.fixture.invalid/files/" + key,
+                        "https://cdn.fixture.invalid/filesevil/" + key,
+                        "https://cdn.fixture.invalid:444/files/" + key,
+                        "https://user@cdn.fixture.invalid/files/" + key,
+                        "https://cdn.fixture.invalid/files/media/%2e%2e/private.txt"):
+                self.assertIsNone(storage_service._extract_key_from_url(url))
+                with self.assertRaises(security.HTTPException):
+                    storage_service.owned_storage_key({"file_path": url}, "media")
+
+    def test_owned_downloads_bound_reads_and_close_cloud_bodies(self):
+        from app.services.storage_service import storage_service
+
+        self.assertIsNone(storage_service.download_owned_file("media/uploads/fixture.png", max_bytes=3))
+        self.assertEqual(storage_service.download_owned_file("media/uploads/fixture.png", max_bytes=13), b"fixture-image")
+        for declared in (0, 100):
+            body = io.BytesIO(b"oversized fixture")
+            client = Mock()
+            client.get_object.return_value = {"Body": body, "ContentLength": declared}
+            with patch.object(storage_service, "_s3_client", client), patch.object(storage_service, "_initialized", True):
+                self.assertIsNone(storage_service.download_owned_file("media/uploads/cloud-limit.png", max_bytes=3))
+            self.assertTrue(body.closed)
+
+    def test_cloud_failure_never_falls_back_to_http(self):
+        from app.services.storage_service import storage_service
+
+        client = Mock()
+        client.get_object.side_effect = RuntimeError("fixture storage failure")
+        with patch.object(storage_service, "_s3_client", client), patch.object(storage_service, "_initialized", True), patch.object(
+            settings, "CLOUDFLARE_R2_PUBLIC_URL", "https://cdn.fixture.invalid"
+        ), patch.object(httpx, "Client", side_effect=AssertionError("HTTP fallback is forbidden")):
+            self.assertIsNone(storage_service.download_file("https://cdn.fixture.invalid/media/uploads/cloud-missing.png"))
+        client.get_object.assert_called_once_with(Bucket="fixture", Key="media/uploads/cloud-missing.png")
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows junction regression")
+    def test_owned_downloads_reject_junctions_into_private_data(self):
+        import _winapi
+
+        from app.services.storage_service import storage_service
+
+        data = root / (self.__class__.__name__ + "-read-junction")
+        (data / "media").mkdir(parents=True)
+        private = data / "private"
+        private.mkdir()
+        (private / "fixture.txt").write_bytes(b"private fixture")
+        _winapi.CreateJunction(str(private), str(data / "media/linked"))
+        client = Mock()
+        with patch.object(settings, "DATA_DIR", data), patch.object(storage_service, "_s3_client", client), patch.object(
+            storage_service, "_initialized", True
+        ):
+            self.assertIsNone(storage_service.download_owned_file("media/linked/fixture.txt"))
+            client.get_object.assert_not_called()
+
+    def test_vision_reads_only_media_keys_with_the_upload_size_limit(self):
+        from app.services import media_service as implementation
+        from app.services.storage_service import storage_service
+
+        with patch.object(implementation, "MAX_FILE_SIZE_BYTES", 3):
+            self.assertIsNone(implementation.media_service.get_media_bytes("media/uploads/fixture.png"))
+        with patch.object(storage_service, "download_owned_file") as read:
+            self.assertIsNone(implementation.media_service.get_media_bytes("documents/alice-session/fixture.txt"))
+            self.assertIsNone(implementation.media_service.get_media_bytes("http://internal.invalid"))
+            read.assert_not_called()
+
+    def test_reference_generation_uses_owned_keys_in_local_and_cloud_modes(self):
+        from app.api.v1.endpoints import chat
+        from app.schemas.chat import MediaAttachment
+        from app.services.media_service import media_service
+        from app.services.storage_service import storage_service
+
+        async def reference(**kwargs):
+            self.assertTrue(kwargs["reference_image_path"].startswith("media/uploads/"))
+            self.assertEqual(media_service.get_media_bytes(kwargs["reference_image_path"]), b"fixture-image")
+            return MediaAttachment(id="image", url="ignored", file_type="image")
+
+        providers = {}
+        for name in ("llm_service", "image_gen_service", "web_search_service"):
+            stub = types.ModuleType("app.services." + name)
+            setattr(stub, name, Mock())
+            providers[stub.__name__] = stub
+        generator = getattr(providers["app.services.image_gen_service"], "image_gen_service")
+        generator.generate_from_reference = AsyncMock(side_effect=reference)
+        generator.generate_image = AsyncMock(side_effect=AssertionError("Must use the attached reference"))
+        with patch.dict(sys.modules, providers):
+            actual = runpy.run_path(str(Path(__file__).resolve().parents[1] / "app/services/orchestrator.py"))["chat_orchestrator"]
+        client = Mock()
+        client.get_object.side_effect = lambda **kwargs: {"Body": io.BytesIO(b"fixture-image")}
+        with patch.object(chat, "chat_orchestrator", actual), patch.object(storage_service, "_s3_client", client):
+            for cloud in (False, True):
+                key = "media/uploads/cloud-reference.png" if cloud else "media/uploads/fixture.png"
+                with database.get_db_connection() as conn:
+                    conn.execute("UPDATE media_assets SET file_path=? WHERE id='image'", (key,))
+                with patch.object(storage_service, "_initialized", cloud):
+                    response = self.request("POST", "/chat/stream", self.token, json={
+                        "session_id": "alice-session", "message": "Generate a new image using this reference", "mode": "IMAGE_GENERATION",
+                        "attachments": [{"id": "image", "file_type": "image", "url": "http://internal.invalid"}],
+                    })
+                self.assertEqual(response.status_code, 200)
+                self.assertNotIn('"event": "error"', response.text)
+                self.assertIn('"event": "media"', response.text)
+        self.assertEqual(generator.generate_from_reference.await_count, 2)
+        generator.generate_image.assert_not_called()
+
     def test_incoming_attachment_url_is_replaced_with_owned_storage_key(self):
         response = self.request("POST", "/chat/stream", self.token, json={
             "session_id": "alice-session", "message": "hello",

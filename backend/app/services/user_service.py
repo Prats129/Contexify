@@ -377,7 +377,7 @@ class UserService:
                 contents = resp.get("Contents", [])
                 if contents:
                     found_key = contents[0]["Key"]
-                    data = storage_service.download_file(found_key)
+                    data = storage_service.download_owned_file(found_key, max_bytes=MAX_AVATAR_SIZE_BYTES)
                     if data:
                         ext = Path(found_key).suffix.lower()
                         cached_file = avatars_dir / f"{user_id}{ext}"

@@ -1,8 +1,7 @@
 import mimetypes
 from pathlib import Path, PureWindowsPath
 from typing import Optional, Tuple
-
-import httpx
+from urllib.parse import unquote, urlsplit
 
 from app.core.config import settings
 from app.core.logging import logger
@@ -112,13 +111,7 @@ class StorageService:
         Returns: (public_url, storage_key)
         """
         clean_key = destination_key
-        parts = clean_key.split("/")
-        if (
-            not clean_key
-            or "\\" in clean_key
-            or any(char in '<>:"|?*' or ord(char) < 32 or ord(char) == 127 for char in clean_key)
-            or any(part in {"", ".", ".."} or part.endswith((" ", ".")) or PureWindowsPath(part).is_reserved() for part in parts)
-        ):
+        if not self._is_safe_key(clean_key):
             raise ValueError("Invalid storage key.")
         data_root = settings.DATA_DIR.resolve()
         local_target = (data_root / clean_key).resolve()
@@ -153,77 +146,23 @@ class StorageService:
         logger.info(f"Saved {len(file_bytes)} bytes to local disk: {local_target} -> {public_url}")
         return public_url, clean_key
 
+    @staticmethod
+    def _is_safe_key(key: str) -> bool:
+        return bool(key) and not (
+            "\\" in key
+            or any(char in '<>:"|?*' or ord(char) < 32 or ord(char) == 127 for char in key)
+            or any(
+                part in {"", ".", ".."}
+                or part.endswith((" ", "."))
+                or PureWindowsPath(part).is_reserved()
+                for part in key.split("/")
+            )
+        )
+
     def download_file(self, key_or_url: str) -> Optional[bytes]:
-        """
-        Download raw file bytes from Cloudflare R2, remote HTTP URL, or local disk.
-        """
-        if not key_or_url:
-            return None
-
-        # 1. If it's a full HTTP(S) URL
-        if key_or_url.startswith(("http://", "https://")):
-            # If R2 is active and the URL contains our public URL or bucket, extract key
-            if self.is_r2_active and self._s3_client is not None:
-                key = self._extract_key_from_url(key_or_url)
-                if key:
-                    try:
-                        resp = self._s3_client.get_object(
-                            Bucket=settings.CLOUDFLARE_R2_BUCKET_NAME,
-                            Key=key
-                        )
-                        return resp["Body"].read()
-                    except Exception as e:
-                        logger.warning(f"Failed to fetch key '{key}' directly from R2: {e}. Trying HTTP fetch...", exc_info=True)
-
-            # Otherwise fetch over HTTP
-            try:
-                with httpx.Client(timeout=30.0) as client:
-                    resp = client.get(key_or_url)
-                    if resp.status_code == 200:
-                        return resp.content
-            except Exception as e:
-                logger.exception(f"HTTP download failed for {key_or_url}: {e}")
-
-        # 2. If it's a key and R2 is active
-        if self.is_r2_active and self._s3_client is not None and not key_or_url.startswith("/"):
-            try:
-                resp = self._s3_client.get_object(
-                    Bucket=settings.CLOUDFLARE_R2_BUCKET_NAME,
-                    Key=key_or_url.lstrip("/")
-                )
-                return resp["Body"].read()
-            except Exception as e:
-                logger.warning(f"R2 key fetch failed for '{key_or_url}': {e}", exc_info=True)
-
-        # 3. Local disk resolution
-        clean_path = key_or_url.split("?")[0]
-        rel_key = clean_path
-        if "/api/v1/media/" in clean_path:
-            rel_key = clean_path.split("/api/v1/media/")[-1]
-        elif clean_path.startswith("/"):
-            rel_key = clean_path.lstrip("/")
-
-        candidates = [
-            Path(clean_path),
-            settings.DATA_DIR / rel_key,
-            settings.DATA_DIR / clean_path.lstrip("/"),
-            settings.DATA_DIR / "avatars" / Path(clean_path).name,
-            settings.MEDIA_DIR / rel_key,
-            settings.UPLOAD_IMAGE_DIR / Path(clean_path).name,
-            settings.GENERATED_IMAGE_DIR / Path(clean_path).name,
-            settings.UPLOAD_DIR / Path(clean_path).name,
-            settings.DATA_DIR / "test" / Path(clean_path).name
-        ]
-
-        for cand in candidates:
-            if cand and cand.exists() and cand.is_file():
-                try:
-                    with open(cand, "rb") as f:
-                        return f.read()
-                except Exception as e:
-                    logger.warning(f"Error reading local file {cand}: {e}", exc_info=True)
-
-        return None
+        """Resolve a configured storage URL/key without arbitrary HTTP or path reads."""
+        key = self._extract_key_from_url(key_or_url) or key_or_url
+        return self.download_owned_file(key)
 
     def owned_storage_key(self, row: dict, kind: str) -> str:
         """Resolve only a database-owned storage key, never a caller's URL/path."""
@@ -231,23 +170,38 @@ class StorageService:
         value = row.get("storage_url") if kind == "document" else row.get("file_path")
         key = self._extract_key_from_url(value or "") or value or ""
         expected = "documents/" if kind == "document" else "media/"
-        if not key.startswith(expected) or "\\" in key or any(part in {".", ".."} for part in key.split("/")):
+        if not key.startswith(expected) or not self._is_safe_key(key):
             raise HTTPException(404, "Asset storage is unavailable.")
         return key
 
-    def download_owned_file(self, key: str) -> Optional[bytes]:
-        """Read the exact owned object without remote HTTP or arbitrary-path fallback."""
-        target = (settings.DATA_DIR / key).resolve()
-        if not target.is_relative_to(settings.DATA_DIR.resolve()):
+    def download_owned_file(self, key: str, max_bytes: Optional[int] = None) -> Optional[bytes]:
+        """Read an exact storage key; callers must check ownership before using it."""
+        if not self._is_safe_key(key) or not key.startswith(("media/", "documents/", "avatars/")):
             return None
-        if target.is_file():
-            return target.read_bytes()
+        data_root = settings.DATA_DIR.resolve()
+        namespace_root = data_root / key.split("/", 1)[0]
+        try:
+            target = (data_root / key).resolve()
+            if not target.is_relative_to(namespace_root):
+                return None
+            if target.is_file():
+                with target.open("rb") as body:
+                    if max_bytes is not None and target.stat().st_size > max_bytes:
+                        return None
+                    data = body.read() if max_bytes is None else body.read(max_bytes + 1)
+                return data if max_bytes is None or len(data) <= max_bytes else None
+        except (OSError, RuntimeError):
+            logger.warning("Owned local object could not be read", exc_info=True)
+            return None
         if self.is_r2_active and self._s3_client is not None:
             try:
                 response = self._s3_client.get_object(Bucket=settings.CLOUDFLARE_R2_BUCKET_NAME, Key=key)
                 body = response["Body"]
                 try:
-                    return body.read()
+                    if max_bytes is not None and response.get("ContentLength", 0) > max_bytes:
+                        return None
+                    data = body.read() if max_bytes is None else body.read(max_bytes + 1)
+                    return data if max_bytes is None or len(data) <= max_bytes else None
                 finally:
                     body.close()
             except Exception:
@@ -286,31 +240,40 @@ class StorageService:
         return False
 
     def _extract_key_from_url(self, url: str) -> Optional[str]:
-        """Extract bucket object key from a full URL."""
+        """Match exact configured origins/path prefixes, never hostname substrings."""
         if not url:
             return None
-
-        clean = url.split("?")[0]
-
-        if settings.CLOUDFLARE_R2_PUBLIC_URL and settings.CLOUDFLARE_R2_PUBLIC_URL in clean:
-            return clean.split(settings.CLOUDFLARE_R2_PUBLIC_URL)[-1].lstrip("/")
-
-        if settings.CLOUDFLARE_R2_BUCKET_NAME and f"/{settings.CLOUDFLARE_R2_BUCKET_NAME}/" in clean:
-            return clean.split(f"/{settings.CLOUDFLARE_R2_BUCKET_NAME}/")[-1].lstrip("/")
-
-        if "/api/v1/media/uploads/" in clean:
-            filename = clean.split("/api/v1/media/uploads/")[-1]
-            return f"media/uploads/{filename}"
-        elif "/api/v1/media/generated/" in clean:
-            filename = clean.split("/api/v1/media/generated/")[-1]
-            return f"media/generated/{filename}"
-        elif "/api/v1/media/documents/" in clean:
-            doc_rel = clean.split("/api/v1/media/documents/")[-1]
-            return f"documents/{doc_rel}"
-        elif "/api/v1/user/avatar/" in clean:
-            user_id = clean.split("/api/v1/user/avatar/")[-1]
-            return f"avatars/{user_id}"
-
+        try:
+            parsed = urlsplit(url)
+            if parsed.username or parsed.password or parsed.fragment:
+                return None
+            path = unquote(parsed.path)
+            if parsed.scheme or parsed.netloc:
+                if parsed.scheme not in {"http", "https"}:
+                    return None
+                bases = [settings.CLOUDFLARE_R2_PUBLIC_URL]
+                if settings.r2_endpoint_url and settings.CLOUDFLARE_R2_BUCKET_NAME:
+                    bases.append(f"{settings.r2_endpoint_url.rstrip('/')}/{settings.CLOUDFLARE_R2_BUCKET_NAME}")
+                for value in bases:
+                    if not value:
+                        continue
+                    base = urlsplit(value.strip().rstrip("/"))
+                    prefix = unquote(base.path).rstrip("/") + "/"
+                    if parsed.scheme == base.scheme and parsed.netloc == base.netloc and path.startswith(prefix):
+                        key = path[len(prefix):]
+                        return key if self._is_safe_key(key) else None
+                return None
+            for prefix, namespace in (
+                ("/api/v1/media/uploads/", "media/uploads/"),
+                ("/api/v1/media/generated/", "media/generated/"),
+                ("/api/v1/media/documents/", "documents/"),
+                ("/api/v1/user/avatar/", "avatars/"),
+            ):
+                if path.startswith(prefix):
+                    key = namespace + path[len(prefix):]
+                    return key if self._is_safe_key(key) else None
+        except ValueError:
+            return None
         return None
 
 

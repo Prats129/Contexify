@@ -8,7 +8,6 @@ from app.schemas.chat import ChatMode, ChatRequest, Citation, MediaAttachment
 from app.services.chat_history_service import chat_history_service
 from app.services.image_gen_service import image_gen_service
 from app.services.llm_service import llm_service
-from app.services.media_service import media_service
 from app.services.rag_service import rag_service
 from app.services.web_search_service import web_search_service
 
@@ -491,14 +490,11 @@ class ChatOrchestrator:
 
             generated_media: Optional[MediaAttachment] = None
             if ref_attachment:
-                local_ref = media_service.resolve_local_path(ref_attachment.url)
-                if local_ref and local_ref.exists():
-                    logger.info(f"Generating image from reference: {local_ref}")
-                    generated_media = await image_gen_service.generate_from_reference(
-                        prompt=prompt,
-                        reference_image_path=str(local_ref),
-                        session_id=session_id
-                    )
+                generated_media = await image_gen_service.generate_from_reference(
+                    prompt=prompt,
+                    reference_image_path=ref_attachment.url,
+                    session_id=session_id
+                )
             
             if not generated_media:
                 generated_media = await image_gen_service.generate_image(
