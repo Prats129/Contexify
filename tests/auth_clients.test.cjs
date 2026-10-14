@@ -6,7 +6,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 const ts = require("../frontend/node_modules/typescript");
 
-function client(platform, handleRequest) {
+function client(platform, handleRequest, environment = {}) {
   const storage = new Map();
   const requests = [];
   const uploads = [];
@@ -74,7 +74,7 @@ function client(platform, handleRequest) {
       path.join(__dirname, "..", platform, "src/services/api.ts"),
       "utf8",
     )
-    .replaceAll("import.meta.env", "({})");
+    .replaceAll("import.meta.env", `(${JSON.stringify(environment)})`);
   const code = ts.transpileModule(source, {
     compilerOptions: {
       module: ts.ModuleKind.CommonJS,
@@ -300,6 +300,8 @@ function appCallbacks(platform, apiService) {
           "handleLogout",
           "handleLogin",
           "handleFileUpload",
+          "handleDetachDocument",
+          "handleSendMessage",
         ]
       : [
           "cancelStreamForAuthChange",
@@ -307,6 +309,8 @@ function appCallbacks(platform, apiService) {
           "handleLogout",
           "handleAuthSuccess",
           "handleAttachFile",
+          "handleDetachDocument",
+          "handleSendMessage",
         ];
   const declarations = new Map();
   function visit(node) {
@@ -325,6 +329,7 @@ function appCallbacks(platform, apiService) {
   assert.equal(declarations.size, names.length);
   const callbacks = names.map((name) => declarations.get(name)).join("\n");
   const state = {
+    pendingDocumentIds: ["previous-owner"],
     attachedMedia: [{ id: "previous-owner" }],
     documents: [{ document_id: "previous-owner" }],
     messages: ["private"],
@@ -335,6 +340,14 @@ function appCallbacks(platform, apiService) {
     exports: {},
     console,
     apiService,
+    isAuthReady: true,
+    isSending: false,
+    isUploading: false,
+    inputQuery: "review",
+    query: "review",
+    replyingTo: null,
+    Date,
+    AbortController,
     currentUser: null,
     currentUserRef: { current: null },
     activeSessionId: "fixture-session",
@@ -354,6 +367,7 @@ function appCallbacks(platform, apiService) {
     },
     isSendingRef: { current: true },
     isAtBottomRef: { current: false },
+    flatListRef: { current: null },
     generateGuestSessionId: () => "guest-fixture",
     updateUrlForSession() {},
     loadSessions: async () => {},
@@ -392,6 +406,7 @@ function appCallbacks(platform, apiService) {
   return {
     callbacks: context.exports.callbacks,
     state,
+    context,
     cancelled: () => cancelled,
   };
 }
@@ -432,6 +447,7 @@ for (const platform of ["frontend", "mobile"]) {
       assert.equal(fixture.cancelled(), 1);
       assert.equal(fixture.state.attachedMedia.length, 0);
       assert.equal(fixture.state.documents.length, 0);
+      assert.equal(fixture.state.pendingDocumentIds.length, 0);
       assert.equal(fixture.state.messages.length, 0);
       assert.equal(fixture.state.streamingMessage, null);
       assert.equal(fixture.state.isSending, false);
@@ -472,6 +488,81 @@ for (const platform of ["frontend", "mobile"]) {
       await pending;
       assert.equal(fixture.state.attachedMedia.length, 0);
       assert.equal(fixture.state.documents.length, 0);
+      assert.equal(fixture.state.pendingDocumentIds.length, 0);
     });
   }
+}
+
+for (const platform of ["frontend", "mobile"]) {
+  test(`${platform}: sending waits for uploads without clearing the draft`, async () => {
+    const fixture = appCallbacks(platform, { streamChat() { throw new Error("Must wait for the upload"); } });
+    Object.assign(fixture.context, { isUploading: true, attachedMedia: [], pendingDocumentIds: [] });
+    fixture.context.isSendingRef.current = false;
+    const messagesBefore = fixture.state.messages;
+    await fixture.callbacks.handleSendMessage();
+    assert.equal(fixture.state.messages, messagesBefore);
+    assert.equal(fixture.state.inputQuery, undefined);
+    assert.equal(fixture.state.query, undefined);
+    assert.equal(fixture.state.isSending, undefined);
+  });
+
+  test(`${platform}: document chips detach without deleting session knowledge`, () => {
+    const api = { deleteDocument() { throw new Error("Draft removal must not delete documents"); } };
+    const fixture = appCallbacks(platform, api);
+    fixture.state.pendingDocumentIds = ["document-fixture"];
+    fixture.state.documents = [{ document_id: "document-fixture", filename: "fixture.txt" }];
+    fixture.callbacks.handleDetachDocument("document-fixture");
+    assert.equal(fixture.state.pendingDocumentIds.length, 0);
+    assert.equal(fixture.state.documents.length, 1);
+  });
+
+  test(`${platform}: sending includes pending documents and clears only the draft`, async () => {
+    let sent;
+    const api = { streamChat(...args) { sent = args; return () => {}; } };
+    const fixture = appCallbacks(platform, api);
+    fixture.context.isSendingRef.current = false;
+    fixture.context.abortControllerRef.current = null;
+    fixture.context.attachedMedia = [];
+    fixture.context.documents = [{ document_id: "document-fixture", filename: "fixture.txt", storage_url: "http://fixture.invalid/download", file_size_bytes: 7 }];
+    fixture.context.pendingDocumentIds = ["document-fixture"];
+    fixture.state.pendingDocumentIds = ["document-fixture"];
+    fixture.state.documents = fixture.context.documents;
+    await fixture.callbacks.handleSendMessage();
+    const attachments = platform === "frontend" ? sent[5] : sent[4];
+    assert.equal(attachments[0].file_type, "document");
+    assert.equal(attachments[0].id, "document-fixture");
+    assert.equal(fixture.state.messages.at(-1).attachments[0].file_name, "fixture.txt");
+    assert.equal(fixture.state.pendingDocumentIds.length, 0);
+    assert.equal(fixture.state.documents.length, 1);
+  });
+}
+
+for (const platform of ["frontend", "mobile"]) {
+  test(`${platform}: document-only sends use a review prompt`, async () => {
+    let sent;
+    const fixture = appCallbacks(platform, { streamChat(...args) { sent = args; return () => {}; } });
+    Object.assign(fixture.context, { query: "", inputQuery: "", attachedMedia: [], pendingDocumentIds: ["document-fixture"], documents: [{ document_id: "document-fixture", filename: "fixture.txt", storage_url: "http://fixture.invalid/download" }] });
+    fixture.context.isSendingRef.current = false;
+    fixture.context.abortControllerRef.current = null;
+    await fixture.callbacks.handleSendMessage();
+    assert.equal(sent[1], "Review the attached documents.");
+    assert.equal(fixture.state.messages.at(-1).content, "Review the attached documents.");
+  });
+
+  test(`${platform}: uploaded document links target the backend host`, async () => {
+    const document = { document_id: "document-fixture", filename: "fixture.txt", storage_url: "/api/v1/media/content/document/document-fixture?ticket=fixture" };
+    const fixture = client(platform, (url) => url.endsWith("/document/upload") ? response({ document }) : response(credentials("signed-token")), { VITE_API_BASE_URL: "http://fixture.invalid" });
+    await fixture.api.login("fixture", "password");
+    let uploaded;
+    if (platform === "frontend") {
+      uploaded = (await fixture.api.uploadDocument({}, "fixture-session")).document;
+    } else {
+      const pending = fixture.api.uploadDocument("fixture-session", "file:///fixture.txt", "fixture.txt", "text/plain");
+      await until(() => fixture.uploads[0]?.sent);
+      fixture.uploads[0].responseText = JSON.stringify({ document });
+      fixture.uploads[0].onload();
+      uploaded = await pending;
+    }
+    assert.equal(uploaded.storage_url, `http://fixture.invalid${document.storage_url}`);
+  });
 }

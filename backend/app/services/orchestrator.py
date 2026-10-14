@@ -215,6 +215,28 @@ class ChatOrchestrator:
             chat_history_service.update_session_title(session_id, summary_title)
 
         query = request.message or ""
+        selected_documents = [
+            attachment.id
+            for attachment in request.attachments or []
+            if attachment.file_type == "document" and attachment.id
+        ]
+        # Persist every attachment above, but only images belong in vision requests.
+        request = request.model_copy(update={"attachments": [
+            attachment for attachment in request.attachments or []
+            if attachment.file_type == "image"
+        ]})
+        if (
+            selected_documents
+            and session.mode in (ChatMode.AUTO, ChatMode.DOCUMENT_RAG, ChatMode.MULTIMODAL)
+            and not request.attachments
+        ):
+            context = rag_service.retrieve_context_for_query(query, session_id, document_ids=selected_documents)
+            async for chunk in self._execute_document_rag(
+                query, session_id, chat_history, context_chunks=context,
+                allow_fallback=False, reply_to=request.reply_to
+            ):
+                yield chunk
+            return
         recent_images = self._find_recent_image_attachments(chat_history, principal)
 
         # =========================================================================
@@ -329,7 +351,7 @@ class ChatOrchestrator:
     ) -> AsyncGenerator[str, None]:
         session = session_store_repo.get_or_create_session(session_id)
         
-        if not session.document_ids:
+        if not session.document_ids and not context_chunks:
             if allow_fallback:
                 async for chunk in self._execute_conversational(query, session_id, chat_history, reply_to=reply_to):
                     yield chunk

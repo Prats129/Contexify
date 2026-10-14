@@ -357,7 +357,25 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(
               }`}
             >
               {attachments.map((att, attIdx) => {
-                if (att.file_type === "image" || att.url) {
+                if (att.file_type === "document") {
+                  return (
+                    <a
+                      key={att.id || attIdx}
+                      href={att.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      download={att.file_name}
+                      className="flex items-center gap-2 px-3 py-2 rounded-xl border border-(--border-subtle) bg-(--bg-card) text-sm text-(--text-main) max-w-xs"
+                      title={`Download ${att.file_name || "document"}`}
+                    >
+                      <LuDownload size={16} />
+                      <span className="truncate">
+                        {att.file_name || "Attached document"}
+                      </span>
+                    </a>
+                  );
+                }
+                if (att.file_type === "image") {
                   return (
                     <div
                       key={att.id || attIdx}

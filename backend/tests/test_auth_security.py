@@ -478,6 +478,62 @@ class SecurityTests(unittest.TestCase):
         index.assert_not_called()
 
 
+    def test_document_attachments_are_persisted_and_route_to_grounding(self):
+        from app.api.v1.endpoints import chat
+        from app.services.rag_service import rag_service
+        providers = {}
+        for name, attribute in (("llm_service", "llm_service"), ("image_gen_service", "image_gen_service"), ("web_search_service", "web_search_service")):
+            stub = types.ModuleType("app.services." + name)
+            setattr(stub, attribute, Mock())
+            providers[stub.__name__] = stub
+        with patch.dict(sys.modules, providers):
+            implementation = runpy.run_path(str(Path(__file__).resolve().parents[1] / "app/services/orchestrator.py"))
+        actual = implementation["chat_orchestrator"]
+        context = [{"text": "fixture document", "metadata": {"document_id": "document"}, "similarity_score": 1.0}]
+
+        async def grounded(query, session_id, history, **kwargs):
+            self.assertEqual(kwargs["context_chunks"], context)
+            yield 'data: {"event":"done","data":"[DONE]"}\n\n'
+
+        async def vision(*args, **kwargs):
+            raise AssertionError("Documents must not enter the vision route")
+            yield ""
+
+        with patch.object(chat, "chat_orchestrator", actual), patch.object(actual, "_execute_document_rag", grounded), patch.object(actual, "_execute_multimodal", vision), patch.object(rag_service, "retrieve_context_for_query", return_value=context) as retrieve:
+            for mode in ("AUTO", "DOCUMENT_RAG", "MULTIMODAL"):
+                response = self.request("POST", "/chat/stream", self.token, json={
+                    "session_id": "alice-session", "message": "review", "mode": mode,
+                    "attachments": [{"id": "document", "file_type": "document", "url": "http://untrusted.invalid"}],
+                })
+                self.assertEqual(response.status_code, 200)
+                retrieve.assert_called_with("review", "alice-session", document_ids=["document"])
+        history = self.request("GET", "/session/alice-session/history", self.token).json()
+        attachment = history["messages"][-1]["attachments"][0]
+        self.assertEqual(attachment["file_type"], "document")
+        self.assertEqual(attachment["file_name"], "fixture.txt")
+        self.assertEqual(self.request("GET", attachment["url"].removeprefix("/api/v1")).content, b"fixture")
+        denied = self.request("POST", "/chat/stream", self.other_token, json={
+            "session_id": "bob-session", "message": "review", "attachments": [{"id": "document", "file_type": "document", "url": "ignored"}],
+        })
+        self.assertEqual(denied.status_code, 404)
+
+    def test_grounding_honors_explicit_document_selection(self):
+        embedding = types.ModuleType("app.services.embedding_service")
+        embedder = Mock()
+        embedder.embed_text.return_value = [1.0]
+        setattr(embedding, "embedding_service", embedder)
+        with patch.dict(sys.modules, {embedding.__name__: embedding}), patch.multiple(
+            settings, CHUNK_SIZE=800, CHUNK_OVERLAP=150, TOP_K_RETRIEVAL=4, SIMILARITY_THRESHOLD=0.2, create=True
+        ):
+            implementation = runpy.run_path(str(Path(__file__).resolve().parents[1] / "app/services/rag_service.py"))
+            actual = implementation["rag_service"]
+            with patch.object(vectors, "similarity_search", return_value=[]) as search:
+                self.assertEqual(actual.retrieve_context_for_query("review", "alice-session", document_ids=["selected-fixture"]), [])
+                self.assertEqual(search.call_args.kwargs["document_ids"], ["selected-fixture"])
+                search.reset_mock()
+                self.assertEqual(actual.retrieve_context_for_query("review", "alice-session", document_ids=[]), [])
+                search.assert_not_called()
+
     def test_real_orchestrator_streams_owned_media_without_external_requests(self):
         from app.api.v1.endpoints import chat
         from app.services.media_service import media_service

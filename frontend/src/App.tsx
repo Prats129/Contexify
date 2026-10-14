@@ -123,6 +123,7 @@ export const App: React.FC = () => {
   const [isTemporaryChat, setIsTemporaryChat] = useState<boolean>(false);
   const [currentMode, setCurrentMode] = useState<ChatMode>("AUTO");
   const [documents, setDocuments] = useState<DocumentMetadata[]>([]);
+  const [pendingDocumentIds, setPendingDocumentIds] = useState<string[]>([]);
   const [attachedMedia, setAttachedMedia] = useState<MediaAttachment[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [replyingTo, setReplyingTo] = useState<MessageReplyReference | null>(
@@ -175,6 +176,9 @@ export const App: React.FC = () => {
   }, []);
 
   const handleAttachDocumentFromModal = useCallback((doc: DocumentMetadata) => {
+    setPendingDocumentIds((prev) =>
+      prev.includes(doc.document_id) ? prev : [...prev, doc.document_id],
+    );
     setDocuments((prev) => {
       if (prev.some((d) => d.document_id === doc.document_id)) {
         return prev;
@@ -184,6 +188,7 @@ export const App: React.FC = () => {
   }, []);
 
   const handleAssetDeletedFromModal = useCallback((assetId: string) => {
+    setPendingDocumentIds((prev) => prev.filter((id) => id !== assetId));
     setAttachedMedia((prev) => prev.filter((m) => m.id !== assetId));
     setDocuments((prev) => prev.filter((d) => d.document_id !== assetId));
   }, []);
@@ -203,6 +208,7 @@ export const App: React.FC = () => {
       setActiveSessionId(null);
       setMessages([]);
       setDocuments([]);
+      setPendingDocumentIds([]);
       setStreamingMessage(null);
       setReplyingTo(null);
       setInputQuery("");
@@ -241,6 +247,7 @@ export const App: React.FC = () => {
             setCurrentMode(history.session.mode);
           }
           setDocuments(history.documents || []);
+          setPendingDocumentIds([]);
           setMessages(history.messages || []);
         } catch (e) {
           console.error("Failed to load session history:", e);
@@ -291,6 +298,7 @@ export const App: React.FC = () => {
         localStorage.removeItem("contexify_active_session");
         setMessages([]);
         setDocuments([]);
+        setPendingDocumentIds([]);
         setMode("light");
 
         const { sessionId: urlSessionId, isUnauthenticated } =
@@ -362,6 +370,7 @@ export const App: React.FC = () => {
         setActiveSessionId(null);
         setMessages([]);
         setDocuments([]);
+        setPendingDocumentIds([]);
         updateUrlForSession(null);
       } catch (e) {
         console.error("Failed to load user sessions:", e);
@@ -392,6 +401,7 @@ export const App: React.FC = () => {
         setActiveSessionId(null);
         setMessages([]);
         setDocuments([]);
+        setPendingDocumentIds([]);
         setStreamingMessage(null);
       }
     };
@@ -409,6 +419,7 @@ export const App: React.FC = () => {
     setActiveSessionId(null);
     setMessages([]);
     setDocuments([]);
+    setPendingDocumentIds([]);
     setStreamingMessage(null);
     setReplyingTo(null);
     setInputQuery("");
@@ -450,6 +461,7 @@ export const App: React.FC = () => {
         setActiveSessionId(null);
         setMessages([]);
         setDocuments([]);
+        setPendingDocumentIds([]);
         setStreamingMessage(null);
         updateUrlForSession(null);
         localStorage.removeItem("contexify_active_session");
@@ -581,6 +593,7 @@ export const App: React.FC = () => {
         currentUser?.id,
       );
       if (authVersion !== authVersionRef.current) return;
+      setPendingDocumentIds((prev) => [...prev, res.document.document_id]);
       // Update local document state
       setDocuments((prev) => {
         const exists = prev.some(
@@ -612,28 +625,8 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleDeleteDocument = async (documentId: string) => {
-    if (!activeSessionId) return;
-    const doc = documents.find((d) => d.document_id === documentId);
-    const docName = doc?.filename || "this document";
-
-    const confirmed = await confirm({
-      type: "default",
-      title: "Remove document?",
-      message: `Are you sure you want to remove "${docName}" and purge its vectors? Grounded answers will no longer cite this document.`,
-      confirmText: "Remove",
-      cancelText: "Cancel",
-      variant: "danger",
-    });
-    if (!confirmed) return;
-
-    try {
-      await apiService.deleteDocument(documentId, activeSessionId);
-      setDocuments((prev) => prev.filter((d) => d.document_id !== documentId));
-    } catch (e: unknown) {
-      const err = e instanceof Error ? e.message : String(e);
-      await showAlert({ title: "Deletion Failed", message: err });
-    }
+  const handleDetachDocument = (documentId: string) => {
+    setPendingDocumentIds((prev) => prev.filter((id) => id !== documentId));
   };
 
   // --- Clear Messages in Active Conversation (Authenticated Users Only) ---
@@ -707,8 +700,17 @@ export const App: React.FC = () => {
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!isAuthReady) return;
-    const query = inputQuery.trim();
-    if ((!query && attachedMedia.length === 0) || isSending) return;
+    const query =
+      inputQuery.trim() ||
+      (pendingDocumentIds.length > 0 ? "Review the attached documents." : "");
+    if (
+      (!query &&
+        attachedMedia.length === 0 &&
+        pendingDocumentIds.length === 0) ||
+      isSending ||
+      isUploading
+    )
+      return;
 
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -754,7 +756,21 @@ export const App: React.FC = () => {
     }
 
     // Capture media to send & reset input
-    const mediaToSend = [...attachedMedia];
+    const mediaToSend: MediaAttachment[] = [
+      ...attachedMedia,
+      ...documents
+        .filter((doc) => pendingDocumentIds.includes(doc.document_id))
+        .map(
+          (doc): MediaAttachment => ({
+            id: doc.document_id,
+            url: doc.storage_url || "",
+            file_type: "document",
+            file_name: doc.filename,
+            file_size_bytes: doc.file_size_bytes,
+          }),
+        ),
+    ];
+    setPendingDocumentIds([]);
     const replyToPayload = replyingTo;
     setInputQuery("");
     setAttachedMedia([]);
@@ -900,6 +916,7 @@ export const App: React.FC = () => {
     setStreamingMessage(null);
     setMessages([]);
     setDocuments([]);
+    setPendingDocumentIds([]);
     setAttachedMedia([]);
     setReplyingTo(null);
     setInputQuery("");
@@ -1095,8 +1112,10 @@ export const App: React.FC = () => {
         onFileUpload={handleFileUpload}
         isUploading={isUploading}
         uploadStatusText={uploadStatusText}
-        documents={documents}
-        onDeleteDocument={handleDeleteDocument}
+        documents={documents.filter((doc) =>
+          pendingDocumentIds.includes(doc.document_id),
+        )}
+        onDeleteDocument={handleDetachDocument}
         attachedMedia={attachedMedia}
         onDeleteMedia={handleDeleteMedia}
         onUseAsReference={handleUseAsReference}

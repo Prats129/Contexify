@@ -71,7 +71,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const isVision = currentMode === "MULTIMODAL";
   const isDoc = currentMode === "DOCUMENT_RAG";
   const canSend =
-    (query.trim().length > 0 || attachedMedia.length > 0) && !isSending;
+    (query.trim().length > 0 ||
+      attachedMedia.length > 0 ||
+      documents.length > 0) &&
+    !isSending &&
+    !isUploading;
   const insets = useSafeAreaInsets();
   const [isKeyboardOpen, setIsKeyboardOpen] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);

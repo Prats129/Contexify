@@ -1,13 +1,16 @@
 import uuid
 from pathlib import Path
-from typing import List, Dict, Any, Tuple, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
 from pypdf import PdfReader
+
 from app.core.config import settings
 from app.core.logging import logger
-from app.schemas.document import DocumentMetadata, ChunkMetadata
-from app.repositories.vector_store import vector_store_repo
 from app.repositories.session_store import session_store_repo
+from app.repositories.vector_store import vector_store_repo
+from app.schemas.document import DocumentMetadata
 from app.services.embedding_service import embedding_service
+
 
 class RAGService:
     """
@@ -166,12 +169,15 @@ class RAGService:
         return doc_metadata
 
 
-    def retrieve_context_for_query(self, query: str, session_id: str) -> List[Dict[str, Any]]:
+    def retrieve_context_for_query(
+        self, query: str, session_id: str, document_ids: Optional[List[str]] = None
+    ) -> List[Dict[str, Any]]:
         """
         Generate query vector and retrieve top-K relevant chunks with similarity score filter.
         """
         session = session_store_repo.get_or_create_session(session_id)
-        if not session.document_ids:
+        selected_ids = session.document_ids if document_ids is None else document_ids
+        if not selected_ids:
             logger.warning(f"No documents attached to session '{session_id}'")
             return []
 
@@ -182,7 +188,7 @@ class RAGService:
         retrieved = vector_store_repo.similarity_search(
             query_embedding=query_embedding,
             top_k=settings.TOP_K_RETRIEVAL,
-            document_ids=session.document_ids
+            document_ids=selected_ids
         )
 
         # Filter by threshold

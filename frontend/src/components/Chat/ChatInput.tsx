@@ -191,8 +191,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      if (isSending) {
-        // While response is streaming, do not submit another prompt concurrently
+      if (isSending || isUploading) {
+        // Wait for streaming or pending uploads before submitting another prompt.
         return;
       }
       onSubmit(e);
@@ -404,7 +404,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                       type="button"
                       className="hover:text-red-500 cursor-pointer ml-0.5"
                       onClick={() => onDeleteDocument(doc.document_id)}
-                      title="Remove document"
+                      title="Detach from this message"
                     >
                       <LuX size={12} />
                     </button>
@@ -470,7 +470,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                       : "Ask anything..."
             }
             rows={1}
-            required={attachedMedia.length === 0}
+            required={attachedMedia.length === 0 && documents.length === 0}
             className={`bg-transparent border-0 outline-none resize-none text-[16px] sm:text-[15px] text-(--text-main) px-2 leading-normal ${
               isExpanded
                 ? "col-span-full row-start-2 w-full max-h-52 overflow-y-auto py-1"
@@ -659,7 +659,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({
               <button
                 type="submit"
                 className="w-8 h-8 rounded-full bg-primary-theme hover:opacity-90 disabled:opacity-30 text-white flex items-center justify-center disabled:cursor-not-allowed shrink-0 disabled:shadow-none transition-all"
-                disabled={!inputQuery.trim() && attachedMedia.length === 0}
+                disabled={
+                  isUploading ||
+                  (!inputQuery.trim() &&
+                    attachedMedia.length === 0 &&
+                    documents.length === 0)
+                }
                 title="Send Question"
               >
                 <LuArrowUp size={18} />

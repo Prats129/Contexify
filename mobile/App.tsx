@@ -115,6 +115,7 @@ export default function App() {
     useState<boolean>(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [documents, setDocuments] = useState<DocumentMetadata[]>([]);
+  const [pendingDocumentIds, setPendingDocumentIds] = useState<string[]>([]);
   const [attachedMedia, setAttachedMedia] = useState<MediaAttachment[]>([]);
   const [replyingTo, setReplyingTo] = useState<MessageReplyReference | null>(
     null,
@@ -553,10 +554,12 @@ export default function App() {
       if (hist?.session?.mode) setCurrentMode(hist.session.mode);
       setMessages(Array.isArray(hist?.messages) ? hist.messages : []);
       setDocuments(Array.isArray(hist?.documents) ? hist.documents : []);
+      setPendingDocumentIds([]);
     } catch {
       if (authVersion !== authVersionRef.current) return;
       setMessages([]);
       setDocuments([]);
+      setPendingDocumentIds([]);
     }
   };
 
@@ -566,6 +569,7 @@ export default function App() {
     setActiveSessionId(null);
     setMessages([]);
     setDocuments([]);
+    setPendingDocumentIds([]);
     setAttachedMedia([]);
     setReplyingTo(null);
     setHighlightedMessageId(null);
@@ -589,6 +593,7 @@ export default function App() {
     }
     setMessages([]);
     setDocuments([]);
+    setPendingDocumentIds([]);
     setAttachedMedia([]);
     setReplyingTo(null);
     setHighlightedMessageId(null);
@@ -723,8 +728,11 @@ export default function App() {
   const handleSendMessage = async (customQuery?: string) => {
     const textToSend = (customQuery || query).trim();
     if (
-      (!textToSend && attachedMedia.length === 0) ||
+      (!textToSend &&
+        attachedMedia.length === 0 &&
+        pendingDocumentIds.length === 0) ||
       isSending ||
+      isUploading ||
       isSendingRef.current
     )
       return;
@@ -736,14 +744,30 @@ export default function App() {
     setReplyingTo(null);
     let sessionId = activeSessionId;
 
-    const mediaToSend = [...attachedMedia];
+    const mediaToSend: MediaAttachment[] = [
+      ...attachedMedia,
+      ...documents
+        .filter((doc) => pendingDocumentIds.includes(doc.document_id))
+        .map(
+          (doc): MediaAttachment => ({
+            id: doc.document_id,
+            url: doc.storage_url || "",
+            file_type: "document",
+            file_name: doc.filename,
+            file_size_bytes: doc.file_size_bytes,
+          }),
+        ),
+    ];
+    setPendingDocumentIds([]);
     setAttachedMedia([]);
 
     const prompt =
       textToSend ||
-      (currentMode === "IMAGE_GENERATION"
-        ? "Generate a creative variation of this image"
-        : "Analyze this image and describe what you see in detail.");
+      (mediaToSend.some((item) => item.file_type === "document")
+        ? "Review the attached documents."
+        : currentMode === "IMAGE_GENERATION"
+          ? "Generate a creative variation of this image"
+          : "Analyze this image and describe what you see in detail.");
 
     const userToUse = currentUserRef.current || currentUser;
 
@@ -991,6 +1015,7 @@ export default function App() {
       );
       if (authVersion !== authVersionRef.current) return;
       setDocuments((prev) => [...(Array.isArray(prev) ? prev : []), doc]);
+      setPendingDocumentIds((prev) => [...prev, doc.document_id]);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       // Auto-switch to Document RAG if uploaded and not in AUTO mode
       if (currentMode !== "DOCUMENT_RAG" && currentMode !== "AUTO") {
@@ -1005,9 +1030,14 @@ export default function App() {
     }
   };
 
+  const handleDetachDocument = (documentId: string) => {
+    setPendingDocumentIds((prev) => prev.filter((id) => id !== documentId));
+  };
+
   const handleDeleteDocument = async (docId: string) => {
     try {
       await apiService.deleteDocument(docId, activeSessionId || "");
+      setPendingDocumentIds((prev) => prev.filter((id) => id !== docId));
       setDocuments((prev) =>
         (Array.isArray(prev) ? prev : []).filter(
           (d) => d.document_id !== docId,
@@ -1062,6 +1092,9 @@ export default function App() {
   };
 
   const handleAttachDocumentFromModal = (doc: DocumentMetadata) => {
+    setPendingDocumentIds((prev) =>
+      prev.includes(doc.document_id) ? prev : [...prev, doc.document_id],
+    );
     setDocuments((prev) => {
       const arr = Array.isArray(prev) ? prev : [];
       if (arr.some((d) => d.document_id === doc.document_id)) {
@@ -1075,6 +1108,7 @@ export default function App() {
   };
 
   const handleAssetDeletedFromModal = (assetId: string) => {
+    setPendingDocumentIds((prev) => prev.filter((id) => id !== assetId));
     setDocuments((prev) =>
       (Array.isArray(prev) ? prev : []).filter(
         (d) => d.document_id !== assetId,
@@ -1599,8 +1633,10 @@ export default function App() {
             isSending={isSending}
             onAttachFile={handleAttachFile}
             isUploading={isUploading}
-            documents={documents}
-            onDeleteDocument={handleDeleteDocument}
+            documents={documents.filter((doc) =>
+              pendingDocumentIds.includes(doc.document_id),
+            )}
+            onDeleteDocument={handleDetachDocument}
             attachedMedia={attachedMedia}
             onDeleteMedia={handleDeleteMedia}
             currentMode={currentMode}

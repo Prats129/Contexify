@@ -761,7 +761,14 @@ export const apiService = {
       throw new Error(errorData.detail || "Upload failed");
     }
 
-    return await response.json();
+    const data: DocumentUploadResponse = await response.json();
+    return {
+      ...data,
+      document: {
+        ...data.document,
+        storage_url: formatMediaUrl(data.document.storage_url),
+      },
+    };
   },
 
   async listDocuments(sessionId: string): Promise<DocumentListResponse> {
