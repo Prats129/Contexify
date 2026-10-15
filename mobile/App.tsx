@@ -1193,562 +1193,567 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <SafeAreaView
-        style={[styles.safeArea, { backgroundColor: theme.bgApp }]}
-        edges={["top", "left", "right"]}
+      {/* Measure keyboard overlap from the screen root, including the header and safe area. */}
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        style={styles.safeArea}
       >
-        <StatusBar style={isDark ? "light" : "dark"} />
+        <SafeAreaView
+          style={[styles.safeArea, { backgroundColor: theme.bgApp }]}
+          edges={["top", "left", "right"]}
+        >
+          <StatusBar style={isDark ? "light" : "dark"} />
 
-        {/* Top Native Header */}
-        <Header
-          onOpenDrawer={handleOpenDrawer}
-          onNewChat={handleNewChat}
-          onToggleTheme={handleToggleTheme}
-          isDark={isDark}
-          theme={theme}
-          isTemporaryChat={isTempActive}
-          onToggleTemporaryChat={
-            currentUser ? handleToggleTemporaryChat : undefined
-          }
-          onOpenAttachments={
-            currentUser ? () => setAttachmentsVisible(true) : undefined
-          }
-        />
+          {/* Top Native Header */}
+          <Header
+            onOpenDrawer={handleOpenDrawer}
+            onNewChat={handleNewChat}
+            onToggleTheme={handleToggleTheme}
+            isDark={isDark}
+            theme={theme}
+            isTemporaryChat={isTempActive}
+            onToggleTemporaryChat={
+              currentUser ? handleToggleTemporaryChat : undefined
+            }
+            onOpenAttachments={
+              currentUser ? () => setAttachmentsVisible(true) : undefined
+            }
+          />
 
-        {/* Temporary Chat Notice Banner (shown only for logged-in users with temporary chat active) */}
-        {isTempActive && messages.length > 0 && (
-          <View
-            style={[
-              styles.temporaryBanner,
-              {
-                backgroundColor: isDark
-                  ? "rgba(245, 158, 11, 0.14)"
-                  : "rgba(245, 158, 11, 0.10)",
-                borderBottomColor: isDark
-                  ? "rgba(245, 158, 11, 0.3)"
-                  : "rgba(245, 158, 11, 0.2)",
-              },
-            ]}
-          >
+          {/* Temporary Chat Notice Banner (shown only for logged-in users with temporary chat active) */}
+          {isTempActive && messages.length > 0 && (
             <View
-              style={{
-                flexDirection: "row",
-                alignItems: "center",
-                flex: 1,
-                marginRight: 8,
-              }}
+              style={[
+                styles.temporaryBanner,
+                {
+                  backgroundColor: isDark
+                    ? "rgba(245, 158, 11, 0.14)"
+                    : "rgba(245, 158, 11, 0.10)",
+                  borderBottomColor: isDark
+                    ? "rgba(245, 158, 11, 0.3)"
+                    : "rgba(245, 158, 11, 0.2)",
+                },
+              ]}
             >
-              <MaterialCommunityIcons
-                name="ghost"
-                size={16}
-                color="#f59e0b"
-                style={{ marginRight: 6 }}
-              />
-              <Text
-                numberOfLines={1}
-                style={[
-                  styles.temporaryBannerText,
-                  { color: isDark ? "#fcd34d" : "#b45309", flex: 1 },
-                ]}
-              >
-                Temporary Chat • Not saved to history
-              </Text>
-            </View>
-            <TouchableOpacity
-              onPress={handleToggleTemporaryChat}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              activeOpacity={0.7}
-            >
-              <Text
+              <View
                 style={{
-                  fontSize: 12,
-                  fontWeight: "700",
-                  textDecorationLine: "underline",
-                  color: isDark ? "#fcd34d" : "#b45309",
+                  flexDirection: "row",
+                  alignItems: "center",
+                  flex: 1,
+                  marginRight: 8,
                 }}
               >
-                Turn off
-              </Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {/* Main Chat Workspace */}
-        <KeyboardAvoidingView
-          behavior={Platform.OS === "ios" ? "padding" : "height"}
-          style={styles.workspace}
-          keyboardVerticalOffset={Platform.OS === "ios" ? 54 : 0}
-        >
-          {/* Main Messages & Conversation Viewport */}
-          <View style={styles.chatViewport}>
-            {/* Welcome Screen or ChatGPT Temporary Chat Screen */}
-            {messages.length === 0 && !streamingMessage ? (
-              isTempActive ? (
-                <View
-                  style={styles.welcomeContainer}
-                  onTouchStart={() => Keyboard.dismiss()}
-                  {...welcomePanResponder.panHandlers}
+                <MaterialCommunityIcons
+                  name="ghost"
+                  size={16}
+                  color="#f59e0b"
+                  style={{ marginRight: 6 }}
+                />
+                <Text
+                  numberOfLines={1}
+                  style={[
+                    styles.temporaryBannerText,
+                    { color: isDark ? "#fcd34d" : "#b45309", flex: 1 },
+                  ]}
                 >
-                  <View
-                    style={{
-                      width: 64,
-                      height: 64,
-                      borderRadius: 32,
-                      backgroundColor: "rgba(245, 158, 11, 0.16)",
-                      borderWidth: 1.5,
-                      borderColor: "rgba(245, 158, 11, 0.35)",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      marginBottom: 16,
-                    }}
-                  >
-                    <MaterialCommunityIcons
-                      name="ghost"
-                      size={32}
-                      color="#f59e0b"
-                    />
-                  </View>
-                  <Text
-                    style={[styles.welcomeTitle, { color: theme.textMain }]}
-                  >
-                    Temporary Chat
-                  </Text>
-                  <Text
-                    style={[
-                      styles.welcomeSubtitle,
-                      { color: theme.textMuted, marginTop: 4 },
-                    ]}
-                  >
-                    Chats in this mode won&apos;t be saved in your chat history
-                    and will be permanently deleted after 3 days.
-                  </Text>
+                  Temporary Chat • Not saved to history
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={handleToggleTemporaryChat}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                activeOpacity={0.7}
+              >
+                <Text
+                  style={{
+                    fontSize: 12,
+                    fontWeight: "700",
+                    textDecorationLine: "underline",
+                    color: isDark ? "#fcd34d" : "#b45309",
+                  }}
+                >
+                  Turn off
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
 
-                  <TouchableOpacity
-                    style={{
-                      marginTop: 10,
-                      marginBottom: 16,
-                      paddingHorizontal: 18,
-                      paddingVertical: 9,
-                      borderRadius: 20,
-                      backgroundColor: theme.bgCard,
-                      borderWidth: 1,
-                      borderColor: theme.borderSubtle,
-                    }}
-                    onPress={handleToggleTemporaryChat}
-                    activeOpacity={0.8}
+          {/* Main Chat Workspace */}
+          <View style={styles.workspace}>
+            {/* Main Messages & Conversation Viewport */}
+            <View style={styles.chatViewport}>
+              {/* Welcome Screen or ChatGPT Temporary Chat Screen */}
+              {messages.length === 0 && !streamingMessage ? (
+                isTempActive ? (
+                  <View
+                    style={styles.welcomeContainer}
+                    onTouchStart={() => Keyboard.dismiss()}
+                    {...welcomePanResponder.panHandlers}
                   >
-                    <Text
+                    <View
                       style={{
-                        fontSize: 12.5,
-                        fontWeight: "600",
-                        color: theme.textMain,
+                        width: 64,
+                        height: 64,
+                        borderRadius: 32,
+                        backgroundColor: "rgba(245, 158, 11, 0.16)",
+                        borderWidth: 1.5,
+                        borderColor: "rgba(245, 158, 11, 0.35)",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        marginBottom: 16,
                       }}
                     >
-                      Turn off Temporary Chat
-                    </Text>
-                  </TouchableOpacity>
-
-                  {/* Temporary Starter Prompt Chips */}
-                  <View style={styles.starterChipsRow}>
-                    <TouchableOpacity
-                      style={[
-                        styles.starterChip,
-                        {
-                          backgroundColor: theme.bgCard,
-                          borderColor: "rgba(245, 158, 11, 0.3)",
-                        },
-                      ]}
-                      onPress={() =>
-                        handleSendMessage(
-                          "Explain how zero-trust security architecture works.",
-                        )
-                      }
-                      activeOpacity={0.8}
-                    >
-                      <Ionicons
-                        name="shield-checkmark-outline"
-                        size={14}
+                      <MaterialCommunityIcons
+                        name="ghost"
+                        size={32}
                         color="#f59e0b"
                       />
-                      <Text
-                        style={[
-                          styles.starterChipText,
-                          { color: theme.textMain },
-                        ]}
-                      >
-                        Quick Research
-                      </Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                      style={[
-                        styles.starterChip,
-                        {
-                          backgroundColor: theme.bgCard,
-                          borderColor: "rgba(245, 158, 11, 0.3)",
-                        },
-                      ]}
-                      onPress={() =>
-                        handleSendMessage(
-                          "Check this confidential snippet for potential bugs or security risks.",
-                        )
-                      }
-                      activeOpacity={0.8}
-                    >
-                      <Ionicons
-                        name="code-slash-outline"
-                        size={14}
-                        color="#f59e0b"
-                      />
-                      <Text
-                        style={[
-                          styles.starterChipText,
-                          { color: theme.textMain },
-                        ]}
-                      >
-                        Confidential Review
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              ) : (
-                <View
-                  style={styles.welcomeContainer}
-                  onTouchStart={() => Keyboard.dismiss()}
-                  {...welcomePanResponder.panHandlers}
-                >
-                  <View style={styles.welcomeBrandGroup}>
-                    <Image
-                      source={require("./assets/logo.png")}
-                      style={styles.welcomeLogo}
-                      resizeMode="contain"
-                    />
+                    </View>
                     <Text
                       style={[styles.welcomeTitle, { color: theme.textMain }]}
                     >
-                      Contexify AI
+                      Temporary Chat
                     </Text>
+                    <Text
+                      style={[
+                        styles.welcomeSubtitle,
+                        { color: theme.textMuted, marginTop: 4 },
+                      ]}
+                    >
+                      Chats in this mode won&apos;t be saved in your chat
+                      history and will be permanently deleted after 3 days.
+                    </Text>
+
+                    <TouchableOpacity
+                      style={{
+                        marginTop: 10,
+                        marginBottom: 16,
+                        paddingHorizontal: 18,
+                        paddingVertical: 9,
+                        borderRadius: 20,
+                        backgroundColor: theme.bgCard,
+                        borderWidth: 1,
+                        borderColor: theme.borderSubtle,
+                      }}
+                      onPress={handleToggleTemporaryChat}
+                      activeOpacity={0.8}
+                    >
+                      <Text
+                        style={{
+                          fontSize: 12.5,
+                          fontWeight: "600",
+                          color: theme.textMain,
+                        }}
+                      >
+                        Turn off Temporary Chat
+                      </Text>
+                    </TouchableOpacity>
+
+                    {/* Temporary Starter Prompt Chips */}
+                    <View style={styles.starterChipsRow}>
+                      <TouchableOpacity
+                        style={[
+                          styles.starterChip,
+                          {
+                            backgroundColor: theme.bgCard,
+                            borderColor: "rgba(245, 158, 11, 0.3)",
+                          },
+                        ]}
+                        onPress={() =>
+                          handleSendMessage(
+                            "Explain how zero-trust security architecture works.",
+                          )
+                        }
+                        activeOpacity={0.8}
+                      >
+                        <Ionicons
+                          name="shield-checkmark-outline"
+                          size={14}
+                          color="#f59e0b"
+                        />
+                        <Text
+                          style={[
+                            styles.starterChipText,
+                            { color: theme.textMain },
+                          ]}
+                        >
+                          Quick Research
+                        </Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={[
+                          styles.starterChip,
+                          {
+                            backgroundColor: theme.bgCard,
+                            borderColor: "rgba(245, 158, 11, 0.3)",
+                          },
+                        ]}
+                        onPress={() =>
+                          handleSendMessage(
+                            "Check this confidential snippet for potential bugs or security risks.",
+                          )
+                        }
+                        activeOpacity={0.8}
+                      >
+                        <Ionicons
+                          name="code-slash-outline"
+                          size={14}
+                          color="#f59e0b"
+                        />
+                        <Text
+                          style={[
+                            styles.starterChipText,
+                            { color: theme.textMain },
+                          ]}
+                        >
+                          Confidential Review
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
                   </View>
-                  <Text
-                    style={[styles.welcomeSubtitle, { color: theme.textMuted }]}
+                ) : (
+                  <View
+                    style={styles.welcomeContainer}
+                    onTouchStart={() => Keyboard.dismiss()}
+                    {...welcomePanResponder.panHandlers}
                   >
-                    Ask grounded questions with real-time web search or attach
-                    files for instant document RAG.
-                  </Text>
-
-                  {/* Starter Prompt Chips */}
-                  <View style={styles.starterChipsRow}>
-                    <TouchableOpacity
-                      style={[
-                        styles.starterChip,
-                        {
-                          backgroundColor: theme.bgCard,
-                          borderColor: theme.borderSubtle,
-                        },
-                      ]}
-                      onPress={() =>
-                        handleSendMessage(
-                          "Summarize key points covered in the document.",
-                        )
-                      }
-                      activeOpacity={0.8}
-                    >
-                      <Ionicons name="list" size={14} color={theme.primary} />
-                      <Text
-                        style={[
-                          styles.starterChipText,
-                          { color: theme.textMain },
-                        ]}
-                      >
-                        Summarize Document
-                      </Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                      style={[
-                        styles.starterChip,
-                        {
-                          backgroundColor: theme.bgCard,
-                          borderColor: theme.borderSubtle,
-                        },
-                      ]}
-                      onPress={() =>
-                        handleSendMessage(
-                          "Explain the main technical concepts.",
-                        )
-                      }
-                      activeOpacity={0.8}
-                    >
-                      <Ionicons
-                        name="hardware-chip-outline"
-                        size={14}
-                        color={theme.primary}
+                    <View style={styles.welcomeBrandGroup}>
+                      <Image
+                        source={require("./assets/logo.png")}
+                        style={styles.welcomeLogo}
+                        resizeMode="contain"
                       />
                       <Text
-                        style={[
-                          styles.starterChipText,
-                          { color: theme.textMain },
-                        ]}
+                        style={[styles.welcomeTitle, { color: theme.textMain }]}
                       >
-                        Key Concepts
+                        Contexify AI
                       </Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
+                    </View>
+                    <Text
                       style={[
-                        styles.starterChip,
-                        {
-                          backgroundColor: theme.bgCard,
-                          borderColor: theme.borderSubtle,
-                        },
+                        styles.welcomeSubtitle,
+                        { color: theme.textMuted },
                       ]}
-                      onPress={() =>
-                        handleSendMessage(
-                          "Search the web for the latest updates on this topic.",
-                        )
-                      }
-                      activeOpacity={0.8}
                     >
-                      <Ionicons
-                        name="globe-outline"
-                        size={14}
-                        color={theme.emerald}
-                      />
-                      <Text
+                      Ask grounded questions with real-time web search or attach
+                      files for instant document RAG.
+                    </Text>
+
+                    {/* Starter Prompt Chips */}
+                    <View style={styles.starterChipsRow}>
+                      <TouchableOpacity
                         style={[
-                          styles.starterChipText,
-                          { color: theme.textMain },
+                          styles.starterChip,
+                          {
+                            backgroundColor: theme.bgCard,
+                            borderColor: theme.borderSubtle,
+                          },
                         ]}
+                        onPress={() =>
+                          handleSendMessage(
+                            "Summarize key points covered in the document.",
+                          )
+                        }
+                        activeOpacity={0.8}
                       >
-                        Search Live Web
-                      </Text>
-                    </TouchableOpacity>
+                        <Ionicons name="list" size={14} color={theme.primary} />
+                        <Text
+                          style={[
+                            styles.starterChipText,
+                            { color: theme.textMain },
+                          ]}
+                        >
+                          Summarize Document
+                        </Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={[
+                          styles.starterChip,
+                          {
+                            backgroundColor: theme.bgCard,
+                            borderColor: theme.borderSubtle,
+                          },
+                        ]}
+                        onPress={() =>
+                          handleSendMessage(
+                            "Explain the main technical concepts.",
+                          )
+                        }
+                        activeOpacity={0.8}
+                      >
+                        <Ionicons
+                          name="hardware-chip-outline"
+                          size={14}
+                          color={theme.primary}
+                        />
+                        <Text
+                          style={[
+                            styles.starterChipText,
+                            { color: theme.textMain },
+                          ]}
+                        >
+                          Key Concepts
+                        </Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={[
+                          styles.starterChip,
+                          {
+                            backgroundColor: theme.bgCard,
+                            borderColor: theme.borderSubtle,
+                          },
+                        ]}
+                        onPress={() =>
+                          handleSendMessage(
+                            "Search the web for the latest updates on this topic.",
+                          )
+                        }
+                        activeOpacity={0.8}
+                      >
+                        <Ionicons
+                          name="globe-outline"
+                          size={14}
+                          color={theme.emerald}
+                        />
+                        <Text
+                          style={[
+                            styles.starterChipText,
+                            { color: theme.textMain },
+                          ]}
+                        >
+                          Search Live Web
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
                   </View>
-                </View>
-              )
-            ) : (
-              <FlatList
-                ref={flatListRef}
-                data={messages}
-                keyExtractor={keyExtractor}
-                contentContainerStyle={styles.messageListContent}
-                keyboardDismissMode={
-                  Platform.OS === "ios" ? "interactive" : "none"
-                }
-                keyboardShouldPersistTaps="handled"
-                onScroll={handleScroll}
-                scrollEventThrottle={16}
-                onScrollToIndexFailed={(info) => {
-                  flatListRef.current?.scrollToOffset({
-                    offset: Math.max(0, info.averageItemLength * info.index),
-                    animated: true,
-                  });
-                }}
-                onContentSizeChange={() => {
-                  if (isAtBottomRef.current) {
-                    flatListRef.current?.scrollToEnd({ animated: true });
+                )
+              ) : (
+                <FlatList
+                  ref={flatListRef}
+                  data={messages}
+                  keyExtractor={keyExtractor}
+                  contentContainerStyle={styles.messageListContent}
+                  keyboardDismissMode={
+                    Platform.OS === "ios" ? "interactive" : "none"
                   }
-                }}
-                showsVerticalScrollIndicator={false}
-                renderItem={renderMessageItem}
-                ListFooterComponent={
-                  streamingMessage ? (
-                    <MessageItem
-                      role="assistant"
-                      content={streamingMessage.content}
-                      citations={streamingMessage.citations}
-                      attachments={streamingMessage.attachments}
-                      isStreaming={true}
-                      onOpenCitations={handleOpenCitations}
-                      onUseAsReference={handleUseAsReference}
-                      isDark={isDark}
-                      theme={theme}
-                    />
-                  ) : null
-                }
-              />
-            )}
+                  keyboardShouldPersistTaps="handled"
+                  onScroll={handleScroll}
+                  scrollEventThrottle={16}
+                  onScrollToIndexFailed={(info) => {
+                    flatListRef.current?.scrollToOffset({
+                      offset: Math.max(0, info.averageItemLength * info.index),
+                      animated: true,
+                    });
+                  }}
+                  onContentSizeChange={() => {
+                    if (isAtBottomRef.current) {
+                      flatListRef.current?.scrollToEnd({ animated: true });
+                    }
+                  }}
+                  showsVerticalScrollIndicator={false}
+                  renderItem={renderMessageItem}
+                  ListFooterComponent={
+                    streamingMessage ? (
+                      <MessageItem
+                        role="assistant"
+                        content={streamingMessage.content}
+                        citations={streamingMessage.citations}
+                        attachments={streamingMessage.attachments}
+                        isStreaming={true}
+                        onOpenCitations={handleOpenCitations}
+                        onUseAsReference={handleUseAsReference}
+                        isDark={isDark}
+                        theme={theme}
+                      />
+                    ) : null
+                  }
+                />
+              )}
 
-            {/* Scroll to Bottom / Jump to Latest Message Floating Button */}
-            {messages.length > 0 && (
-              <Animated.View
-                pointerEvents={showScrollToBottom ? "auto" : "none"}
-                style={[
-                  styles.scrollToBottomBtnContainer,
-                  {
-                    opacity: scrollBtnAnim,
-                    transform: [
-                      {
-                        scale: scrollBtnAnim.interpolate({
-                          inputRange: [0, 1],
-                          outputRange: [0.65, 1],
-                        }),
-                      },
-                      {
-                        translateY: scrollBtnAnim.interpolate({
-                          inputRange: [0, 1],
-                          outputRange: [8, 0],
-                        }),
-                      },
-                    ],
-                  },
-                ]}
-              >
-                <TouchableOpacity
+              {/* Scroll to Bottom / Jump to Latest Message Floating Button */}
+              {messages.length > 0 && (
+                <Animated.View
+                  pointerEvents={showScrollToBottom ? "auto" : "none"}
                   style={[
-                    styles.scrollToBottomBtn,
+                    styles.scrollToBottomBtnContainer,
                     {
-                      backgroundColor: theme.primary,
-                      borderColor: isDark
-                        ? "rgba(255,255,255,0.18)"
-                        : "rgba(0,0,0,0.08)",
+                      opacity: scrollBtnAnim,
+                      transform: [
+                        {
+                          scale: scrollBtnAnim.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: [0.65, 1],
+                          }),
+                        },
+                        {
+                          translateY: scrollBtnAnim.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: [8, 0],
+                          }),
+                        },
+                      ],
                     },
                   ]}
-                  onPress={handleScrollToBottom}
-                  activeOpacity={0.85}
-                  accessibilityLabel="Scroll to latest message"
-                  accessibilityRole="button"
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                 >
-                  <Feather name="arrow-down" size={17} color="#ffffff" />
-                </TouchableOpacity>
-              </Animated.View>
-            )}
+                  <TouchableOpacity
+                    style={[
+                      styles.scrollToBottomBtn,
+                      {
+                        backgroundColor: theme.primary,
+                        borderColor: isDark
+                          ? "rgba(255,255,255,0.18)"
+                          : "rgba(0,0,0,0.08)",
+                      },
+                    ]}
+                    onPress={handleScrollToBottom}
+                    activeOpacity={0.85}
+                    accessibilityLabel="Scroll to latest message"
+                    accessibilityRole="button"
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Feather name="arrow-down" size={17} color="#ffffff" />
+                  </TouchableOpacity>
+                </Animated.View>
+              )}
 
-            {/* Dedicated Left-Edge Bezel Swipe Detector (Mounted on top of FlatList in z-order) */}
-            {!drawerVisible && (
-              <View
-                style={styles.edgeDrawerSwipeStrip}
-                {...edgePanResponder.panHandlers}
-              />
-            )}
+              {/* Dedicated Left-Edge Bezel Swipe Detector (Mounted on top of FlatList in z-order) */}
+              {!drawerVisible && (
+                <View
+                  style={styles.edgeDrawerSwipeStrip}
+                  {...edgePanResponder.panHandlers}
+                />
+              )}
+            </View>
+
+            {/* Bottom Chat Input Bar */}
+            <ChatInput
+              query={query}
+              onChangeQuery={setQuery}
+              onSend={() => handleSendMessage()}
+              onStop={handleStopGeneration}
+              isSending={isSending}
+              onAttachFile={handleAttachFile}
+              isUploading={isUploading}
+              documents={documents.filter((doc) =>
+                pendingDocumentIds.includes(doc.document_id),
+              )}
+              onDeleteDocument={handleDetachDocument}
+              attachedMedia={attachedMedia}
+              onDeleteMedia={handleDeleteMedia}
+              currentMode={currentMode}
+              onToggleMode={handleToggleMode}
+              isDark={isDark}
+              theme={theme}
+              replyingTo={replyingTo}
+              onCancelReply={() => setReplyingTo(null)}
+              onJumpToReply={
+                replyingTo?.id
+                  ? () => handleJumpToMessage(replyingTo.id)
+                  : undefined
+              }
+            />
           </View>
 
-          {/* Bottom Chat Input Bar */}
-          <ChatInput
-            query={query}
-            onChangeQuery={setQuery}
-            onSend={() => handleSendMessage()}
-            onStop={handleStopGeneration}
-            isSending={isSending}
-            onAttachFile={handleAttachFile}
-            isUploading={isUploading}
-            documents={documents.filter((doc) =>
-              pendingDocumentIds.includes(doc.document_id),
-            )}
-            onDeleteDocument={handleDetachDocument}
-            attachedMedia={attachedMedia}
-            onDeleteMedia={handleDeleteMedia}
-            currentMode={currentMode}
-            onToggleMode={handleToggleMode}
+          {/* Drawer Menu Modal */}
+          <DrawerMenu
+            visible={drawerVisible}
+            onClose={() => setDrawerVisible(false)}
+            currentUser={currentUser}
+            sessions={sessions}
+            totalSessions={totalSessions}
+            hasMoreSessions={hasMoreSessions}
+            isLoadingMoreSessions={isLoadingMoreSessions}
+            onLoadMoreSessions={handleLoadMoreSessions}
+            onRefreshSessions={handleRefreshSessions}
+            isRefreshingSessions={isRefreshingSessions}
+            activeSessionId={activeSessionId}
+            onSelectSession={selectSession}
+            onDeleteSession={handleDeleteSession}
+            onRenameSession={handleRenameSession}
+            sortOrder={sessionSortOrder}
+            onToggleSortOrder={handleToggleSortOrder}
+            onTogglePinSession={handleTogglePinSession}
+            onNewChat={handleNewChat}
+            documents={documents}
+            onDeleteDocument={handleDeleteDocument}
+            onOpenAttachments={
+              currentUser ? () => setAttachmentsVisible(true) : undefined
+            }
+            onOpenAuth={() => setAuthVisible(true)}
+            onOpenProfile={() => setProfileVisible(true)}
+            onOpenServerConfig={() => setServerConfigVisible(true)}
+            onLogout={handleLogout}
             isDark={isDark}
             theme={theme}
-            replyingTo={replyingTo}
-            onCancelReply={() => setReplyingTo(null)}
-            onJumpToReply={
-              replyingTo?.id
-                ? () => handleJumpToMessage(replyingTo.id)
-                : undefined
-            }
           />
-        </KeyboardAvoidingView>
 
-        {/* Drawer Menu Modal */}
-        <DrawerMenu
-          visible={drawerVisible}
-          onClose={() => setDrawerVisible(false)}
-          currentUser={currentUser}
-          sessions={sessions}
-          totalSessions={totalSessions}
-          hasMoreSessions={hasMoreSessions}
-          isLoadingMoreSessions={isLoadingMoreSessions}
-          onLoadMoreSessions={handleLoadMoreSessions}
-          onRefreshSessions={handleRefreshSessions}
-          isRefreshingSessions={isRefreshingSessions}
-          activeSessionId={activeSessionId}
-          onSelectSession={selectSession}
-          onDeleteSession={handleDeleteSession}
-          onRenameSession={handleRenameSession}
-          sortOrder={sessionSortOrder}
-          onToggleSortOrder={handleToggleSortOrder}
-          onTogglePinSession={handleTogglePinSession}
-          onNewChat={handleNewChat}
-          documents={documents}
-          onDeleteDocument={handleDeleteDocument}
-          onOpenAttachments={
-            currentUser ? () => setAttachmentsVisible(true) : undefined
-          }
-          onOpenAuth={() => setAuthVisible(true)}
-          onOpenProfile={() => setProfileVisible(true)}
-          onOpenServerConfig={() => setServerConfigVisible(true)}
-          onLogout={handleLogout}
-          isDark={isDark}
-          theme={theme}
-        />
+          {/* Citations Bottom Sheet Modal */}
+          <CitationsSheet
+            visible={citationsVisible}
+            citations={activeCitations}
+            onClose={() => setCitationsVisible(false)}
+            isDark={isDark}
+            theme={theme}
+          />
 
-        {/* Citations Bottom Sheet Modal */}
-        <CitationsSheet
-          visible={citationsVisible}
-          citations={activeCitations}
-          onClose={() => setCitationsVisible(false)}
-          isDark={isDark}
-          theme={theme}
-        />
+          {/* Auth Modal */}
+          <AuthModal
+            visible={authVisible}
+            onClose={() => setAuthVisible(false)}
+            onSuccess={handleAuthSuccess}
+            isDark={isDark}
+            theme={theme}
+          />
 
-        {/* Auth Modal */}
-        <AuthModal
-          visible={authVisible}
-          onClose={() => setAuthVisible(false)}
-          onSuccess={handleAuthSuccess}
-          isDark={isDark}
-          theme={theme}
-        />
+          {/* Profile & Settings Modal */}
+          <ProfileModal
+            visible={profileVisible}
+            onClose={() => setProfileVisible(false)}
+            currentUser={currentUser}
+            currentAccent={accentColor}
+            onSelectAccent={handleSelectAccent}
+            themeMode={themeMode}
+            onToggleThemeMode={(mode) => {
+              setThemeMode(mode);
+              AsyncStorage.setItem("contexify_theme_mode", mode);
+            }}
+            onProfileUpdated={(updated) => {
+              setCurrentUser(updated);
+              AsyncStorage.setItem(
+                "contexify_mobile_user",
+                JSON.stringify(updated),
+              );
+            }}
+            onLogout={handleLogout}
+            theme={theme}
+          />
 
-        {/* Profile & Settings Modal */}
-        <ProfileModal
-          visible={profileVisible}
-          onClose={() => setProfileVisible(false)}
-          currentUser={currentUser}
-          currentAccent={accentColor}
-          onSelectAccent={handleSelectAccent}
-          themeMode={themeMode}
-          onToggleThemeMode={(mode) => {
-            setThemeMode(mode);
-            AsyncStorage.setItem("contexify_theme_mode", mode);
-          }}
-          onProfileUpdated={(updated) => {
-            setCurrentUser(updated);
-            AsyncStorage.setItem(
-              "contexify_mobile_user",
-              JSON.stringify(updated),
-            );
-          }}
-          onLogout={handleLogout}
-          theme={theme}
-        />
+          {/* Server Config Modal */}
+          <ServerConfigModal
+            visible={serverConfigVisible}
+            onClose={() => setServerConfigVisible(false)}
+            isDark={isDark}
+            theme={theme}
+          />
 
-        {/* Server Config Modal */}
-        <ServerConfigModal
-          visible={serverConfigVisible}
-          onClose={() => setServerConfigVisible(false)}
-          isDark={isDark}
-          theme={theme}
-        />
-
-        {/* Attachments & Media Library Modal */}
-        <AttachmentsModal
-          visible={attachmentsVisible}
-          onClose={() => setAttachmentsVisible(false)}
-          currentUser={currentUser}
-          activeSessionId={activeSessionId}
-          activeSessionTitle={activeSessionTitle}
-          onAttachMedia={handleAttachMediaFromModal}
-          onAttachDocument={handleAttachDocumentFromModal}
-          onAssetDeleted={handleAssetDeletedFromModal}
-          isDark={isDark}
-          theme={theme}
-        />
-      </SafeAreaView>
+          {/* Attachments & Media Library Modal */}
+          <AttachmentsModal
+            visible={attachmentsVisible}
+            onClose={() => setAttachmentsVisible(false)}
+            currentUser={currentUser}
+            activeSessionId={activeSessionId}
+            activeSessionTitle={activeSessionTitle}
+            onAttachMedia={handleAttachMediaFromModal}
+            onAttachDocument={handleAttachDocumentFromModal}
+            onAssetDeleted={handleAssetDeletedFromModal}
+            isDark={isDark}
+            theme={theme}
+          />
+        </SafeAreaView>
+      </KeyboardAvoidingView>
     </SafeAreaProvider>
   );
 }
