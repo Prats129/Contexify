@@ -1,4 +1,3 @@
-import mimetypes
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -8,10 +7,13 @@ from app.core.config import settings
 from app.core.logging import logger
 from app.db.database import get_db_connection
 from app.schemas.chat import MediaAttachment
+from app.services.image_validation import (
+    ALLOWED_IMAGE_EXTENSIONS,
+    MAX_FILE_SIZE_BYTES,
+    validate_image,
+)
 from app.services.storage_service import storage_service
 
-ALLOWED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".svg"}
-MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024  # 25 MB
 
 class MediaService:
     """Service for managing uploaded media files and AI generated images."""
@@ -34,16 +36,12 @@ class MediaService:
         mime_type: Optional[str] = None
     ) -> MediaAttachment:
         """Save an uploaded media file to Cloudflare R2 (or local disk) and register in DB."""
-        ext = Path(original_filename).suffix.lower()
-        if not ext:
-            ext = ".png"
+        ext, final_mime = validate_image(file_bytes, original_filename)
         
         asset_id = str(uuid.uuid4())
         safe_name = f"{asset_id}{ext}"
         storage_dest_key = f"media/uploads/{safe_name}"
 
-        detected_mime, _ = mimetypes.guess_type(original_filename)
-        final_mime = mime_type or detected_mime or "image/png"
         file_size = len(file_bytes)
         now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
 
@@ -99,12 +97,12 @@ class MediaService:
         ext: str = ".png"
     ) -> MediaAttachment:
         """Save an AI-generated image to Cloudflare R2 (or local disk) and register in DB."""
+        ext, mime_type = validate_image(image_bytes)
         asset_id = str(uuid.uuid4())
         safe_name = f"gen_{asset_id}{ext}"
         storage_dest_key = f"media/generated/{safe_name}"
 
         file_size = len(image_bytes)
-        mime_type = "image/png" if ext.lower() == ".png" else "image/jpeg"
         now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
 
         # Upload to Storage (Cloudflare R2 or local fallback)

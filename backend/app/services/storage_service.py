@@ -118,7 +118,9 @@ class StorageService:
         if not local_target.is_relative_to(data_root):
             raise ValueError("Storage key escapes the data directory.")
         
-        if not content_type:
+        if clean_key.startswith("documents/"):
+            content_type = "application/octet-stream"
+        elif not content_type:
             guessed, _ = mimetypes.guess_type(clean_key)
             content_type = guessed or "application/octet-stream"
 
@@ -129,7 +131,8 @@ class StorageService:
                     Bucket=settings.CLOUDFLARE_R2_BUCKET_NAME,
                     Key=clean_key,
                     Body=file_bytes,
-                    ContentType=content_type
+                    ContentType=content_type,
+                    **({"ContentDisposition": "attachment"} if clean_key.startswith("documents/") else {})
                 )
                 public_url = self.get_public_url(clean_key)
                 logger.info(f"Uploaded {len(file_bytes)} bytes to Cloudflare R2: {clean_key} -> {public_url}")

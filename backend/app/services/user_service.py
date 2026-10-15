@@ -25,6 +25,7 @@ from app.schemas.user import (
 )
 from app.services.email_service import email_service
 from app.services.google_auth import verify_google_credential
+from app.services.image_validation import validate_image
 from app.services.storage_service import storage_service
 
 AVATAR_COLORS = [
@@ -265,6 +266,8 @@ class UserService:
                 detail=f"Invalid image format '{ext}'. Allowed formats: PNG, JPG, JPEG, WEBP, GIF."
             )
 
+        _, content_type = validate_image(file_bytes, filename, max_bytes=MAX_AVATAR_SIZE_BYTES)
+
         # 3. Save locally
         avatars_dir = settings.DATA_DIR / "avatars"
         avatars_dir.mkdir(parents=True, exist_ok=True)
@@ -288,15 +291,6 @@ class UserService:
                         storage_service.delete_file(f"avatars/{user_id}{old_ext}")
                     except Exception:
                         logger.warning("Could not remove previous cloud avatar", exc_info=True)
-
-        media_map = {
-            ".png": "image/png",
-            ".jpg": "image/jpeg",
-            ".jpeg": "image/jpeg",
-            ".webp": "image/webp",
-            ".gif": "image/gif"
-        }
-        content_type = media_map.get(ext, "image/jpeg")
 
         public_url, _ = storage_service.upload_file(
             file_bytes=file_bytes,

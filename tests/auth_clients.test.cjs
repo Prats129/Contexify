@@ -6,6 +6,31 @@ const path = require("node:path");
 const vm = require("node:vm");
 const ts = require("../frontend/node_modules/typescript");
 
+for (const platform of ["frontend", "mobile"]) {
+  test(`${platform}: image upload errors preserve readable server messages`, async () => {
+    for (const [status, message] of [
+      [400, "Invalid or corrupted image file. Upload a valid raster image."],
+      [413, "Image dimensions exceed the allowed pixel limit."],
+      [503, "Image processing is busy. Please retry shortly."],
+    ]) {
+      const fixture = client(platform, (url) => url.endsWith("/media/upload")
+        ? response({ detail: message }, status) : response(credentials("signed-token")));
+      await fixture.api.login("fixture", "password");
+      if (platform === "frontend") {
+        await assert.rejects(fixture.api.uploadMedia({}, "fixture-session"), (error) => error.message === message);
+      } else {
+        const pending = fixture.api.uploadMedia("fixture-session", "file:///fixture.png", "fixture.png", "image/png");
+        const rejected = assert.rejects(pending, (error) => error.message === message);
+        await until(() => fixture.uploads[0]?.sent);
+        fixture.uploads[0].status = status;
+        fixture.uploads[0].responseText = JSON.stringify({ detail: message });
+        fixture.uploads[0].onload();
+        await rejected;
+      }
+    }
+  });
+}
+
 function client(platform, handleRequest, environment = {}) {
   const storage = new Map();
   const requests = [];

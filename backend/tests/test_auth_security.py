@@ -88,6 +88,18 @@ from app.services.user_service import hash_password, user_service
 
 
 class SecurityTests(unittest.TestCase):
+    def image_fixture(self, image_format="PNG", animated=False):
+        from PIL import Image
+
+        image = Image.new("RGB", (8, 8), "red")
+        output = io.BytesIO()
+        if animated:
+            image.save(output, format=image_format, save_all=True,
+                       append_images=[Image.new("RGB", (8, 8), "blue")], duration=50, loop=0)
+        else:
+            image.save(output, format=image_format)
+        return output.getvalue()
+
     def pdf_fixture(self, *texts, encrypted=False):
         from pypdf import PdfWriter
         from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
@@ -333,22 +345,172 @@ class SecurityTests(unittest.TestCase):
         }).status_code, 200)
 
     def test_owned_image_avatar_uploads_and_protected_downloads(self):
+        image = self.image_fixture()
         response = self.request("POST", "/media/upload", self.token,
                                 data={"session_id": "alice-session"},
-                                files={"file": ("../../fixture.png", b"uploaded image", "image/png")})
+                                files={"file": ("../../fixture.png", image, "image/png")})
         self.assertEqual(response.status_code, 201)
         attachment = response.json()
         url = attachment["url"].removeprefix("/api/v1")
-        self.assertEqual(self.request("GET", url).content, b"uploaded image")
+        self.assertEqual(self.request("GET", url).content, image)
         self.assertEqual(self.request("GET", "/media/content/media/" + attachment["id"], self.other_token).status_code, 404)
         avatar = self.request("POST", "/user/avatar", self.token, data={"user_id": self.alice.id},
-                              files={"file": ("fixture.png", b"uploaded avatar", "image/png")})
+                              files={"file": ("fixture.png", image, "image/png")})
         self.assertEqual(avatar.status_code, 200)
         avatar_url = avatar.json()["avatar_url"].removeprefix("/api/v1")
-        self.assertEqual(self.request("GET", avatar_url).content, b"uploaded avatar")
+        self.assertEqual(self.request("GET", avatar_url).content, image)
         self.assertEqual(self.request("GET", "/media/content/avatar/" + self.alice.id, self.other_token).status_code, 403)
         self.assertEqual(self.request("DELETE", "/user/avatar?user_id=" + self.alice.id, self.token).status_code, 200)
         self.assertEqual(self.request("GET", avatar_url).status_code, 404)
+
+    def test_raster_uploads_use_verified_mime_types_and_safe_download_headers(self):
+        for image_format, extension, mime in (("PNG", "png", "image/png"), ("JPEG", "jpg", "image/jpeg"),
+                                              ("WEBP", "webp", "image/webp"), ("GIF", "gif", "image/gif"),
+                                              ("BMP", "bmp", "image/bmp")):
+            with self.subTest(format=image_format):
+                image = self.image_fixture(image_format)
+                response = self.request("POST", "/media/upload", self.token, data={"session_id": "alice-session"},
+                                        files={"file": (f"fixture.{extension}", image, "text/html")})
+                self.assertEqual(response.status_code, 201)
+                asset = response.json()
+                self.assertEqual(asset["mime_type"], mime)
+                downloaded = self.request("GET", asset["url"].removeprefix("/api/v1"))
+                self.assertEqual(downloaded.content, image)
+                self.assertEqual(downloaded.headers["content-type"], mime)
+                self.assertEqual(downloaded.headers["x-content-type-options"], "nosniff")
+                self.assertEqual(downloaded.headers["content-security-policy"], "sandbox")
+                self.assertNotIn("content-disposition", downloaded.headers)
+
+    def test_invalid_images_are_rejected_before_storage_and_registration(self):
+        from app.services.storage_service import storage_service
+
+        svg = b'<svg xmlns="http://www.w3.org/2000/svg"><script>window.fixture=true</script></svg>'
+        invalid = [("fixture.svg", svg), ("renamed.png", svg), ("html.jpg", b"<html>fixture</html>"),
+                   ("corrupt.png", self.image_fixture()[:25]), ("mismatch.jpg", self.image_fixture()),
+                   ("empty.png", b"")]
+        with database.get_db_connection() as conn:
+            before = conn.execute("SELECT COUNT(*) FROM media_assets").fetchone()[0]
+        with patch.object(storage_service, "upload_file") as upload:
+            for filename, data in invalid:
+                with self.subTest(filename=filename):
+                    response = self.request("POST", "/media/upload", self.token, data={"session_id": "alice-session"},
+                                            files={"file": (filename, data, "image/png")})
+                    self.assertEqual(response.status_code, 400)
+                    self.assertIsInstance(response.json()["detail"], str)
+            upload.assert_not_called()
+        with database.get_db_connection() as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM media_assets").fetchone()[0], before)
+
+    def test_image_pixel_animation_size_and_concurrency_limits(self):
+        import struct
+        import threading
+
+        from app.services import image_validation
+
+        image = self.image_fixture()
+        bomb_header = bytearray(self.image_fixture("BMP"))
+        struct.pack_into("<ii", bomb_header, 18, 10_000, 3_000)
+        with self.assertRaises(security.HTTPException) as raised:
+            image_validation.validate_image(bytes(bomb_header), "fixture.bmp")
+        self.assertEqual(raised.exception.status_code, 413)
+        with patch.object(image_validation, "MAX_IMAGE_PIXELS", 1), self.assertRaises(security.HTTPException) as raised:
+            image_validation.validate_image(image, "fixture.png")
+        self.assertEqual(raised.exception.status_code, 413)
+        with self.assertRaises(security.HTTPException) as raised:
+            image_validation.validate_image(image, "fixture.png", max_bytes=3)
+        self.assertEqual(raised.exception.status_code, 413)
+        animated = self.image_fixture("GIF", animated=True)
+        for field, limit in (("MAX_IMAGE_FRAMES", 1), ("MAX_TOTAL_IMAGE_PIXELS", 65)):
+            with patch.object(image_validation, field, limit), self.assertRaises(security.HTTPException) as raised:
+                image_validation.validate_image(animated, "fixture.gif")
+            self.assertEqual(raised.exception.status_code, 413)
+        slots = threading.BoundedSemaphore(1)
+        slots.acquire()
+        with patch.object(image_validation, "_validation_slots", slots), self.assertRaises(security.HTTPException) as raised:
+            image_validation.validate_image(image, "fixture.png")
+        self.assertEqual(raised.exception.status_code, 503)
+        slots.release()
+        self.assertEqual(image_validation.validate_image(image, "fixture.png")[1], "image/png")
+
+    def test_valid_animated_images_keep_their_frames(self):
+        from PIL import Image
+
+        image = self.image_fixture("GIF", animated=True)
+        response = self.request("POST", "/media/upload", self.token, data={"session_id": "alice-session"},
+                                files={"file": ("animated.gif", image, "image/gif")})
+        self.assertEqual(response.status_code, 201)
+        downloaded = self.request("GET", response.json()["url"].removeprefix("/api/v1"))
+        with Image.open(io.BytesIO(downloaded.content)) as decoded:
+            self.assertEqual(getattr(decoded, "n_frames", 1), 2)
+
+    def test_invalid_avatar_preserves_previous_image_and_legacy_routes_are_safe(self):
+        from app.services.storage_service import storage_service
+
+        image = self.image_fixture()
+        response = self.request("POST", "/user/avatar", self.token, data={"user_id": self.alice.id},
+                                files={"file": ("fixture.png", image, "image/png")})
+        self.assertEqual(response.status_code, 200)
+        with patch.object(storage_service, "upload_file") as upload:
+            invalid = self.request("POST", "/user/avatar", self.token, data={"user_id": self.alice.id},
+                                   files={"file": ("fake.png", b"<svg>fixture</svg>", "image/png")})
+            self.assertEqual(invalid.status_code, 400)
+            upload.assert_not_called()
+        self.assertEqual(self.request("GET", "/user/avatar/" + self.alice.id, self.token).content, image)
+        # Simulate an old SVG/HTML upload mislabeled as PNG, without executing it.
+        (root / "avatars" / f"{self.alice.id}.png").write_bytes(b"<svg>legacy fixture</svg>")
+        for url in ("/user/avatar/" + self.alice.id, "/media/content/avatar/" + self.alice.id):
+            downloaded = self.request("GET", url, self.token)
+            self.assertEqual(downloaded.headers["content-type"], "application/octet-stream")
+            self.assertEqual(downloaded.headers["content-disposition"], "attachment")
+            self.assertEqual(downloaded.headers["x-content-type-options"], "nosniff")
+            self.assertEqual(downloaded.headers["content-security-policy"], "sandbox")
+
+    def test_legacy_active_media_is_download_only_even_with_forged_png_mime(self):
+        from app.services.storage_service import storage_service
+
+        active = b"<svg>legacy fixture</svg>"
+        (settings.UPLOAD_IMAGE_DIR / "fixture.png").write_bytes(active)
+        response = self.request("GET", "/media/content/media/image", self.token)
+        self.assertEqual(response.content, active)
+        self.assertEqual(response.headers["content-disposition"], "attachment")
+        self.assertEqual(response.headers["content-type"], "application/octet-stream")
+        with database.get_db_connection() as conn:
+            conn.execute("UPDATE media_assets SET file_path='media/uploads/cloud-active.png' WHERE id='image'")
+        client = Mock()
+        client.get_object.return_value = {"Body": io.BytesIO(active)}
+        with patch.object(storage_service, "_s3_client", client), patch.object(storage_service, "_initialized", True):
+            response = self.request("GET", "/media/content/media/image", self.token)
+        self.assertEqual(response.headers["content-disposition"], "attachment")
+        self.assertEqual(response.headers["content-type"], "application/octet-stream")
+
+    def test_cloud_and_generated_images_use_detected_content_type(self):
+        from app.services.media_service import media_service
+        from app.services.storage_service import storage_service
+
+        image = self.image_fixture()
+        client = Mock()
+        with patch.object(storage_service, "_s3_client", client), patch.object(storage_service, "_initialized", True):
+            response = self.request("POST", "/media/upload", self.token, data={"session_id": "alice-session"},
+                                    files={"file": ("fixture.png", image, "text/html")})
+            self.assertEqual(response.status_code, 201)
+            self.assertEqual(client.put_object.call_args.kwargs["ContentType"], "image/png")
+            generated = media_service.save_generated_image(image, "fixture", "alice-session", self.alice.id, ext=".jpg")
+            self.assertEqual(generated.mime_type, "image/png")
+            self.assertTrue((generated.file_name or "").endswith(".png"))
+            self.assertEqual(client.put_object.call_args.kwargs["ContentType"], "image/png")
+            client.put_object.reset_mock()
+            with self.assertRaises(security.HTTPException):
+                media_service.save_generated_image(b"<svg>invalid fixture</svg>", "fixture", "alice-session", self.alice.id)
+            client.put_object.assert_not_called()
+
+    def test_cloud_documents_cannot_spoof_active_image_content_types(self):
+        from app.services.storage_service import storage_service
+
+        client = Mock()
+        with patch.object(storage_service, "_s3_client", client), patch.object(storage_service, "_initialized", True):
+            storage_service.upload_file(b"<svg>fixture</svg>", "documents/alice-session/fixture.txt", "image/svg+xml")
+        self.assertEqual(client.put_object.call_args.kwargs["ContentType"], "application/octet-stream")
+        self.assertEqual(client.put_object.call_args.kwargs["ContentDisposition"], "attachment")
 
     def test_document_upload_sanitizes_paths_and_removes_temporary_files(self):
         from app.repositories.session_store import session_store_repo

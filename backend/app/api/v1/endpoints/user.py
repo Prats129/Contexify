@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi import (
     APIRouter,
     Depends,
@@ -8,7 +10,6 @@ from fastapi import (
     UploadFile,
     status,
 )
-from fastapi.responses import FileResponse
 
 from app.core.security import (
     Principal,
@@ -36,7 +37,9 @@ from app.schemas.user import (
     UserResponse,
     VerifyOtpLoginRequest,
 )
-from app.services.user_service import user_service
+from app.services.image_validation import image_response
+from app.services.storage_service import storage_service
+from app.services.user_service import MAX_AVATAR_SIZE_BYTES, user_service
 
 router = APIRouter()
 
@@ -165,12 +168,13 @@ async def upload_avatar(
         }
         filename = f"{filename}{ext_map.get(file.content_type, '.jpg')}"
 
-    file_bytes = await file.read()
-    return present_user(user_service.save_user_avatar(
+    file_bytes = await file.read(MAX_AVATAR_SIZE_BYTES + 1)
+    user = await asyncio.to_thread(user_service.save_user_avatar,
         user_id=user_id,
         file_bytes=file_bytes,
         filename=filename
-    ), principal)
+    )
+    return present_user(user, principal)
 
 @router.get("/avatar/{user_id}")
 async def get_avatar(user_id: str, principal: Principal = Depends(require_user)):
@@ -178,28 +182,17 @@ async def get_avatar(user_id: str, principal: Principal = Depends(require_user))
     Serve the user's custom avatar image file with explicit image Content-Type header.
     """
     check_user_claim(user_id, principal)
-    path = user_service.get_user_avatar_path(user_id)
+    path = await asyncio.to_thread(user_service.get_user_avatar_path, user_id)
     if not path or not path.exists():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Avatar image not found for this user."
         )
 
-    ext = path.suffix.lower()
-    media_map = {
-        ".png": "image/png",
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".webp": "image/webp",
-        ".gif": "image/gif"
-    }
-    media_type = media_map.get(ext, "image/jpeg")
-
-    return FileResponse(
-        path=path,
-        media_type=media_type,
-        headers={"Cache-Control": "no-cache, must-revalidate"}
-    )
+    data = await asyncio.to_thread(storage_service.download_owned_file, f"avatars/{path.name}", max_bytes=MAX_AVATAR_SIZE_BYTES)
+    if data is None:
+        raise HTTPException(404, "Avatar image not found for this user.")
+    return await asyncio.to_thread(image_response, data)
 
 @router.delete("/avatar", response_model=UserResponse)
 async def delete_avatar(user_id: str = Query(...), principal: Principal = Depends(require_user)):

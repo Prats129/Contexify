@@ -12,7 +12,7 @@ from fastapi import (
     UploadFile,
     status,
 )
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import Response
 from fastapi.security import HTTPAuthorizationCredentials
 
 from app.core.logging import logger
@@ -31,13 +31,14 @@ from app.core.security import (
 from app.db.database import get_db_connection
 from app.schemas.chat import MediaAttachment
 from app.schemas.media import AssetDeleteResponse, AssetItem, PaginatedAssetsResponse
+from app.services.image_validation import image_response
 from app.services.media_service import (
     ALLOWED_IMAGE_EXTENSIONS,
     MAX_FILE_SIZE_BYTES,
     media_service,
 )
 from app.services.storage_service import storage_service
-from app.services.user_service import user_service
+from app.services.user_service import MAX_AVATAR_SIZE_BYTES, user_service
 
 router = APIRouter()
 
@@ -53,17 +54,20 @@ async def download_asset(asset_id: str, kind: str, ticket: Optional[str] = None,
         path = await asyncio.to_thread(user_service.get_user_avatar_path, asset_id)
         if not path:
             raise HTTPException(404, "Avatar not found.")
-        return FileResponse(path, headers=headers)
+        data = await asyncio.to_thread(storage_service.download_owned_file, f"avatars/{path.name}", max_bytes=MAX_AVATAR_SIZE_BYTES)
+        if data is None:
+            raise HTTPException(404, "Avatar not found.")
+        return await asyncio.to_thread(image_response, data)
     row = check_asset(asset_id, principal, kind)
     key = storage_service.owned_storage_key(row, kind)
-    data = await asyncio.to_thread(storage_service.download_owned_file, key)
+    data = await asyncio.to_thread(storage_service.download_owned_file, key,
+                                  max_bytes=MAX_FILE_SIZE_BYTES if kind != "document" else None)
     if data is None:
         raise HTTPException(404, "Asset not found.")
-    media_type = row.get("mime_type") or "application/octet-stream"
-    if kind == "document" or media_type not in {"image/png", "image/jpeg", "image/webp", "image/gif", "image/bmp"}:
-        headers["Content-Disposition"] = "attachment"
-        media_type = "application/octet-stream"
-    return Response(data, media_type=media_type, headers=headers)
+    if kind != "document":
+        return await asyncio.to_thread(image_response, data)
+    headers["Content-Disposition"] = "attachment"
+    return Response(data, media_type="application/octet-stream", headers=headers)
 
 
 @router.post("/upload", response_model=MediaAttachment, status_code=status.HTTP_201_CREATED)
@@ -90,14 +94,14 @@ async def upload_media(
         )
 
     try:
-        content = await file.read()
+        content = await file.read(MAX_FILE_SIZE_BYTES + 1)
         if len(content) > MAX_FILE_SIZE_BYTES:
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                 detail=f"File exceeds maximum allowed size of {MAX_FILE_SIZE_BYTES // (1024 * 1024)}MB"
             )
 
-        attachment = media_service.save_uploaded_media(
+        attachment = await asyncio.to_thread(media_service.save_uploaded_media,
             file_bytes=content,
             original_filename=filename,
             session_id=session_id,
