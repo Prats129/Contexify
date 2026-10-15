@@ -40,6 +40,9 @@ settings = types.SimpleNamespace(
     OTP_RESEND_COOLDOWN_SECONDS=30, OTP_MAX_SENDS_PER_HOUR=5, is_cloudflare_r2_configured=False,
     CLOUDFLARE_R2_PUBLIC_URL="", CLOUDFLARE_R2_BUCKET_NAME="fixture", r2_endpoint_url="",
     API_V1_STR="/api/v1", PROJECT_NAME="Offline auth tests", CORS_ORIGINS=[], WORKSPACE_DIR=root,
+    PDF_MAX_FILE_SIZE_BYTES=25 * 1024 * 1024, PDF_MAX_PAGES=1000, PDF_MAX_TEXT_CHARS=2_000_000,
+    PDF_PARSE_TIMEOUT_SECONDS=30, PDF_PARSE_MEMORY_MB=256, PDF_MAX_CONCURRENT_PARSERS=2,
+    CHROMA_PERSIST_DIR=root / "chroma_db", GEMINI_API_KEY="",
 )
 for directory in (settings.UPLOAD_DIR, settings.MEDIA_DIR, settings.UPLOAD_IMAGE_DIR, settings.GENERATED_IMAGE_DIR):
     directory.mkdir(parents=True, exist_ok=True)
@@ -85,6 +88,26 @@ from app.services.user_service import hash_password, user_service
 
 
 class SecurityTests(unittest.TestCase):
+    def pdf_fixture(self, *texts, encrypted=False):
+        from pypdf import PdfWriter
+        from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
+
+        writer = PdfWriter()
+        for text in texts:
+            page = writer.add_blank_page(width=612, height=792)
+            font = DictionaryObject({NameObject("/Type"): NameObject("/Font"),
+                                     NameObject("/Subtype"): NameObject("/Type1"),
+                                     NameObject("/BaseFont"): NameObject("/Helvetica")})
+            page[NameObject("/Resources")] = DictionaryObject({NameObject("/Font"): DictionaryObject({NameObject("/F1"): font})})
+            stream = DecodedStreamObject()
+            stream.set_data(f"BT /F1 12 Tf 72 720 Td ({text}) Tj ET".encode("ascii"))
+            page[NameObject("/Contents")] = stream
+        if encrypted:
+            writer.encrypt("fixture-password")
+        output = io.BytesIO()
+        writer.write(output)
+        return output.getvalue()
+
     def setUp(self):
         from app.repositories.session_store import session_store_repo
         session_store_repo._sessions.clear()
@@ -456,6 +479,157 @@ class SecurityTests(unittest.TestCase):
         self.assertEqual(response.status_code, 500)
         self.assertTrue(paths)
         self.assertTrue(all(not path.exists() for path in paths))
+
+    def test_pdf_worker_preserves_page_numbers_and_chunk_citations(self):
+        from app.services.pdf_service import extract_pdf_pages
+
+        path = root / "extraction-fixture.pdf"
+        path.write_bytes(self.pdf_fixture("First page fixture text for indexing.", "", "Third page fixture text for indexing."))
+        pages = extract_pdf_pages(path)
+        self.assertEqual([number for _, number in pages], [1, 3])
+        self.assertIn("Third page fixture", pages[1][0])
+        embedding = types.ModuleType("app.services.embedding_service")
+        embedder = Mock()
+        embedder.embed_batch.side_effect = lambda texts: [[1.0] for _ in texts]
+        setattr(embedding, "embedding_service", embedder)
+        with patch.dict(sys.modules, {embedding.__name__: embedding}), patch.multiple(
+            settings, CHUNK_SIZE=800, CHUNK_OVERLAP=150, TOP_K_RETRIEVAL=4, SIMILARITY_THRESHOLD=0.2, create=True
+        ):
+            actual = runpy.run_path(str(Path(__file__).resolve().parents[1] / "app/services/rag_service.py"))["rag_service"]
+        with patch.object(actual, "extract_text_from_file", side_effect=AssertionError("Do not parse twice")):
+            metadata = actual.process_and_index_document(path, "fixture.pdf", "alice-session", self.alice.id, extracted_pages=pages)
+        self.assertEqual(metadata.total_chunks, 2)
+        self.assertEqual([item["page_number"] for item in vectors.add_chunks.call_args.kwargs["metadatas"]], [1, 3])
+        from app.api.v1.endpoints import document
+
+        with patch.object(document, "rag_service", actual):
+            response = self.request("POST", "/document/upload", self.token, data={"session_id": "alice-session"},
+                                    files={"file": ("fixture.pdf", path.read_bytes(), "application/pdf")})
+        self.assertEqual(response.status_code, 201)
+        uploaded = response.json()["document"]
+        self.assertEqual(uploaded["total_chunks"], 2)
+        self.assertEqual(self.request("GET", uploaded["storage_url"].removeprefix("/api/v1")).content, path.read_bytes())
+
+    def test_pdf_parsing_does_not_block_health_requests(self):
+        import threading
+
+        from app.api.v1.endpoints import document
+        from app.services.pdf_service import PDFProcessingError
+
+        started = threading.Event()
+        release = threading.Event()
+
+        def wait_for_release(path):
+            started.set()
+            release.wait(timeout=3)
+            raise PDFProcessingError("fixture rejection")
+
+        async def exercise():
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://fixture.invalid") as client:
+                upload = asyncio.create_task(client.post("/api/v1/document/upload",
+                    headers={"Authorization": "Bearer " + self.token}, data={"session_id": "alice-session"},
+                    files={"file": ("fixture.pdf", b"fixture", "application/pdf")}))
+                try:
+                    for _ in range(100):
+                        if started.is_set():
+                            break
+                        await asyncio.sleep(0.01)
+                    self.assertTrue(started.is_set())
+                    self.assertFalse(upload.done())
+                    health = await asyncio.wait_for(client.get("/api/v1/health"), timeout=1)
+                    self.assertEqual(health.status_code, 200)
+                    self.assertFalse(upload.done())
+                finally:
+                    release.set()
+                    response = await upload
+                self.assertEqual(response.status_code, 422)
+
+        with patch.object(document.rag_service, "extract_text_from_file", side_effect=wait_for_release):
+            asyncio.run(exercise())
+
+    def test_pdf_worker_rejects_page_text_size_and_encryption_limits(self):
+        from app.services.pdf_service import PDFProcessingError, extract_pdf_pages
+
+        path = root / "limits-fixture.pdf"
+        path.write_bytes(self.pdf_fixture("First fixture page", "Second fixture page"))
+        for field, value in (("PDF_MAX_PAGES", 1), ("PDF_MAX_TEXT_CHARS", 3), ("PDF_MAX_FILE_SIZE_BYTES", 3)):
+            with self.subTest(limit=field), patch.object(settings, field, value), self.assertRaises(PDFProcessingError) as raised:
+                extract_pdf_pages(path)
+            self.assertEqual(raised.exception.status_code, 413)
+        path.write_bytes(self.pdf_fixture("Encrypted fixture", encrypted=True))
+        with self.assertRaises(PDFProcessingError) as raised:
+            extract_pdf_pages(path)
+        self.assertEqual(raised.exception.status_code, 422)
+
+    def test_pdf_timeout_kills_and_reaps_worker_and_releases_slot(self):
+        import threading
+
+        from app.services import pdf_service
+
+        script = root / "slow-pdf-fixture.py"
+        script.write_text("import time; time.sleep(10)", encoding="utf-8")
+        path = root / "timeout-fixture.pdf"
+        path.write_bytes(b"fixture")
+        slots = threading.BoundedSemaphore(1)
+        with patch.object(pdf_service, "_worker", script), patch.object(pdf_service, "_slots", slots), patch.object(
+            settings, "PDF_PARSE_TIMEOUT_SECONDS", 0.1
+        ), self.assertRaises(pdf_service.PDFProcessingError) as raised:
+            pdf_service.extract_pdf_pages(path)
+        self.assertIn("timed out", str(raised.exception))
+        self.assertTrue(slots.acquire(blocking=False))
+        slots.release()
+
+    def test_pdf_concurrency_limit_rejects_without_starting_another_worker(self):
+        import threading
+
+        from app.services import pdf_service
+
+        path = root / "busy-fixture.pdf"
+        path.write_bytes(b"fixture")
+        slots = threading.BoundedSemaphore(1)
+        slots.acquire()
+        with patch.object(pdf_service, "_slots", slots), patch.object(pdf_service.subprocess, "Popen") as spawn:
+            with self.assertRaises(pdf_service.PDFProcessingError) as raised:
+                pdf_service.extract_pdf_pages(path)
+            self.assertEqual(raised.exception.status_code, 503)
+            spawn.assert_not_called()
+        slots.release()
+
+    def test_pdf_upload_limits_reject_before_storage_or_index_and_cleanup(self):
+        from app.api.v1.endpoints import document
+        from app.services.pdf_service import extract_pdf_pages
+        from app.services.storage_service import storage_service
+
+        before = set(settings.UPLOAD_DIR.iterdir())
+        with patch.object(document.rag_service, "extract_text_from_file", side_effect=extract_pdf_pages), patch.object(
+            document.rag_service, "process_and_index_document"
+        ) as index, patch.object(storage_service, "upload_file") as upload:
+            response = self.request("POST", "/document/upload", self.token, data={"session_id": "alice-session"},
+                                    files={"file": ("malformed.pdf", b"invalid fixture", "application/pdf")})
+            self.assertEqual(response.status_code, 422)
+            with patch.object(settings, "PDF_MAX_FILE_SIZE_BYTES", 3):
+                response = self.request("POST", "/document/upload", self.token, data={"session_id": "alice-session"},
+                                        files={"file": ("large.pdf", b"oversized fixture", "application/pdf")})
+            self.assertEqual(response.status_code, 413)
+            index.assert_not_called()
+            upload.assert_not_called()
+        self.assertEqual(set(settings.UPLOAD_DIR.iterdir()), before)
+
+    def test_pdf_resource_limit_blocks_large_allocation_in_child(self):
+        import subprocess
+
+        from app.services import pdf_service
+
+        # Exercise the OS memory limit using an allocation, not a hostile PDF.
+        code = (
+            "import runpy; "
+            f"worker=runpy.run_path({str(pdf_service._worker)!r}); "
+            "job=worker['apply_resource_limits'](64, 10)\n"
+            "try:\n data=bytearray(128*1024*1024)\nexcept MemoryError:\n print('bounded')\n"
+        )
+        result = subprocess.run([sys.executable, "-I", "-B", "-c", code], capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.strip(), "bounded")
 
     def test_partial_temporary_write_failure_cleans_up_without_indexing(self):
         from app.api.v1.endpoints import document

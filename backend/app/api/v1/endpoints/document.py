@@ -1,6 +1,8 @@
+import asyncio
 import os
 import tempfile
 import uuid
+from functools import partial
 from pathlib import Path
 from typing import Optional
 
@@ -27,6 +29,7 @@ from app.schemas.document import (
     DocumentUploadResponse,
 )
 from app.services.chat_history_service import chat_history_service
+from app.services.pdf_service import PDFProcessingError
 from app.services.rag_service import rag_service
 
 router = APIRouter()
@@ -57,10 +60,13 @@ async def upload_document(
 
     # Read file content once for disk caching and object storage upload
     try:
-        content = await file.read()
+        content = await file.read(settings.PDF_MAX_FILE_SIZE_BYTES + 1) if ext == ".pdf" else await file.read()
     except Exception as e:
         logger.exception(f"Failed to read uploaded file: {e}")
         raise HTTPException(status_code=500, detail="Failed to read uploaded file.")
+
+    if ext == ".pdf" and len(content) > settings.PDF_MAX_FILE_SIZE_BYTES:
+        raise HTTPException(413, "PDF exceeds the upload size limit.")
 
     temp_file_path = None
     try:
@@ -76,33 +82,36 @@ async def upload_document(
                 logger.warning("Could not remove failed temporary upload", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to save uploaded file.")
 
-    storage_url = ""
     try:
-        from app.services.storage_service import storage_service
-        storage_key = f"documents/{session_id}/{uuid.uuid4().hex}{ext}"
-        storage_url, _ = storage_service.upload_file(
-            file_bytes=content,
-            destination_key=storage_key,
-            content_type=file.content_type or "application/octet-stream"
-        )
-    except Exception as e:
-        logger.warning(f"Could not upload raw document to storage service: {e}", exc_info=True)
+        # Reject unsafe PDFs before persisting the raw file or indexing anything.
+        pages = await asyncio.to_thread(rag_service.extract_text_from_file, temp_file_path) if ext == ".pdf" else None
+        storage_url = ""
+        try:
+            from app.services.storage_service import storage_service
+            storage_key = f"documents/{session_id}/{uuid.uuid4().hex}{ext}"
+            storage_url, _ = storage_service.upload_file(
+                file_bytes=content,
+                destination_key=storage_key,
+                content_type=file.content_type or "application/octet-stream"
+            )
+        except Exception as e:
+            logger.warning(f"Could not upload raw document to storage service: {e}", exc_info=True)
 
-    try:
         # Ingest and Index
-        doc_metadata = rag_service.process_and_index_document(
-            file_path=temp_file_path,
-            filename=filename,
-            session_id=session_id,
-            user_id=user_id,
-            storage_url=storage_url
-        )
+        ingest = partial(rag_service.process_and_index_document, file_path=temp_file_path,
+                         filename=filename, session_id=session_id, user_id=user_id, storage_url=storage_url)
+        if ext == ".pdf":
+            doc_metadata = await asyncio.to_thread(ingest, extracted_pages=pages)
+        else:
+            doc_metadata = ingest()
 
         doc_metadata.storage_url = download_url(doc_metadata.document_id, principal, "document")
         return DocumentUploadResponse(
             document=doc_metadata,
             message=f"Document '{filename}' uploaded and vectorized successfully ({doc_metadata.total_chunks} chunks)."
         )
+    except PDFProcessingError as e:
+        raise HTTPException(e.status_code, str(e)) from None
     except Exception as e:
         logger.exception(f"Error processing document: {e}")
         raise HTTPException(status_code=500, detail=str(e))

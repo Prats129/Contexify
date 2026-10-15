@@ -21,6 +21,13 @@ class Settings(BaseSettings):
     CHUNK_OVERLAP: int = 150
     TOP_K_RETRIEVAL: int = 4
     SIMILARITY_THRESHOLD: float = 0.2
+
+    PDF_MAX_FILE_SIZE_BYTES: int = Field(default=25 * 1024 * 1024, ge=1)
+    PDF_MAX_PAGES: int = Field(default=1000, ge=1)
+    PDF_MAX_TEXT_CHARS: int = Field(default=2_000_000, ge=1)
+    PDF_PARSE_TIMEOUT_SECONDS: float = Field(default=30, ge=0.1, le=300)
+    PDF_PARSE_MEMORY_MB: int = Field(default=256, ge=64, le=4096)
+    PDF_MAX_CONCURRENT_PARSERS: int = Field(default=2, ge=1, le=16)
     
     # Vector DB Storage
     DATA_DIR: Path = Field(default_factory=lambda: Path(os.environ.get("DATA_DIR", str(BASE_DIR / "data"))))

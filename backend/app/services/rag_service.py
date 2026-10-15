@@ -2,14 +2,13 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from pypdf import PdfReader
-
 from app.core.config import settings
 from app.core.logging import logger
 from app.repositories.session_store import session_store_repo
 from app.repositories.vector_store import vector_store_repo
 from app.schemas.document import DocumentMetadata
 from app.services.embedding_service import embedding_service
+from app.services.pdf_service import extract_pdf_pages
 
 
 class RAGService:
@@ -26,15 +25,7 @@ class RAGService:
         pages = []
         
         if ext == ".pdf":
-            try:
-                reader = PdfReader(file_path)
-                for idx, page in enumerate(reader.pages):
-                    text = page.extract_text() or ""
-                    if text.strip():
-                        pages.append((text, idx + 1))
-            except Exception as e:
-                logger.error(f"Error parsing PDF file '{file_path.name}': {e}")
-                raise e
+            return extract_pdf_pages(file_path)
         elif ext in [".txt", ".md", ".csv", ".json", ".log"]:
             try:
                 with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
@@ -106,7 +97,8 @@ class RAGService:
         filename: str,
         session_id: str,
         user_id: Optional[str] = None,
-        storage_url: Optional[str] = None
+        storage_url: Optional[str] = None,
+        extracted_pages: Optional[List[Tuple[str, int]]] = None
     ) -> DocumentMetadata:
         """
         Full ingestion pipeline: Extract -> Chunk -> Embed -> Index -> Register Metadata.
@@ -118,7 +110,7 @@ class RAGService:
         logger.info(f"Ingesting document '{filename}' ({file_size} bytes) for session '{session_id}'...")
 
         # 1. Extract
-        pages = self.extract_text_from_file(file_path)
+        pages = self.extract_text_from_file(file_path) if extracted_pages is None else extracted_pages
         if not pages:
             raise ValueError("No extractable text found in uploaded document.")
 
