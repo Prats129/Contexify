@@ -5,11 +5,16 @@ FROM node:20-alpine AS frontend-builder
 WORKDIR /frontend
 
 # Copy package manifests and install dependencies
-COPY frontend/package*.json ./
+COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci || npm install
 
 # Copy source code and build production assets
-COPY frontend/ ./
+COPY frontend/index.html frontend/tsconfig.json frontend/tsconfig.node.json frontend/vite.config.ts ./
+COPY frontend/src/ ./src/
+COPY frontend/public/ ./public/
+# Public browser settings only; backend secrets belong in the runtime environment.
+ARG VITE_GOOGLE_CLIENT_ID=""
+ARG VITE_API_BASE_URL=""
 RUN npm run build
 
 # -------------------------------------------------------------
@@ -36,7 +41,7 @@ COPY backend/requirements.txt ./backend/requirements.txt
 RUN pip install --no-cache-dir -r ./backend/requirements.txt
 
 # Copy backend application code
-COPY backend/ ./backend/
+COPY backend/app/ ./backend/app/
 
 # Copy built frontend assets from stage 1 into workspace frontend/dist
 COPY --from=frontend-builder /frontend/dist ./frontend/dist
