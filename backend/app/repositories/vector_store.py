@@ -1,6 +1,7 @@
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, cast
 
 from app.core.config import settings
+from app.core.errors import EmbeddingDimensionError
 from app.core.logging import logger
 
 if TYPE_CHECKING:
@@ -66,6 +67,12 @@ class VectorStoreRepository:
         metadatas: List[Dict[str, Any]],
     ):
         """Add text chunk embeddings with metadata into Vector Store."""
+        # Validate the whole batch before Pinecone can persist an earlier batch.
+        if embeddings and (
+            not embeddings[0]
+            or any(len(vector) != len(embeddings[0]) for vector in embeddings)
+        ):
+            raise EmbeddingDimensionError()
         try:
             if self.use_pinecone:
                 records = []
@@ -94,34 +101,18 @@ class VectorStoreRepository:
                     f"Successfully indexed {len(chunk_ids)} chunks in ChromaDB for document_id '{document_id}'"
                 )
         except Exception as e:
-            err_msg = str(e)
-            if (
-                not self.use_pinecone
-                and "expecting embedding with dimension of" in err_msg
+            message = str(e).lower()
+            # Chroma versions and Pinecone use different dimension error text.
+            # Unknown failures also propagate; none may reset shared data.
+            if "expecting embedding with dimension of" in message or (
+                "dimension" in message
+                and "does not match" in message
+                and any(word in message for word in ("embedding", "vector"))
             ):
-                logger.warning(
-                    f"ChromaDB dimension mismatch: {err_msg}. Recreating collection for new embedding model..."
-                )
-                try:
-                    self.client.delete_collection("document_knowledge_base")
-                except Exception:
-                    logger.warning("Could not reset vector collection", exc_info=True)
-                self.collection = self.client.get_or_create_collection(
-                    name="document_knowledge_base", metadata={"hnsw:space": "cosine"}
-                )
-                self.collection.add(
-                    ids=chunk_ids,
-                    embeddings=cast(List[Sequence[float]], embeddings),
-                    documents=documents,
-                    metadatas=cast("List[Metadata]", metadatas),
-                )
-                logger.info(
-                    f"Successfully re-indexed {len(chunk_ids)} chunks in ChromaDB for document_id '{document_id}'"
-                )
-                return
-
-            logger.error(f"Error indexing chunks in VectorStoreRepository: {str(e)}")
-            raise e
+                logger.warning("Rejected incompatible embedding dimensions")
+                raise EmbeddingDimensionError() from e
+            logger.exception("Error indexing document chunks")
+            raise
 
     def similarity_search(
         self,

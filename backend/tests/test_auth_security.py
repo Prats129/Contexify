@@ -531,6 +531,155 @@ class SecurityTests(unittest.TestCase):
                 repository.collection.query.call_args.kwargs["where"], where
             )
 
+    def test_dimension_errors_never_reset_or_retry_the_shared_index(self):
+        from app.core.errors import EmbeddingDimensionError
+
+        _, repository, _ = self._load_document_pipeline()
+        for cloud, message in (
+            (False, "Collection expecting embedding with dimension of 2, got 3"),
+            (False, "Embedding dimension 3 does not match collection dimensionality 2"),
+            (True, "Vector dimension 3 does not match the dimension of the index 2"),
+        ):
+            with self.subTest(cloud=cloud, message=message):
+                repository.use_pinecone = cloud
+                repository.index = Mock()
+                repository.collection.add.reset_mock(side_effect=True)
+                write = repository.index.upsert if cloud else repository.collection.add
+                write.side_effect = ValueError(message)
+                with self.assertRaises(EmbeddingDimensionError):
+                    repository.add_chunks(
+                        "failed",
+                        ["failed-chunk"],
+                        [[1.0, 0.0, 0.0]],
+                        ["test"],
+                        [{"document_id": "failed"}],
+                    )
+                self.assertEqual(write.call_count, 1)
+                repository.client.delete_collection.assert_not_called()
+                repository.index.delete.assert_not_called()
+                self.assertEqual(
+                    repository.client.get_or_create_collection.call_count, 1
+                )
+
+        failure = RuntimeError("fixture provider unavailable")
+        repository.index.upsert.side_effect = failure
+        with self.assertRaises(RuntimeError) as caught:
+            repository.add_chunks("failed", ["chunk"], [[1.0]], ["test"], [{}])
+        self.assertIs(caught.exception, failure)
+        repository.client.delete_collection.assert_not_called()
+        repository.index.delete.assert_not_called()
+
+    def test_inconsistent_dimensions_are_rejected_before_any_batch_is_written(self):
+        from app.core.errors import EmbeddingDimensionError
+
+        _, repository, _ = self._load_document_pipeline()
+        for cloud in (False, True):
+            repository.use_pinecone = cloud
+            repository.index = Mock()
+            for embeddings in ([[1.0, 0.0]] * 100 + [[1.0]], [[]]):
+                count = len(embeddings)
+                with self.subTest(cloud=cloud, count=count):
+                    with self.assertRaises(EmbeddingDimensionError):
+                        repository.add_chunks(
+                            "failed",
+                            [f"chunk-{i}" for i in range(count)],
+                            embeddings,
+                            ["test"] * count,
+                            [{}] * count,
+                        )
+            repository.index.upsert.assert_not_called()
+            repository.collection.add.assert_not_called()
+
+    def test_mismatched_upload_preserves_real_chroma_data_and_cleans_only_failed_file(
+        self,
+    ):
+        import chromadb
+        import numpy as np
+
+        from app.api.v1.endpoints import document
+
+        rag, repository, embedder = self._load_document_pipeline()
+        client = chromadb.EphemeralClient(
+            settings=chromadb.config.Settings(anonymized_telemetry=False)
+        )
+        collection = client.create_collection(f"dimension-test-{time.time_ns()}")
+        self.addCleanup(client.delete_collection, collection.name)
+        repository.collection = collection
+        # Two owners' documents share this collection; neither may be reset.
+        repository.add_chunks(
+            "existing",
+            ["alice-chunk", "bob-chunk"],
+            [[1.0, 0.0], [0.0, 1.0]],
+            ["Alice fixture", "Bob fixture"],
+            [{"document_id": "document"}, {"document_id": "bob-document"}],
+        )
+        existing = collection.get(include=["documents", "metadatas", "embeddings"])
+        embedder.embed_batch.side_effect = lambda texts: [
+            [1.0, 0.0, 0.0] for _ in texts
+        ]
+        with (
+            self._isolated_r2() as (objects, storage_client),
+            patch.object(document, "rag_service", rag),
+            patch.object(
+                vectors, "delete_document", side_effect=repository.delete_document
+            ),
+        ):
+            original_objects = dict(objects)
+            for filename, content, mime in (
+                ("mismatch.txt", b"test", "text/plain"),
+                ("mismatch.pdf", self.pdf_fixture("test"), "application/pdf"),
+            ):
+                response = self.request(
+                    "POST",
+                    "/document/upload",
+                    self.token,
+                    data={"session_id": "alice-session"},
+                    files={"file": (filename, content, mime)},
+                )
+                self.assertEqual(response.status_code, 503, response.text)
+                self.assertIn("embedding dimensions", response.json()["detail"])
+                self.assertIn("preserved", response.json()["detail"])
+                self.assertEqual(objects, original_objects)
+                current = collection.get(
+                    include=["documents", "metadatas", "embeddings"]
+                )
+                for field in ("ids", "documents", "metadatas"):
+                    self.assertEqual(current[field], existing[field])
+                np.testing.assert_array_equal(
+                    current["embeddings"], existing["embeddings"]
+                )
+                self.assertEqual(
+                    len(
+                        repository.similarity_search(
+                            [1.0, 0.0], document_ids=["document"]
+                        )
+                    ),
+                    1,
+                )
+                with database.get_db_connection() as conn:
+                    self.assertEqual(
+                        conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0], 1
+                    )
+                    self.assertEqual(
+                        conn.execute("SELECT COUNT(*) FROM upload_attempts").fetchone()[
+                            0
+                        ],
+                        0,
+                    )
+            self.assertEqual(storage_client.delete_object.call_count, 2)
+            # Restoring compatible embeddings makes uploads succeed without a reset.
+            embedder.embed_batch.side_effect = lambda texts: [[1.0, 0.0] for _ in texts]
+            response = self.request(
+                "POST",
+                "/document/upload",
+                self.token,
+                data={"session_id": "alice-session"},
+                files={"file": ("compatible.txt", b"test", "text/plain")},
+            )
+            self.assertEqual(response.status_code, 201, response.text)
+            self.assertEqual(collection.count(), 3)
+            self.assertEqual(storage_client.delete_object.call_count, 2)
+
     def test_short_txt_and_pdf_upload_through_real_ingestion_and_vector_code(self):
         from app.api.v1.endpoints import document
 

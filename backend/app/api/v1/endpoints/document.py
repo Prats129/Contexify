@@ -9,6 +9,7 @@ from typing import List, Optional, Tuple
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 
 from app.core.config import settings
+from app.core.errors import EmbeddingDimensionError
 from app.core.logging import logger
 from app.core.security import (
     Principal,
@@ -169,6 +170,8 @@ async def upload_document(
         raise
     except PDFProcessingError as e:
         raise HTTPException(e.status_code, str(e)) from None
+    except EmbeddingDimensionError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from None
     except Exception as e:
         logger.exception(f"Error processing document: {e}")
         raise HTTPException(status_code=500, detail=str(e))
