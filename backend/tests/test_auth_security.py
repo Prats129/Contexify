@@ -122,6 +122,139 @@ from app.services.user_service import hash_password, user_service
 
 
 class SecurityTests(unittest.TestCase):
+    def test_clear_messages_cannot_revive_signed_in_history_from_another_worker(self):
+        from app.repositories.session_store import (
+            SessionStoreRepository,
+            session_store_repo,
+        )
+        from app.services.chat_history_service import chat_history_service
+
+        other_worker = SessionStoreRepository()
+        chat_history_service.save_message("alice-session", "user", "Private fixture")
+        for repository in (session_store_repo, other_worker):
+            repository.record_message("alice-session", "user", "Private fixture")
+            self.assertEqual(len(repository.get_history_messages("alice-session")), 1)
+        security.ensure_session(
+            "bob-session", security.resolve_principal(security.digest(self.other_token))
+        )
+        chat_history_service.save_message("bob-session", "user", "Bob keeps this")
+        response = self.request("DELETE", "/session/alice-session/messages", self.token)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(session_store_repo._sessions["alice-session"].messages, [])
+        for repository in (session_store_repo, other_worker):
+            self.assertEqual(repository.get_history_messages("alice-session"), [])
+            # Even an old callback/cache snapshot must not override empty SQL.
+            repository._sessions["alice-session"].messages.append(
+                {"role": "user", "content": "stale"}
+            )
+            self.assertEqual(repository.get_history_messages("alice-session"), [])
+        self.assertEqual(
+            len(chat_history_service.get_session_messages("bob-session")), 1
+        )
+        self.assertIsNotNone(chat_history_service.get_session("alice-session"))
+        self.assertEqual(
+            len(chat_history_service.list_session_documents("alice-session")), 1
+        )
+        self.assertTrue((settings.UPLOAD_IMAGE_DIR / "fixture.png").exists())
+        chat_history_service.save_message("alice-session", "user", "Fresh message")
+        self.assertEqual(
+            [m["content"] for m in other_worker.get_history_messages("alice-session")],
+            ["Fresh message"],
+        )
+
+    def test_guest_clear_invalidates_other_worker_memory_without_persisting_messages(
+        self,
+    ):
+        from app.repositories.session_store import (
+            SessionStoreRepository,
+            session_store_repo,
+        )
+        from app.services.chat_history_service import chat_history_service
+
+        guest = self.request("POST", "/user/guest").json()
+        token = guest["access_token"]
+        principal = security.resolve_principal(security.digest(token))
+        security.ensure_session("guest-clear", principal)
+        other_worker = SessionStoreRepository()
+        for repository in (session_store_repo, other_worker):
+            repository.record_message("guest-clear", "user", "Guest fixture")
+            self.assertEqual(
+                repository.get_history_messages("guest-clear")[0]["content"],
+                "Guest fixture",
+            )
+        self.assertEqual(
+            self.request(
+                "DELETE", "/session/guest-clear/messages", self.other_token
+            ).status_code,
+            404,
+        )
+        self.assertEqual(len(other_worker.get_history_messages("guest-clear")), 1)
+        for _ in range(2):
+            response = self.request("DELETE", "/session/guest-clear/messages", token)
+            self.assertEqual(response.status_code, 200, response.text)
+            for repository in (session_store_repo, other_worker):
+                self.assertEqual(repository.get_history_messages("guest-clear"), [])
+        other_worker.record_message("guest-clear", "user", "Fresh guest message")
+        self.assertEqual(
+            other_worker.get_history_messages("guest-clear")[0]["content"],
+            "Fresh guest message",
+        )
+        # A delayed notification from the first clear cannot erase newer history.
+        other_worker.invalidate_cached_history("guest-clear", 1)
+        self.assertEqual(len(other_worker.get_history_messages("guest-clear")), 1)
+        self.assertEqual(chat_history_service.get_session_messages("guest-clear"), [])
+
+    def test_failed_clear_rolls_back_sql_and_keeps_cached_history(self):
+        from app.repositories.session_store import session_store_repo
+        from app.services import chat_history_service as history_module
+
+        service = history_module.chat_history_service
+        service.save_message("alice-session", "user", "Keep until clear succeeds")
+        session_store_repo.record_message(
+            "alice-session", "user", "Keep until clear succeeds"
+        )
+
+        @contextmanager
+        def failed_commit(**kwargs):
+            with database.get_db_connection(**kwargs) as conn:
+                yield conn
+                raise RuntimeError("fixture commit failure")
+
+        with patch.object(history_module, "get_db_connection", failed_commit):
+            with self.assertRaisesRegex(RuntimeError, "fixture commit failure"):
+                service.clear_session_messages("alice-session")
+        self.assertEqual(len(service.get_session_messages("alice-session")), 1)
+        self.assertEqual(len(session_store_repo._sessions["alice-session"].messages), 1)
+        with database.get_db_connection() as conn:
+            self.assertEqual(
+                conn.execute(
+                    "SELECT history_version FROM chat_sessions WHERE id='alice-session'"
+                ).fetchone()[0],
+                0,
+            )
+
+    def test_history_version_migration_preserves_existing_rows_and_is_repeatable(self):
+        from app.services.chat_history_service import chat_history_service
+
+        chat_history_service.save_message("alice-session", "user", "Keep fixture")
+        with database.get_db_connection(write=True) as conn:
+            conn.execute("ALTER TABLE chat_sessions DROP COLUMN history_version")
+        database.init_db()
+        database.init_db()
+        with database.get_db_connection() as conn:
+            self.assertEqual(
+                conn.execute(
+                    "SELECT history_version FROM chat_sessions WHERE id='alice-session'"
+                ).fetchone()[0],
+                0,
+            )
+        self.assertEqual(
+            len(chat_history_service.get_session_messages("alice-session")), 1
+        )
+        self.assertEqual(
+            len(chat_history_service.list_session_documents("alice-session")), 1
+        )
+
     def test_http_cancellation_does_not_clean_an_active_upload_worker(self):
         import threading
 

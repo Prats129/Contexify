@@ -95,6 +95,9 @@ export const App: React.FC = () => {
   }, [currentUser]);
 
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const activeSessionIdRef = useRef(activeSessionId);
+  activeSessionIdRef.current = activeSessionId;
+  const [clearedChats, setClearedChats] = useState<Record<string, string>>({});
 
   // --- Sessions Management (Pagination, Server-side Debounced Search, Optimistic Updates) ---
   const {
@@ -648,22 +651,43 @@ export const App: React.FC = () => {
       (messages.length === 0 && !streamingMessage)
     )
       return;
+    const sessionId = activeSessionId;
+    const authVersion = authVersionRef.current;
     const confirmed = await confirm({
       type: "default",
       title: "Clear conversation?",
       message:
-        "Clear all messages in this conversation? Attached documents and vector knowledge will remain intact.",
+        "Clear all messages in this conversation? Attached documents will remain available.",
       confirmText: "Clear",
       cancelText: "Cancel",
       variant: "danger",
     });
-    if (!confirmed) return;
+    if (
+      !confirmed ||
+      authVersion !== authVersionRef.current ||
+      sessionId !== activeSessionIdRef.current
+    ) {
+      return;
+    }
 
     try {
-      await apiService.clearSessionMessages(activeSessionId);
+      await apiService.clearSessionMessages(sessionId);
+      if (authVersion !== authVersionRef.current) return;
+      setClearedChats((previous) => ({
+        ...previous,
+        [sessionId]: new Date().toISOString(),
+      }));
+      if (sessionId !== activeSessionIdRef.current) return;
       setMessages([]);
       setStreamingMessage(null);
+      setReplyingTo(null);
     } catch (e: unknown) {
+      if (
+        authVersion !== authVersionRef.current ||
+        sessionId !== activeSessionIdRef.current
+      ) {
+        return;
+      }
       const err = e instanceof Error ? e.message : String(e);
       await showAlert({
         title: "Clear Failed",
@@ -920,6 +944,7 @@ export const App: React.FC = () => {
   // --- 9. User Authentication & Guest Handlers ---
   const resetConversationForAuthChange = () => {
     authVersionRef.current++;
+    setClearedChats({});
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
     setIsSending(false);
@@ -1131,7 +1156,10 @@ export const App: React.FC = () => {
         attachedMedia={attachedMedia}
         onDeleteMedia={handleDeleteMedia}
         onUseAsReference={handleUseAsReference}
-        onClearChat={handleClearMessages}
+        onClearChat={isSending ? undefined : handleClearMessages}
+        chatClearedAt={
+          activeSessionId ? clearedChats[activeSessionId] : undefined
+        }
         onToggleSidebar={handleToggleSidebar}
         isTemporaryChat={Boolean(currentUser && isTemporaryChat)}
         onToggleTemporaryChat={

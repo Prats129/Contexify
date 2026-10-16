@@ -161,6 +161,7 @@ class StreamChunkResponse(BaseModel):
 class SessionState(BaseModel):
     session_id: str
     mode: ChatMode
+    history_version: int = 0
     document_ids: List[str] = []
     messages: List[Dict[str, Any]] = []
     created_at: str

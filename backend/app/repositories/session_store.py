@@ -23,7 +23,7 @@ class SessionStoreRepository:
         user_id: Optional[str] = None,
     ) -> SessionState:
         with get_db_connection() as conn:
-            active_session(conn, session_id)
+            row = active_session(conn, session_id)
         if session_id not in self._sessions:
             # Check if exists in DB (logged-in user session)
             db_session = chat_history_service.get_session(session_id)
@@ -37,13 +37,22 @@ class SessionStoreRepository:
                     mode=db_session.mode,
                     document_ids=doc_ids,
                     created_at=db_session.created_at,
+                    history_version=row["history_version"],
                 )
             else:
                 raise HTTPException(404, "Session not found.")
         session = self._sessions.get(session_id)
         if session is None:
             raise HTTPException(404, "Session not found.")
+        self.invalidate_cached_history(session_id, row["history_version"])
         return session
+
+    def invalidate_cached_history(self, session_id: str, history_version: int) -> None:
+        """Discard older history without changing documents or session settings."""
+        session = self._sessions.get(session_id)
+        if session is not None and session.history_version < history_version:
+            session.messages.clear()
+            session.history_version = history_version
 
     def set_session_mode(self, session_id: str, mode: ChatMode):
         session = self.get_or_create_session(session_id)
@@ -98,11 +107,12 @@ class SessionStoreRepository:
         return list(self._documents.values())
 
     def get_history_messages(self, session_id: str) -> List[Dict[str, Any]]:
-        """Retrieve conversation history for a session from SQLite or in-memory state including attachments and reply references."""
+        """Use SQL for signed-in history and versioned memory for guest history."""
         with get_db_connection() as conn:
-            active_session(conn, session_id)
+            row = active_session(conn, session_id)
+        self.invalidate_cached_history(session_id, row["history_version"])
         db_messages = chat_history_service.get_session_messages(session_id)
-        if db_messages:
+        if not row["user_id"].startswith("guest_") or db_messages:
             return [
                 {
                     "id": m.id,

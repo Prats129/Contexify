@@ -37,6 +37,7 @@ interface ChatWorkspaceProps {
   currentUser: User | null;
   onOpenUserModal: (tab?: "login" | "register") => void;
   onClearChat?: () => void;
+  chatClearedAt?: string;
   onToggleSidebar?: () => void;
   isTemporaryChat?: boolean;
   onToggleTemporaryChat?: () => void;
@@ -72,6 +73,7 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
   currentUser,
   onOpenUserModal,
   onClearChat,
+  chatClearedAt,
   onToggleSidebar,
   isTemporaryChat = false,
   onToggleTemporaryChat,
@@ -117,7 +119,7 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
   const [highlightedMessageId, setHighlightedMessageId] = useState<
     string | null
   >(null);
-  const highlightTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleJumpToMessage = useCallback((targetId: string) => {
     if (!targetId) return;
@@ -282,6 +284,21 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
       >
         {/* Main Conversation Column: MessageList + ChatInput */}
         <div className="flex-1 flex flex-col h-full min-w-0 w-full">
+          {chatClearedAt && (
+            <div
+              role="status"
+              className="shrink-0 px-4 py-3 text-center text-xs text-(--text-muted)"
+            >
+              <p className="font-medium text-(--text-main)">Chat cleared</p>
+              <time dateTime={chatClearedAt}>
+                {new Date(chatClearedAt).toLocaleString(undefined, {
+                  dateStyle: "medium",
+                  timeStyle: "short",
+                })}
+              </time>
+              <p>Your documents are still available.</p>
+            </div>
+          )}
           <MessageList
             messages={messages}
             streamingMessage={streamingMessage}

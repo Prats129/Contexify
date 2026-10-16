@@ -217,14 +217,20 @@ class ChatHistoryService:
 
     def clear_session_messages(self, session_id: str) -> bool:
         now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
-        with get_db_connection() as conn:
+        with get_db_connection(write=True) as conn:
+            row = active_session(conn, session_id)
+            history_version = row["history_version"] + 1
             cursor = conn.cursor()
             cursor.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
             cursor.execute(
-                "UPDATE chat_sessions SET updated_at = ? WHERE id = ?",
-                (now, session_id),
+                "UPDATE chat_sessions SET updated_at = ?, history_version = ? WHERE id = ?",
+                (now, history_version, session_id),
             )
-            return True
+        # Only invalidate after commit; other API workers check this version on read.
+        from app.repositories.session_store import session_store_repo
+
+        session_store_repo.invalidate_cached_history(session_id, history_version)
+        return True
 
     def save_message(
         self,

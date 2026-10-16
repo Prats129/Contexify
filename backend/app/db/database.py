@@ -296,6 +296,7 @@ def init_db():
                 pinned_at TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
+                history_version INTEGER NOT NULL DEFAULT 0,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             );
         """)
@@ -315,6 +316,10 @@ def init_db():
             )
         if "pinned_at" not in session_columns:
             cursor.execute("ALTER TABLE chat_sessions ADD COLUMN pinned_at TEXT;")
+        if "history_version" not in session_columns:
+            cursor.execute(
+                "ALTER TABLE chat_sessions ADD COLUMN history_version INTEGER NOT NULL DEFAULT 0"
+            )
 
         # 3. Messages Table
         cursor.execute("""
