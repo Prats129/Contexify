@@ -3,6 +3,7 @@
 Run with backend/venv/Scripts/python.exe -B backend/tests/test_auth_security.py.
 No application .env, production database, mail or AI provider is used.
 """
+
 import asyncio
 import io
 import json
@@ -14,6 +15,7 @@ import time
 import types
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from email.message import Message
 from pathlib import Path
@@ -31,20 +33,48 @@ def module(name, **attrs):
 
 
 settings = types.SimpleNamespace(
-    DATA_DIR=root, MEDIA_DIR=root / "media", UPLOAD_IMAGE_DIR=root / "media/uploads",
-    GENERATED_IMAGE_DIR=root / "media/generated", UPLOAD_DIR=root / "uploads",
-    DATABASE_TYPE="sqlite", DB_MODE="local", TURSO_DATABASE_URL="", TURSO_AUTH_TOKEN="",
-    GOOGLE_CLIENT_ID="fixture-client", AUTH_SESSION_TTL_SECONDS=3600,
-    GUEST_SESSION_TTL_SECONDS=600, DOWNLOAD_TICKET_TTL_SECONDS=300, ADMIN_USER_IDS=[],
-    TEMPORARY_CHAT_RETENTION_DAYS=3, OTP_MAX_ATTEMPTS=3, OTP_EXPIRY_SECONDS=180,
-    OTP_RESEND_COOLDOWN_SECONDS=30, OTP_MAX_SENDS_PER_HOUR=5, is_cloudflare_r2_configured=False,
-    CLOUDFLARE_R2_PUBLIC_URL="", CLOUDFLARE_R2_BUCKET_NAME="fixture", r2_endpoint_url="",
-    API_V1_STR="/api/v1", PROJECT_NAME="Offline auth tests", CORS_ORIGINS=[], WORKSPACE_DIR=root,
-    PDF_MAX_FILE_SIZE_BYTES=25 * 1024 * 1024, PDF_MAX_PAGES=1000, PDF_MAX_TEXT_CHARS=2_000_000,
-    PDF_PARSE_TIMEOUT_SECONDS=30, PDF_PARSE_MEMORY_MB=256, PDF_MAX_CONCURRENT_PARSERS=2,
-    CHROMA_PERSIST_DIR=root / "chroma_db", GEMINI_API_KEY="",
+    DATA_DIR=root,
+    MEDIA_DIR=root / "media",
+    UPLOAD_IMAGE_DIR=root / "media/uploads",
+    GENERATED_IMAGE_DIR=root / "media/generated",
+    UPLOAD_DIR=root / "uploads",
+    DATABASE_TYPE="sqlite",
+    DB_MODE="local",
+    TURSO_DATABASE_URL="",
+    TURSO_AUTH_TOKEN="",
+    GOOGLE_CLIENT_ID="fixture-client",
+    AUTH_SESSION_TTL_SECONDS=3600,
+    GUEST_SESSION_TTL_SECONDS=600,
+    DOWNLOAD_TICKET_TTL_SECONDS=300,
+    ADMIN_USER_IDS=[],
+    TEMPORARY_CHAT_RETENTION_DAYS=3,
+    OTP_MAX_ATTEMPTS=3,
+    OTP_EXPIRY_SECONDS=180,
+    OTP_RESEND_COOLDOWN_SECONDS=30,
+    OTP_MAX_SENDS_PER_HOUR=5,
+    is_cloudflare_r2_configured=False,
+    CLOUDFLARE_R2_PUBLIC_URL="",
+    CLOUDFLARE_R2_BUCKET_NAME="fixture",
+    r2_endpoint_url="",
+    API_V1_STR="/api/v1",
+    PROJECT_NAME="Offline auth tests",
+    CORS_ORIGINS=[],
+    WORKSPACE_DIR=root,
+    PDF_MAX_FILE_SIZE_BYTES=25 * 1024 * 1024,
+    PDF_MAX_PAGES=1000,
+    PDF_MAX_TEXT_CHARS=2_000_000,
+    PDF_PARSE_TIMEOUT_SECONDS=30,
+    PDF_PARSE_MEMORY_MB=256,
+    PDF_MAX_CONCURRENT_PARSERS=2,
+    CHROMA_PERSIST_DIR=root / "chroma_db",
+    GEMINI_API_KEY="",
 )
-for directory in (settings.UPLOAD_DIR, settings.MEDIA_DIR, settings.UPLOAD_IMAGE_DIR, settings.GENERATED_IMAGE_DIR):
+for directory in (
+    settings.UPLOAD_DIR,
+    settings.MEDIA_DIR,
+    settings.UPLOAD_IMAGE_DIR,
+    settings.GENERATED_IMAGE_DIR,
+):
     directory.mkdir(parents=True, exist_ok=True)
 module("app.core.config", settings=settings)
 logger = logging.getLogger("offline-auth")
@@ -64,6 +94,7 @@ class Orchestrator:
 
     async def route_and_stream(self, request, principal):
         from app.services.chat_history_service import chat_history_service
+
         self.last_request = request
         chat_history_service.save_message(request.session_id, "user", request.message)
         if self.emit_media:
@@ -75,7 +106,10 @@ fixture_orchestrator = Orchestrator()
 module("app.services.orchestrator", chat_orchestrator=fixture_orchestrator)
 
 # Outbound HTTP is forbidden even if a stub is accidentally bypassed.
-outbound = patch("requests.sessions.Session.request", side_effect=AssertionError("Unexpected network request"))
+outbound = patch(
+    "requests.sessions.Session.request",
+    side_effect=AssertionError("Unexpected network request"),
+)
 outbound.start()
 import httpx
 
@@ -88,14 +122,1297 @@ from app.services.user_service import hash_password, user_service
 
 
 class SecurityTests(unittest.TestCase):
+    def test_http_cancellation_does_not_clean_an_active_upload_worker(self):
+        import threading
+
+        from app.api.v1.endpoints import document
+        from app.services.upload_lifecycle import purge_failed_uploads
+
+        rag, _, embedder = self._load_document_pipeline()
+        started, release, finished = (
+            threading.Event(),
+            threading.Event(),
+            threading.Event(),
+        )
+
+        def embed(texts):
+            started.set()
+            if not release.wait(10):
+                raise AssertionError("Test did not release embedding worker")
+            raise RuntimeError("fixture abandoned upload")
+
+        embedder.embed_batch.side_effect = embed
+        original = document._store_and_index_document
+
+        def pipeline(*args):
+            try:
+                return original(*args)
+            finally:
+                finished.set()
+
+        async def exercise(objects, original_keys):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app),
+                base_url="http://fixture.invalid",
+            ) as client:
+                task = asyncio.create_task(
+                    client.post(
+                        "/api/v1/document/upload",
+                        headers={"Authorization": "Bearer " + self.token},
+                        data={"session_id": "alice-session"},
+                        files={"file": ("cancel.txt", b"test", "text/plain")},
+                    )
+                )
+                try:
+                    self.assertTrue(await asyncio.to_thread(started.wait, 5))
+                    task.cancel()
+                    with self.assertRaises(asyncio.CancelledError):
+                        await task
+                    self.assertEqual(purge_failed_uploads(), 0)
+                    self.assertEqual(len(objects), len(original_keys) + 1)
+                finally:
+                    release.set()
+                    if not task.done():
+                        task.cancel()
+                    self.assertTrue(await asyncio.to_thread(finished.wait, 10))
+
+        with (
+            self._isolated_r2() as (objects, _),
+            patch.object(document, "rag_service", rag),
+            patch.object(document, "_store_and_index_document", side_effect=pipeline),
+        ):
+            original_keys = set(objects)
+            asyncio.run(exercise(objects, original_keys))
+            self.assertEqual(set(objects), original_keys)
+
+    def test_cleanup_database_error_does_not_mark_a_live_upload_as_failed(self):
+        from app.services import upload_lifecycle
+        from app.services.storage_service import storage_service
+
+        with upload_lifecycle.upload_attempt():
+            attempt_id = upload_lifecycle.current_upload_attempt.get()
+            assert attempt_id is not None
+            key = "documents/alice-session/live-db-error.txt"
+            storage_service.upload_file(b"test", key, session_id="alice-session")
+            with patch.object(
+                upload_lifecycle,
+                "get_db_connection",
+                side_effect=OSError("fixture database unavailable"),
+            ):
+                self.assertFalse(upload_lifecycle.cleanup_upload(attempt_id))
+            with database.get_db_connection() as conn:
+                self.assertEqual(
+                    conn.execute(
+                        "SELECT state FROM upload_attempts WHERE id=?", (attempt_id,)
+                    ).fetchone()[0],
+                    "pending",
+                )
+            self.assertTrue((root / key).exists())
+        self.assertFalse((root / key).exists())
+
+    @contextmanager
+    def _isolated_r2(self):
+        from app.services.storage_service import storage_service
+
+        objects = {
+            "media/uploads/fixture.png": b"fixture-image",
+            "documents/alice-session/fixture.txt": b"fixture",
+        }
+        client = Mock()
+
+        def put(**kwargs):
+            objects[kwargs["Key"]] = kwargs["Body"]
+
+        def delete(**kwargs):
+            objects.pop(kwargs["Key"], None)
+
+        def get(**kwargs):
+            content = objects[kwargs["Key"]]
+            return {"Body": io.BytesIO(content), "ContentLength": len(content)}
+
+        client.put_object.side_effect = put
+        client.delete_object.side_effect = delete
+        client.get_object.side_effect = get
+        with (
+            patch.object(storage_service, "_initialized", True),
+            patch.object(storage_service, "_s3_client", client),
+            patch.object(
+                settings, "CLOUDFLARE_R2_PUBLIC_URL", "https://storage.fixture.invalid"
+            ),
+        ):
+            yield objects, client
+
+    def test_failed_txt_and_pdf_uploads_remove_only_their_own_r2_objects(self):
+        from app.api.v1.endpoints import document
+
+        rag, _, embedder = self._load_document_pipeline()
+        embedder.embed_batch.side_effect = RuntimeError("fixture embedding failure")
+        with (
+            self._isolated_r2() as (objects, client),
+            patch.object(document, "rag_service", rag),
+        ):
+            original_objects = dict(objects)
+            for filename, content, mime in (
+                ("failed.txt", b"test", "text/plain"),
+                ("failed.pdf", self.pdf_fixture("test"), "application/pdf"),
+            ):
+                response = self.request(
+                    "POST",
+                    "/document/upload",
+                    self.token,
+                    data={"session_id": "alice-session"},
+                    files={"file": (filename, content, mime)},
+                )
+                self.assertEqual(response.status_code, 500)
+                self.assertEqual(objects, original_objects)
+                self.assertIn("fixture embedding failure", response.json()["detail"])
+            self.assertEqual(client.put_object.call_count, 2)
+            self.assertEqual(client.delete_object.call_count, 2)
+            with database.get_db_connection() as conn:
+                self.assertEqual(
+                    conn.execute("SELECT COUNT(*) FROM upload_attempts").fetchone()[0],
+                    0,
+                )
+                self.assertEqual(
+                    conn.execute("SELECT COUNT(*) FROM upload_resources").fetchone()[0],
+                    0,
+                )
+
+    def test_failed_partial_index_and_r2_cleanup_retry_survive_restart(self):
+        from app.api.v1.endpoints import document
+        from app.services import session_lifecycle
+
+        rag, repository, _ = self._load_document_pipeline()
+        repository.collection.add.side_effect = RuntimeError(
+            "fixture partial index failure"
+        )
+        with (
+            self._isolated_r2() as (objects, client),
+            patch.object(document, "rag_service", rag),
+            patch.object(vectors, "delete_document") as delete_vectors,
+        ):
+            original_keys = set(objects)
+            delete_object = client.delete_object.side_effect
+            client.delete_object.side_effect = RuntimeError("fixture R2 unavailable")
+            response = self.request(
+                "POST",
+                "/document/upload",
+                self.token,
+                data={"session_id": "alice-session"},
+                files={"file": ("failed.txt", b"test", "text/plain")},
+            )
+            self.assertEqual(response.status_code, 500)
+            failed_key = client.put_object.call_args.kwargs["Key"]
+            self.assertIn(failed_key, objects)
+            with database.get_db_connection() as conn:
+                self.assertEqual(
+                    conn.execute("SELECT state FROM upload_attempts").fetchone()[0],
+                    "failed",
+                )
+            database.init_db()
+            client.delete_object.side_effect = delete_object
+            session_lifecycle.purge_expired_sessions()
+            self.assertEqual(set(objects), original_keys)
+            document_id = repository.collection.add.call_args.kwargs["metadatas"][0][
+                "document_id"
+            ]
+            delete_vectors.assert_called_once_with(document_id, raise_on_error=True)
+            with database.get_db_connection() as conn:
+                self.assertEqual(
+                    conn.execute("SELECT COUNT(*) FROM upload_attempts").fetchone()[0],
+                    0,
+                )
+            self.assertEqual(
+                self.request("GET", "/media/assets", self.token).json()["total"], 2
+            )
+
+    def test_media_registration_rollback_cleans_uploads_and_generated_images(self):
+        from app.services import media_service as media_module
+
+        original_publish = media_module.publish_upload
+
+        def reject_commit(conn):
+            original_publish(conn)
+            raise RuntimeError("fixture registration rollback")
+
+        with (
+            self._isolated_r2() as (objects, _),
+            patch.object(media_module, "publish_upload", side_effect=reject_commit),
+        ):
+            original_objects = dict(objects)
+            for session_id in (None, "alice-session"):
+                for generated in (False, True):
+                    with self.assertRaises(RuntimeError):
+                        if generated:
+                            media_module.media_service.save_generated_image(
+                                self.image_fixture(),
+                                "fixture",
+                                session_id,
+                                self.alice.id,
+                            )
+                        else:
+                            media_module.media_service.save_uploaded_media(
+                                self.image_fixture(),
+                                "fixture.png",
+                                session_id,
+                                self.alice.id,
+                            )
+                    self.assertEqual(objects, original_objects)
+            with database.get_db_connection() as conn:
+                self.assertEqual(
+                    conn.execute("SELECT COUNT(*) FROM media_assets").fetchone()[0], 1
+                )
+                self.assertEqual(
+                    conn.execute("SELECT COUNT(*) FROM upload_attempts").fetchone()[0],
+                    0,
+                )
+
+    def test_published_uploads_are_preserved_by_failed_upload_sweeper_and_chat_deletion(
+        self,
+    ):
+        from app.api.v1.endpoints import document
+        from app.services.upload_lifecycle import purge_failed_uploads
+
+        rag, _, _ = self._load_document_pipeline()
+        with (
+            self._isolated_r2() as (objects, client),
+            patch.object(document, "rag_service", rag),
+        ):
+            response = self.request(
+                "POST",
+                "/document/upload",
+                self.token,
+                data={"session_id": "alice-session"},
+                files={"file": ("success.txt", b"test", "text/plain")},
+            )
+            self.assertEqual(response.status_code, 201)
+            self.assertEqual(purge_failed_uploads(), 0)
+            self.assertEqual(
+                self.request(
+                    "DELETE", "/session/alice-session", self.token
+                ).status_code,
+                200,
+            )
+            self.assertEqual(purge_failed_uploads(), 0)
+            self.assertIn(client.put_object.call_args.kwargs["Key"], objects)
+            client.delete_object.assert_not_called()
+
+    def test_abandoned_upload_is_cleaned_but_live_and_unclassified_objects_are_preserved(
+        self,
+    ):
+        from fastapi import HTTPException
+
+        from app.services import upload_lifecycle
+        from app.services.chat_history_service import chat_history_service
+
+        stale_key, live_key, unknown_key = (
+            "documents/alice-session/stale.txt",
+            "documents/alice-session/live.txt",
+            "documents/alice-session/unknown.txt",
+        )
+        with self._isolated_r2() as (objects, _):
+            objects.update(
+                {stale_key: b"stale", live_key: b"live", unknown_key: b"unknown"}
+            )
+            with database.get_db_connection(write=True) as conn:
+                conn.execute(
+                    "INSERT INTO upload_attempts (id,expires_at) VALUES ('stale',0)"
+                )
+                conn.execute(
+                    "INSERT INTO upload_attempts (id,expires_at) VALUES ('live',?)",
+                    (time.time() + 300,),
+                )
+                for attempt, key in (("stale", stale_key), ("live", live_key)):
+                    conn.execute(
+                        "INSERT INTO upload_resources VALUES (?,?,'r2',?)",
+                        (attempt, "alice-session", key),
+                    )
+            self.assertEqual(upload_lifecycle.purge_failed_uploads(), 1)
+            self.assertNotIn(stale_key, objects)
+            self.assertIn(live_key, objects)
+            self.assertIn(unknown_key, objects)
+            token = upload_lifecycle.current_upload_attempt.set("stale")
+            try:
+                with self.assertRaises(HTTPException):
+                    chat_history_service.save_document(
+                        "too-late",
+                        self.alice.id,
+                        "alice-session",
+                        "late.txt",
+                        "txt",
+                        4,
+                        1,
+                    )
+            finally:
+                upload_lifecycle.current_upload_attempt.reset(token)
+            with database.get_db_connection() as conn:
+                self.assertIsNone(
+                    conn.execute(
+                        "SELECT 1 FROM documents WHERE id='too-late'"
+                    ).fetchone()
+                )
+            self.assertEqual(upload_lifecycle.purge_failed_uploads(), 0)
+
+    def _load_document_pipeline(self):
+        """Run real ingestion/vector code with only provider calls replaced."""
+        chroma = types.ModuleType("chromadb")
+        setattr(chroma, "PersistentClient", Mock())
+        embedding = types.ModuleType("app.services.embedding_service")
+        embedder = Mock()
+        embedder.embed_batch.side_effect = lambda texts: [[1.0, 0.0] for _ in texts]
+        setattr(embedding, "embedding_service", embedder)
+        with (
+            patch.dict(
+                sys.modules, {"chromadb": chroma, embedding.__name__: embedding}
+            ),
+            patch.multiple(
+                settings,
+                VECTOR_STORE_TYPE="chroma",
+                CHUNK_SIZE=800,
+                CHUNK_OVERLAP=150,
+                create=True,
+            ),
+        ):
+            repository = runpy.run_path(
+                str(
+                    Path(__file__).resolve().parents[1]
+                    / "app/repositories/vector_store.py"
+                )
+            )["vector_store_repo"]
+            vector_module = types.ModuleType("app.repositories.vector_store")
+            setattr(vector_module, "vector_store_repo", repository)
+            with patch.dict(sys.modules, {vector_module.__name__: vector_module}):
+                rag = runpy.run_path(
+                    str(
+                        Path(__file__).resolve().parents[1]
+                        / "app/services/rag_service.py"
+                    )
+                )["rag_service"]
+        return rag, repository, embedder
+
+    def test_local_vector_index_and_search_execute_runtime_type_casts(self):
+        _, repository, _ = self._load_document_pipeline()
+        metadata = {
+            "document_id": "runtime-document",
+            "page_number": 1,
+            "chunk_index": 0,
+        }
+        repository.add_chunks(
+            "runtime-document",
+            ["runtime-chunk"],
+            [[1.0, 0.0]],
+            ["Searchable fixture text"],
+            [metadata],
+        )
+        repository.collection.add.assert_called_once_with(
+            ids=["runtime-chunk"],
+            embeddings=[[1.0, 0.0]],
+            documents=["Searchable fixture text"],
+            metadatas=[metadata],
+        )
+        repository.collection.query.return_value = {
+            "ids": [["runtime-chunk"]],
+            "documents": [["Searchable fixture text"]],
+            "metadatas": [[metadata]],
+            "distances": [[0.0]],
+        }
+        for document_ids, where in (
+            (None, None),
+            (["runtime-document"], {"document_id": "runtime-document"}),
+            (
+                ["runtime-document", "another"],
+                {"document_id": {"$in": ["runtime-document", "another"]}},
+            ),
+        ):
+            result = repository.similarity_search([1.0, 0.0], document_ids=document_ids)
+            self.assertEqual(len(result), 1)
+            self.assertEqual(result[0]["text"], "Searchable fixture text")
+            self.assertEqual(
+                repository.collection.query.call_args.kwargs["where"], where
+            )
+
+    def test_short_txt_and_pdf_upload_through_real_ingestion_and_vector_code(self):
+        from app.api.v1.endpoints import document
+
+        rag, repository, embedder = self._load_document_pipeline()
+        cases = [
+            ("short.txt", b"test", "text/plain", "test"),
+            ("short.pdf", self.pdf_fixture("test"), "application/pdf", "test"),
+            (
+                "regular.txt",
+                b"Normal document text for indexing.",
+                "text/plain",
+                "Normal document text for indexing.",
+            ),
+        ]
+        with patch.object(document, "rag_service", rag):
+            for filename, content, mime_type, expected_text in cases:
+                with self.subTest(filename=filename):
+                    response = self.request(
+                        "POST",
+                        "/document/upload",
+                        self.token,
+                        data={"session_id": "alice-session"},
+                        files={"file": (filename, content, mime_type)},
+                    )
+                    self.assertEqual(response.status_code, 201, response.text)
+                    uploaded = response.json()["document"]
+                    self.assertEqual(uploaded["total_chunks"], 1)
+                    self.assertEqual(
+                        repository.collection.add.call_args.kwargs["documents"],
+                        [expected_text],
+                    )
+                    self.assertEqual(
+                        embedder.embed_batch.call_args.args[0], [expected_text]
+                    )
+                    self.assertEqual(
+                        self.request(
+                            "GET", uploaded["storage_url"].removeprefix("/api/v1")
+                        ).content,
+                        content,
+                    )
+
+    def test_chunking_keeps_short_text_and_ignores_only_blank_content(self):
+        rag, _, _ = self._load_document_pipeline()
+        chunks = rag.recursive_character_chunking([(" \n\t", 1), ("test", 2), ("a", 3)])
+        self.assertEqual(
+            [
+                (chunk["text"], chunk["page_number"], chunk["chunk_index"])
+                for chunk in chunks
+            ],
+            [("test", 2, 0), ("a", 3, 1)],
+        )
+        self.assertEqual(rag.recursive_character_chunking([(" \n\t", 1)]), [])
+
+    def _exercise_legacy_cleanup_migration(self, *, legacy_index: bool):
+        from app.services import session_lifecycle
+
+        requested_at = "2000-01-01T00:00:00"
+        completed_at = "2000-01-02T00:00:00"
+        with database.get_db_connection(write=True) as conn:
+            conn.execute("DROP TABLE session_deletions")
+            conn.execute("""CREATE TABLE session_deletions (
+                session_id TEXT PRIMARY KEY, user_id TEXT NOT NULL,
+                requested_at TEXT NOT NULL, completed_at TEXT
+            )""")
+            if legacy_index:
+                conn.execute(
+                    "CREATE INDEX idx_deletions_pending ON session_deletions(completed_at,requested_at)"
+                )
+            conn.execute(
+                "INSERT INTO session_deletions VALUES (?,?,?,NULL)",
+                ("alice-session", self.alice.id, requested_at),
+            )
+            conn.execute(
+                "INSERT INTO session_deletions VALUES (?,?,?,?)",
+                ("previously-deleted", self.alice.id, requested_at, completed_at),
+            )
+        database.init_db()
+        database.init_db()
+        with database.get_db_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM session_deletions ORDER BY session_id"
+            ).fetchall()
+            self.assertEqual(
+                [
+                    (
+                        row["session_id"],
+                        row["user_id"],
+                        row["requested_at"],
+                        row["completed_at"],
+                        row["last_attempt_at"],
+                    )
+                    for row in rows
+                ],
+                [
+                    ("alice-session", self.alice.id, requested_at, None, 0),
+                    (
+                        "previously-deleted",
+                        self.alice.id,
+                        requested_at,
+                        completed_at,
+                        0,
+                    ),
+                ],
+            )
+            index = conn.execute("PRAGMA index_info(idx_deletions_pending)").fetchall()
+            self.assertEqual(
+                [row["name"] for row in index],
+                ["completed_at", "last_attempt_at", "requested_at"],
+            )
+        self.assertEqual(session_lifecycle.purge_expired_sessions(), 1)
+        self.assertEqual(session_lifecycle.purge_expired_sessions(), 0)
+        self.assertEqual(
+            self.request("GET", "/media/assets", self.token).json()["total"], 2
+        )
+        self.assertTrue((settings.UPLOAD_IMAGE_DIR / "fixture.png").exists())
+        self.assertTrue((root / "documents/alice-session/fixture.txt").exists())
+
+    def test_legacy_cleanup_schema_migrates_with_existing_pending_index(self):
+        self._exercise_legacy_cleanup_migration(legacy_index=True)
+
+    def test_legacy_cleanup_schema_migrates_without_pending_index(self):
+        self._exercise_legacy_cleanup_migration(legacy_index=False)
+
+    def test_normal_deletion_preserves_mixed_r2_assets_with_missing_storage_metadata(
+        self,
+    ):
+        from app.services import session_lifecycle
+        from app.services.chat_history_service import chat_history_service
+        from app.services.media_service import media_service
+        from app.services.storage_service import storage_service
+
+        objects = {}
+        client = Mock()
+
+        def put_object(**kwargs):
+            objects[kwargs["Key"]] = kwargs["Body"]
+
+        def delete_object(**kwargs):
+            objects.pop(kwargs["Key"], None)
+
+        client.put_object.side_effect = put_object
+        client.delete_object.side_effect = delete_object
+        with (
+            patch.object(storage_service, "_initialized", True),
+            patch.object(storage_service, "_s3_client", client),
+            patch.object(
+                settings, "CLOUDFLARE_R2_PUBLIC_URL", "https://storage.fixture.invalid"
+            ),
+        ):
+            uploaded = media_service.save_uploaded_media(
+                self.image_fixture(), "uploaded.png", "alice-session", self.alice.id
+            )
+            generated = media_service.save_generated_image(
+                self.image_fixture(), "fixture", "alice-session"
+            )
+            for extension in ("pdf", "txt"):
+                key = f"documents/alice-session/review.{extension}"
+                content = (
+                    self.pdf_fixture("Retention fixture")
+                    if extension == "pdf"
+                    else b"fixture"
+                )
+                url, _ = storage_service.upload_file(
+                    content, key, session_id="alice-session"
+                )
+                chat_history_service.save_document(
+                    "review-" + extension,
+                    self.alice.id,
+                    "alice-session",
+                    "review." + extension,
+                    extension,
+                    len(content),
+                    1,
+                    url,
+                )
+            # An external write can finish before its SQL metadata is registered.
+            unknown_key = "media/uploads/unregistered-fixture.png"
+            storage_service.upload_file(
+                self.image_fixture(), unknown_key, session_id="alice-session"
+            )
+            with database.get_db_connection(write=True) as conn:
+                conn.execute(
+                    "UPDATE documents SET storage_url='' WHERE id='review-pdf'"
+                )
+                conn.execute(
+                    "UPDATE media_assets SET user_id='' WHERE id=?", (generated.id,)
+                )
+            original_objects = dict(objects)
+            self.assertEqual(
+                self.request(
+                    "DELETE", "/session/alice-session", self.token
+                ).status_code,
+                200,
+            )
+            self.assertEqual(objects, original_objects)
+            client.delete_object.assert_not_called()
+            library = self.request("GET", "/media/assets", self.token).json()
+            self.assertEqual(
+                {item["id"] for item in library["items"]},
+                {
+                    "image",
+                    "document",
+                    uploaded.id,
+                    generated.id,
+                    "review-pdf",
+                    "review-txt",
+                },
+            )
+            for asset_id, kind in (
+                (uploaded.id, "media"),
+                (generated.id, "media"),
+                ("review-pdf", "document"),
+                ("review-txt", "document"),
+            ):
+                assert asset_id is not None
+                row = security.check_asset(asset_id, self.principal, kind)
+                self.assertIsNone(row["session_id"])
+                self.assertEqual(row["user_id"], self.alice.id)
+            self.assertEqual(session_lifecycle.purge_expired_sessions(), 0)
+            self.assertEqual(objects, original_objects)
+            client.delete_object.assert_not_called()
+        with database.get_db_connection() as conn:
+            # Keep uncertain object ownership available for separately reviewed recovery.
+            self.assertIsNotNone(
+                conn.execute(
+                    "SELECT 1 FROM session_resources WHERE session_id='alice-session' AND kind='r2' AND resource_key=?",
+                    (unknown_key,),
+                ).fetchone()
+            )
+
+    def test_normal_assets_stay_visible_when_scratch_cleanup_fails_and_retries(self):
+        from app.services import session_lifecycle
+        from app.services.storage_service import storage_service
+
+        scratch = settings.UPLOAD_DIR / "normal-pending-scratch.txt"
+        scratch.write_bytes(b"fixture")
+        session_lifecycle.register_resource(
+            "alice-session", "local", "uploads/normal-pending-scratch.txt"
+        )
+        with patch.object(
+            storage_service,
+            "delete_owned_file",
+            side_effect=OSError("fixture busy file"),
+        ) as delete:
+            self.assertEqual(
+                self.request(
+                    "DELETE", "/session/alice-session", self.token
+                ).status_code,
+                200,
+            )
+            delete.assert_called_once_with(
+                "uploads/normal-pending-scratch.txt", backend="local"
+            )
+        self.assertEqual(
+            self.request("GET", "/media/assets", self.token).json()["total"], 2
+        )
+        self.assertEqual(
+            self.request("GET", "/media/assets", self.other_token).json()["total"], 0
+        )
+        with database.get_db_connection() as conn:
+            self.assertIsNone(
+                conn.execute("SELECT completed_at FROM session_deletions").fetchone()[0]
+            )
+        self.assertEqual(session_lifecycle.purge_expired_sessions(), 1)
+        self.assertEqual(session_lifecycle.purge_expired_sessions(), 0)
+        self.assertFalse(scratch.exists())
+        self.assertTrue((settings.UPLOAD_IMAGE_DIR / "fixture.png").exists())
+        self.assertTrue((root / "documents/alice-session/fixture.txt").exists())
+        self.assertEqual(
+            self.request("GET", "/media/assets", self.token).json()["total"], 2
+        )
+
+    def test_normal_assets_stay_visible_while_an_external_write_finishes(self):
+        from app.services import session_lifecycle
+        from app.services.storage_service import storage_service
+
+        with session_lifecycle.resource_operation("alice-session"):
+            session_lifecycle.register_resource(
+                "alice-session", "r2", "media/uploads/inflight-fixture.png"
+            )
+            self.assertEqual(
+                self.request(
+                    "DELETE", "/session/alice-session", self.token
+                ).status_code,
+                200,
+            )
+            self.assertEqual(
+                self.request("GET", "/media/assets", self.token).json()["total"], 2
+            )
+            with database.get_db_connection() as conn:
+                self.assertIsNone(
+                    conn.execute(
+                        "SELECT completed_at FROM session_deletions"
+                    ).fetchone()[0]
+                )
+        with patch.object(storage_service, "delete_owned_file") as delete:
+            self.assertEqual(session_lifecycle.purge_expired_sessions(), 1)
+            delete.assert_not_called()
+        self.assertEqual(
+            self.request("GET", "/media/assets", self.token).json()["total"], 2
+        )
+
+    def test_retry_repairs_previous_pending_normal_deletion_without_r2_access(self):
+        from app.services import session_lifecycle
+        from app.services.storage_service import storage_service
+
+        session_lifecycle.register_resource(
+            "alice-session", "r2", "media/uploads/unknown-fixture.png"
+        )
+        with database.get_db_connection(write=True) as conn:
+            conn.execute(
+                "UPDATE documents SET storage_url='https://old-storage.fixture.invalid/file.txt' WHERE id='document'"
+            )
+            conn.execute(
+                "INSERT INTO session_deletions (session_id,user_id,requested_at) VALUES (?,?,?)",
+                ("alice-session", self.alice.id, session_lifecycle.utc_now()),
+            )
+        database.init_db()
+        with patch.object(storage_service, "delete_owned_file") as delete:
+            self.assertEqual(session_lifecycle.purge_expired_sessions(), 1)
+            delete.assert_not_called()
+        self.assertEqual(
+            self.request("GET", "/media/assets", self.token).json()["total"], 2
+        )
+
+    def test_normal_deletion_preserves_unregistered_uploads_but_cleans_scratch(self):
+        from app.services import session_lifecycle
+        from app.services.storage_service import storage_service
+
+        key = "media/uploads/unregistered-local.png"
+        storage_service.upload_file(
+            self.image_fixture(), key, session_id="alice-session"
+        )
+        scratch = settings.UPLOAD_DIR / "normal-scratch.txt"
+        scratch.write_bytes(b"fixture")
+        session_lifecycle.register_resource(
+            "alice-session", "local", "uploads/normal-scratch.txt"
+        )
+        self.assertTrue(session_lifecycle.request_deletion("alice-session"))
+        self.assertTrue((root / key).exists())
+        self.assertFalse(scratch.exists())
+        self.assertEqual(session_lifecycle.purge_expired_sessions(), 0)
+
+    def test_normal_chat_deletion_preserves_library_and_document_vectors(self):
+        from app.repositories.session_store import session_store_repo
+        from app.services.chat_history_service import chat_history_service
+        from app.services.session_lifecycle import register_resource
+
+        chat_history_service.save_message("alice-session", "user", "Disposable message")
+        session_store_repo.get_or_create_session("alice-session")
+        security.ensure_session("other-chat", self.principal)
+        other_chat = session_store_repo.get_or_create_session("other-chat")
+        other_chat.document_ids.append("document")
+        register_resource("alice-session", "vector", "document")
+        for kind in ("local", "r2"):
+            register_resource("alice-session", kind, "media/uploads/fixture.png")
+            register_resource(
+                "alice-session", kind, "documents/alice-session/fixture.txt"
+            )
+        # Older generated assets can have only a session owner.
+        with database.get_db_connection(write=True) as conn:
+            conn.execute("UPDATE media_assets SET user_id=NULL WHERE id='image'")
+        with patch.object(vectors, "delete_document") as delete_vectors:
+            response = self.request("DELETE", "/session/alice-session", self.token)
+            self.assertEqual(response.status_code, 200)
+            delete_vectors.assert_not_called()
+        for asset_id, kind in (("image", "media"), ("document", "document")):
+            row = security.check_asset(asset_id, self.principal, kind)
+            self.assertIsNone(row["session_id"])
+            self.assertEqual(row["user_id"], self.alice.id)
+        self.assertTrue((settings.UPLOAD_IMAGE_DIR / "fixture.png").exists())
+        self.assertTrue((root / "documents/alice-session/fixture.txt").exists())
+        self.assertIsNotNone(session_store_repo.get_document_metadata("document"))
+        self.assertNotIn("alice-session", session_store_repo._sessions)
+        self.assertIn("document", other_chat.document_ids)
+        self.assertEqual(
+            self.request("GET", "/media/assets", self.token).json()["total"], 2
+        )
+        with database.get_db_connection() as conn:
+            self.assertIsNone(
+                conn.execute(
+                    "SELECT 1 FROM messages WHERE session_id='alice-session'"
+                ).fetchone()
+            )
+        self.assertEqual(
+            self.request("GET", "/media/assets", self.other_token).json()["total"], 0
+        )
+
+    def test_temporary_deletion_removes_files_vectors_sql_and_cache(self):
+        from app.repositories.session_store import session_store_repo
+        from app.services.chat_history_service import chat_history_service
+
+        with database.get_db_connection(write=True) as conn:
+            conn.execute(
+                "UPDATE chat_sessions SET is_temporary=1 WHERE id='alice-session'"
+            )
+        session_store_repo.get_or_create_session("alice-session")
+        chat_history_service.save_message("alice-session", "user", "Temporary message")
+        security.download_url("image", self.principal)
+        security.download_url("document", self.principal, "document")
+        self.assertEqual(
+            self.request("GET", "/media/assets", self.token).json()["total"], 0
+        )
+        with patch.object(vectors, "delete_document") as delete_vectors:
+            self.assertEqual(
+                self.request(
+                    "DELETE", "/session/alice-session", self.token
+                ).status_code,
+                200,
+            )
+            delete_vectors.assert_called_once_with("document", raise_on_error=True)
+        self.assertFalse((settings.UPLOAD_IMAGE_DIR / "fixture.png").exists())
+        self.assertFalse((root / "documents/alice-session/fixture.txt").exists())
+        self.assertNotIn("alice-session", session_store_repo._sessions)
+        self.assertNotIn("document", session_store_repo._documents)
+        with database.get_db_connection() as conn:
+            for table in (
+                "chat_sessions",
+                "messages",
+                "documents",
+                "media_assets",
+                "session_resources",
+                "download_tickets",
+            ):
+                self.assertEqual(
+                    conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0], 0
+                )
+
+    def test_deleted_chat_cannot_be_recreated_or_receive_late_writes(self):
+        from fastapi import HTTPException
+
+        from app.repositories.session_store import session_store_repo
+        from app.services.chat_history_service import chat_history_service
+        from app.services.media_service import media_service
+
+        self.assertEqual(
+            self.request("DELETE", "/session/alice-session", self.token).status_code,
+            200,
+        )
+        for operation in (
+            lambda: security.ensure_session("alice-session", self.principal),
+            lambda: chat_history_service.create_session(self.alice.id, "alice-session"),
+            lambda: chat_history_service.save_message(
+                "alice-session", "assistant", "late response"
+            ),
+            lambda: session_store_repo.record_message(
+                "alice-session", "assistant", "late response"
+            ),
+            lambda: media_service.save_uploaded_media(
+                self.image_fixture(), "late.png", "alice-session", self.alice.id
+            ),
+        ):
+            with self.assertRaises(HTTPException) as caught:
+                operation()
+            self.assertEqual(caught.exception.status_code, 404)
+        self.assertEqual(
+            self.request(
+                "POST",
+                "/chat/stream",
+                self.token,
+                json={"session_id": "alice-session", "message": "late"},
+            ).status_code,
+            404,
+        )
+
+    def test_failed_temporary_cleanup_is_hidden_and_retried_after_restart(self):
+        from app.repositories.session_store import session_store_repo
+        from app.services import session_lifecycle
+
+        with database.get_db_connection(write=True) as conn:
+            conn.execute(
+                "UPDATE chat_sessions SET is_temporary=1 WHERE id='alice-session'"
+            )
+        with patch.object(
+            vectors, "delete_document", side_effect=RuntimeError("fixture outage")
+        ):
+            self.assertEqual(
+                self.request(
+                    "DELETE", "/session/alice-session", self.token
+                ).status_code,
+                200,
+            )
+        self.assertEqual(
+            self.request(
+                "GET", "/session/alice-session/history", self.token
+            ).status_code,
+            404,
+        )
+        self.assertEqual(
+            self.request("GET", "/media/assets", self.token).json()["total"], 0
+        )
+        with database.get_db_connection() as conn:
+            self.assertIsNone(
+                conn.execute("SELECT completed_at FROM session_deletions").fetchone()[0]
+            )
+            self.assertGreater(
+                conn.execute("SELECT COUNT(*) FROM session_resources").fetchone()[0], 0
+            )
+        session_store_repo._sessions.clear()
+        session_store_repo._documents.clear()
+        database.init_db()  # Existing intents survive startup/migration.
+        with patch.object(vectors, "delete_document"):
+            self.assertEqual(session_lifecycle.purge_expired_sessions(), 1)
+            self.assertEqual(session_lifecycle.purge_expired_sessions(), 0)
+        with database.get_db_connection() as conn:
+            self.assertIsNotNone(
+                conn.execute("SELECT completed_at FROM session_deletions").fetchone()[0]
+            )
+
+    def test_expiry_cleans_temporary_files_but_preserves_other_chat_library(self):
+        from app.repositories.session_store import session_store_repo
+        from app.services import session_lifecycle
+
+        security.ensure_session("expires", self.principal, is_temporary=True)
+        session_store_repo.get_or_create_session("expires").document_ids.append(
+            "document"
+        )
+        with database.get_db_connection(write=True) as conn:
+            conn.execute(
+                "UPDATE media_assets SET session_id='expires' WHERE id='image'"
+            )
+            conn.execute(
+                "UPDATE chat_sessions SET expires_at='2000-01-01T00:00:00' WHERE id='expires'"
+            )
+        with patch.object(vectors, "delete_document") as delete_vectors:
+            self.assertEqual(session_lifecycle.purge_expired_sessions(), 1)
+            delete_vectors.assert_not_called()
+        self.assertFalse((settings.UPLOAD_IMAGE_DIR / "fixture.png").exists())
+        self.assertTrue((root / "documents/alice-session/fixture.txt").exists())
+        security.check_asset("document", self.principal, "document")
+
+    def test_cleanup_waits_for_inflight_external_writes(self):
+        import threading
+
+        from app.services import session_lifecycle
+
+        with database.get_db_connection(write=True) as conn:
+            conn.execute(
+                "UPDATE chat_sessions SET is_temporary=1 WHERE id='alice-session'"
+            )
+        ready, finish = threading.Event(), threading.Event()
+        late_file = root / "media/uploads/late-write.png"
+
+        def upload():
+            with session_lifecycle.resource_operation("alice-session"):
+                session_lifecycle.register_resource(
+                    "alice-session", "local", "media/uploads/late-write.png"
+                )
+                ready.set()
+                if not finish.wait(10):
+                    raise AssertionError("Test did not release upload")
+                late_file.write_bytes(b"fixture")
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pending = pool.submit(upload)
+            try:
+                self.assertTrue(ready.wait(10))
+                self.assertTrue(session_lifecycle.request_deletion("alice-session"))
+                with database.get_db_connection() as conn:
+                    self.assertIsNone(
+                        conn.execute(
+                            "SELECT completed_at FROM session_deletions"
+                        ).fetchone()[0]
+                    )
+            finally:
+                finish.set()
+            pending.result(timeout=10)
+        self.assertTrue(late_file.exists())
+        self.assertEqual(session_lifecycle.purge_expired_sessions(), 1)
+        self.assertFalse(late_file.exists())
+
+    def test_crashed_upload_resources_and_expired_leases_are_cleaned(self):
+        from app.services import session_lifecycle
+
+        with database.get_db_connection(write=True) as conn:
+            conn.execute(
+                "UPDATE chat_sessions SET is_temporary=1 WHERE id='alice-session'"
+            )
+        orphan = root / "media/uploads/orphan.png"
+        orphan.write_bytes(b"fixture")
+        scratch = settings.UPLOAD_DIR / "crashed-scratch.txt"
+        scratch.write_bytes(b"fixture")
+        session_lifecycle.register_resource(
+            "alice-session", "local", "media/uploads/orphan.png"
+        )
+        session_lifecycle.register_resource(
+            "alice-session", "local", "uploads/crashed-scratch.txt"
+        )
+        with database.get_db_connection(write=True) as conn:
+            conn.execute(
+                "INSERT INTO session_operations VALUES ('crashed','alice-session',0)"
+            )
+        self.assertTrue(session_lifecycle.request_deletion("alice-session"))
+        self.assertFalse(orphan.exists())
+        self.assertFalse(scratch.exists())
+        self.assertFalse((settings.UPLOAD_IMAGE_DIR / "fixture.png").exists())
+
+    def test_r2_cleanup_failure_keeps_retry_intent_and_deletes_local_fallback(self):
+        from app.services import session_lifecycle
+        from app.services.storage_service import storage_service
+
+        with database.get_db_connection(write=True) as conn:
+            conn.execute(
+                "UPDATE chat_sessions SET is_temporary=1 WHERE id='alice-session'"
+            )
+        client = Mock()
+        client.delete_object.side_effect = RuntimeError("fixture R2 unavailable")
+        with (
+            patch.object(storage_service, "_initialized", True),
+            patch.object(storage_service, "_s3_client", client),
+        ):
+            self.assertTrue(session_lifecycle.request_deletion("alice-session"))
+            with database.get_db_connection() as conn:
+                self.assertGreater(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM session_resources WHERE kind='r2'"
+                    ).fetchone()[0],
+                    0,
+                )
+            client.delete_object.side_effect = None
+            self.assertEqual(session_lifecycle.purge_expired_sessions(), 1)
+        self.assertFalse((settings.UPLOAD_IMAGE_DIR / "fixture.png").exists())
+        self.assertFalse((root / "documents/alice-session/fixture.txt").exists())
+        keys = {call.kwargs["Key"] for call in client.delete_object.call_args_list}
+        self.assertEqual(
+            keys, {"media/uploads/fixture.png", "documents/alice-session/fixture.txt"}
+        )
+
+    def test_missing_r2_configuration_does_not_discard_cleanup_intent(self):
+        from app.services import session_lifecycle
+        from app.services.storage_service import storage_service
+
+        with database.get_db_connection(write=True) as conn:
+            conn.execute(
+                "UPDATE chat_sessions SET is_temporary=1 WHERE id='alice-session'"
+            )
+        session_lifecycle.register_resource(
+            "alice-session", "r2", "media/uploads/cloud-only.png"
+        )
+        self.assertTrue(session_lifecycle.request_deletion("alice-session"))
+        with database.get_db_connection() as conn:
+            self.assertIsNone(
+                conn.execute("SELECT completed_at FROM session_deletions").fetchone()[0]
+            )
+        client = Mock()
+        with (
+            patch.object(storage_service, "_initialized", True),
+            patch.object(storage_service, "_s3_client", client),
+        ):
+            self.assertEqual(session_lifecycle.purge_expired_sessions(), 1)
+
+    def test_guest_upload_without_chat_gets_expiry_and_never_enters_library(self):
+        from app.services import session_lifecycle
+
+        guest = security.create_guest()
+        response = self.request(
+            "POST",
+            "/media/upload",
+            guest["access_token"],
+            files={"file": ("guest.png", self.image_fixture(), "image/png")},
+        )
+        self.assertEqual(response.status_code, 201)
+        with database.get_db_connection(write=True) as conn:
+            row = conn.execute(
+                "SELECT session_id,file_path FROM media_assets WHERE id=?",
+                (response.json()["id"],),
+            ).fetchone()
+            self.assertIsNotNone(row["session_id"])
+            session = conn.execute(
+                "SELECT is_temporary,expires_at FROM chat_sessions WHERE id=?",
+                (row["session_id"],),
+            ).fetchone()
+            self.assertEqual(session["is_temporary"], 1)
+            self.assertTrue(session["expires_at"])
+            conn.execute(
+                "UPDATE chat_sessions SET expires_at='2000-01-01' WHERE id=?",
+                (row["session_id"],),
+            )
+        self.assertEqual(
+            self.request("GET", "/media/assets", guest["access_token"]).json()["total"],
+            0,
+        )
+        self.assertEqual(session_lifecycle.purge_expired_sessions(), 1)
+        self.assertFalse((root / row["file_path"]).exists())
+
+    def test_temporary_fallback_requests_preserve_retention(self):
+        response = self.request(
+            "POST",
+            "/chat/stream",
+            self.token,
+            json={
+                "session_id": "temp-fallback",
+                "message": "fixture",
+                "is_temporary": True,
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        response = self.request(
+            "POST",
+            "/media/upload",
+            self.token,
+            data={"session_id": "upload-fallback", "is_temporary": "true"},
+            files={"file": ("fixture.png", self.image_fixture(), "image/png")},
+        )
+        self.assertEqual(response.status_code, 201)
+        with database.get_db_connection() as conn:
+            for session_id in ("temp-fallback", "upload-fallback"):
+                row = conn.execute(
+                    "SELECT is_temporary,expires_at FROM chat_sessions WHERE id=?",
+                    (session_id,),
+                ).fetchone()
+                self.assertEqual(row["is_temporary"], 1)
+                self.assertTrue(row["expires_at"])
+
+    def test_legacy_document_migration_preserves_rows_and_is_repeatable(self):
+        with database.get_db_connection(write=True) as conn:
+            conn.execute("""CREATE TABLE legacy_documents (
+                id TEXT PRIMARY KEY,user_id TEXT,session_id TEXT NOT NULL,
+                filename TEXT NOT NULL,file_type TEXT NOT NULL,file_size_bytes INTEGER NOT NULL,
+                total_chunks INTEGER NOT NULL,storage_url TEXT DEFAULT '',created_at TEXT NOT NULL,
+                FOREIGN KEY(session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE)""")
+            conn.execute("INSERT INTO legacy_documents SELECT * FROM documents")
+            conn.execute("DROP TABLE documents")
+            conn.execute("ALTER TABLE legacy_documents RENAME TO documents")
+        database.init_db()
+        database.init_db()
+        with database.get_db_connection(write=True) as conn:
+            row = conn.execute("SELECT * FROM documents WHERE id='document'").fetchone()
+            self.assertEqual(row["filename"], "fixture.txt")
+            columns = conn.execute("PRAGMA table_info(documents)").fetchall()
+            self.assertEqual(
+                next(row["notnull"] for row in columns if row["name"] == "session_id"),
+                0,
+            )
+            conn.execute("UPDATE documents SET session_id=NULL WHERE id='document'")
+
+    def test_object_deletion_rejects_paths_outside_owned_storage(self):
+        from app.services.storage_service import storage_service
+
+        target = root / "keep.txt"
+        target.write_bytes(b"fixture")
+        for key in (
+            str(target),
+            "../keep.txt",
+            "media/../../keep.txt",
+            "https://other.invalid/media/uploads/fixture.png",
+        ):
+            self.assertFalse(storage_service.delete_file(key))
+        self.assertTrue(target.exists())
+        self.assertTrue(
+            storage_service.delete_file("media/uploads/already-missing.png")
+        )
+
+    def test_other_worker_cache_is_pruned_without_deleting_live_library_metadata(self):
+        from app.repositories.session_store import session_store_repo
+        from app.schemas.chat import SessionState
+        from app.services import session_lifecycle
+
+        stale = SessionState(
+            session_id="removed-by-other-worker",
+            mode="AUTO",
+            document_ids=[],
+            created_at="2000-01-01T00:00:00",
+        )
+        session_store_repo._sessions[stale.session_id] = stale
+        metadata = session_store_repo.get_document_metadata("document")
+        assert metadata is not None
+        session_store_repo._documents["stale-document"] = metadata
+        session_store_repo.get_or_create_session("alice-session")
+        session_lifecycle.prune_local_cache()
+        self.assertNotIn(stale.session_id, session_store_repo._sessions)
+        self.assertNotIn("stale-document", session_store_repo._documents)
+        self.assertIn("alice-session", session_store_repo._sessions)
+        self.assertIn("document", session_store_repo._documents)
+
+    def test_vector_deletion_surfaces_provider_failures_for_cleanup_retries(self):
+        chroma = types.ModuleType("chromadb")
+        setattr(chroma, "PersistentClient", Mock())
+        with (
+            patch.dict(sys.modules, {"chromadb": chroma}),
+            patch.multiple(
+                settings, VECTOR_STORE_TYPE="chroma", PINECONE_API_KEY="", create=True
+            ),
+        ):
+            repository = runpy.run_path(
+                str(
+                    Path(__file__).resolve().parents[1]
+                    / "app/repositories/vector_store.py"
+                )
+            )["vector_store_repo"]
+        repository.index = Mock()
+        for cloud in (False, True):
+            repository.use_pinecone = cloud
+            provider = repository.index if cloud else repository.collection
+            provider.delete.side_effect = RuntimeError("fixture provider failure")
+            with self.assertRaises(RuntimeError):
+                repository.delete_document("owned-document", raise_on_error=True)
+            provider.delete.side_effect = None
+            repository.delete_document("owned-document", raise_on_error=True)
+            provider.delete.assert_called_with(
+                **(
+                    {"filter": {"document_id": {"$eq": "owned-document"}}}
+                    if cloud
+                    else {"where": {"document_id": "owned-document"}}
+                )
+            )
+
+    def test_document_migration_failure_rolls_back_without_losing_original_rows(self):
+        from contextlib import contextmanager
+
+        with database.get_db_connection(write=True) as conn:
+            conn.execute("""CREATE TABLE legacy_documents (
+                id TEXT PRIMARY KEY,user_id TEXT,session_id TEXT NOT NULL,
+                filename TEXT NOT NULL,file_type TEXT NOT NULL,file_size_bytes INTEGER NOT NULL,
+                total_chunks INTEGER NOT NULL,storage_url TEXT DEFAULT '',created_at TEXT NOT NULL)""")
+            conn.execute("INSERT INTO legacy_documents SELECT * FROM documents")
+            conn.execute("DROP TABLE documents")
+            conn.execute("ALTER TABLE legacy_documents RENAME TO documents")
+        original = database.get_db_connection
+
+        class FailingCursor:
+            def __init__(self, cursor):
+                self.cursor = cursor
+
+            def execute(self, sql, *args):
+                if sql == "ALTER TABLE documents_retained RENAME TO documents":
+                    raise RuntimeError(
+                        "fixture migration failure after original table drop"
+                    )
+                return self.cursor.execute(sql, *args)
+
+            def __getattr__(self, name):
+                return getattr(self.cursor, name)
+
+        class Connection:
+            def __init__(self, connection):
+                self.connection = connection
+
+            def cursor(self):
+                return FailingCursor(self.connection.cursor())
+
+            def __getattr__(self, name):
+                return getattr(self.connection, name)
+
+        @contextmanager
+        def failed_migration(**kwargs):
+            with original(**kwargs) as conn:
+                yield Connection(conn)
+
+        with (
+            patch.object(database, "get_db_connection", failed_migration),
+            self.assertRaises(RuntimeError),
+        ):
+            database.init_db()
+        with original() as conn:
+            self.assertEqual(
+                conn.execute(
+                    "SELECT filename FROM documents WHERE id='document'"
+                ).fetchone()[0],
+                "fixture.txt",
+            )
+            self.assertIsNone(
+                conn.execute(
+                    "SELECT name FROM sqlite_master WHERE name='documents_retained'"
+                ).fetchone()
+            )
+        database.init_db()
+
     def image_fixture(self, image_format="PNG", animated=False):
         from PIL import Image
 
         image = Image.new("RGB", (8, 8), "red")
         output = io.BytesIO()
         if animated:
-            image.save(output, format=image_format, save_all=True,
-                       append_images=[Image.new("RGB", (8, 8), "blue")], duration=50, loop=0)
+            image.save(
+                output,
+                format=image_format,
+                save_all=True,
+                append_images=[Image.new("RGB", (8, 8), "blue")],
+                duration=50,
+                loop=0,
+            )
         else:
             image.save(output, format=image_format)
         return output.getvalue()
@@ -107,10 +1424,16 @@ class SecurityTests(unittest.TestCase):
         writer = PdfWriter()
         for text in texts:
             page = writer.add_blank_page(width=612, height=792)
-            font = DictionaryObject({NameObject("/Type"): NameObject("/Font"),
-                                     NameObject("/Subtype"): NameObject("/Type1"),
-                                     NameObject("/BaseFont"): NameObject("/Helvetica")})
-            page[NameObject("/Resources")] = DictionaryObject({NameObject("/Font"): DictionaryObject({NameObject("/F1"): font})})
+            font = DictionaryObject(
+                {
+                    NameObject("/Type"): NameObject("/Font"),
+                    NameObject("/Subtype"): NameObject("/Type1"),
+                    NameObject("/BaseFont"): NameObject("/Helvetica"),
+                }
+            )
+            page[NameObject("/Resources")] = DictionaryObject(
+                {NameObject("/Font"): DictionaryObject({NameObject("/F1"): font})}
+            )
             stream = DecodedStreamObject()
             stream.set_data(f"BT /F1 12 Tf 72 720 Td ({text}) Tj ET".encode("ascii"))
             page[NameObject("/Contents")] = stream
@@ -122,26 +1445,51 @@ class SecurityTests(unittest.TestCase):
 
     def setUp(self):
         from app.repositories.session_store import session_store_repo
+
         session_store_repo._sessions.clear()
         session_store_repo._documents.clear()
         fixture_orchestrator.emit_media = False
-        database.DB_FILE = root / (self.__class__.__name__ + self._testMethodName + ".db")
+        database.DB_FILE = root / (
+            self.__class__.__name__ + self._testMethodName + ".db"
+        )
         database.init_db()
-        self.alice = user_service.register_user(UserRegisterRequest(
-            username="alice", email="alice@example.invalid", display_name="First Person", password="Durable!482Strong"))
-        self.bob = user_service.register_user(UserRegisterRequest(
-            username="bobby", email="bobby@example.invalid", display_name="Second Person", password="Durable!482Strong"))
+        self.alice = user_service.register_user(
+            UserRegisterRequest(
+                username="alice",
+                email="alice@example.invalid",
+                display_name="First Person",
+                password="Durable!482Strong",
+            )
+        )
+        self.bob = user_service.register_user(
+            UserRegisterRequest(
+                username="bobby",
+                email="bobby@example.invalid",
+                display_name="Second Person",
+                password="Durable!482Strong",
+            )
+        )
         self.token = security.issue_credentials(self.alice.id)["access_token"]
         self.other_token = security.issue_credentials(self.bob.id)["access_token"]
         self.principal = security.resolve_principal(security.digest(self.token))
         security.ensure_session("alice-session", self.principal)
         with database.get_db_connection() as conn:
-            conn.execute("INSERT INTO media_assets (id,user_id,session_id,filename,file_path,file_url,mime_type,created_at) "
-                         "VALUES ('image',?,'alice-session','fixture.png','media/uploads/fixture.png','/api/v1/media/uploads/fixture.png','image/png',?)",
-                         (self.alice.id, datetime.now(timezone.utc).replace(tzinfo=None).isoformat()))
-            conn.execute("INSERT INTO documents (id,user_id,session_id,filename,file_type,file_size_bytes,total_chunks,storage_url,created_at) "
-                         "VALUES ('document',?,'alice-session','fixture.txt','txt',7,1,'/api/v1/media/documents/alice-session/fixture.txt',?)",
-                         (self.alice.id, datetime.now(timezone.utc).replace(tzinfo=None).isoformat()))
+            conn.execute(
+                "INSERT INTO media_assets (id,user_id,session_id,filename,file_path,file_url,mime_type,created_at) "
+                "VALUES ('image',?,'alice-session','fixture.png','media/uploads/fixture.png','/api/v1/media/uploads/fixture.png','image/png',?)",
+                (
+                    self.alice.id,
+                    datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+                ),
+            )
+            conn.execute(
+                "INSERT INTO documents (id,user_id,session_id,filename,file_type,file_size_bytes,total_chunks,storage_url,created_at) "
+                "VALUES ('document',?,'alice-session','fixture.txt','txt',7,1,'/api/v1/media/documents/alice-session/fixture.txt',?)",
+                (
+                    self.alice.id,
+                    datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+                ),
+            )
         (settings.UPLOAD_IMAGE_DIR / "fixture.png").write_bytes(b"fixture-image")
         directory = root / "documents/alice-session"
         directory.mkdir(parents=True, exist_ok=True)
@@ -149,9 +1497,17 @@ class SecurityTests(unittest.TestCase):
 
     def request(self, method, path, token=None, **kwargs):
         async def send():
-            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://fixture.invalid") as client:
-                return await client.request(method, "/api/v1" + path,
-                                            headers={"Authorization": "Bearer " + token} if token else {}, **kwargs)
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app),
+                base_url="http://fixture.invalid",
+            ) as client:
+                return await client.request(
+                    method,
+                    "/api/v1" + path,
+                    headers={"Authorization": "Bearer " + token} if token else {},
+                    **kwargs,
+                )
+
         return asyncio.run(send())
 
     def test_lifespan_initializes_and_stops_background_cleanup(self):
@@ -168,9 +1524,13 @@ class SecurityTests(unittest.TestCase):
                 finally:
                     stopped.set()
 
-            with patch.object(main, "init_db") as initialize, patch.object(
-                main.chat_history_service, "purge_expired_temporary_sessions"
-            ) as purge, patch.object(main, "_periodic_temporary_cleanup", cleanup):
+            with (
+                patch.object(main, "init_db") as initialize,
+                patch.object(
+                    main.chat_history_service, "purge_expired_temporary_sessions"
+                ) as purge,
+                patch.object(main, "_periodic_temporary_cleanup", cleanup),
+            ):
                 async with app.router.lifespan_context(app):
                     await asyncio.wait_for(started.wait(), timeout=1)
                     initialize.assert_called_once_with()
@@ -180,121 +1540,261 @@ class SecurityTests(unittest.TestCase):
         asyncio.run(exercise())
 
     def test_anonymous_resource_matrix(self):
-        cases = [("GET", "/user/me", {}), ("PATCH", "/user/profile", {"json": {"user_id": self.alice.id}}),
-                 ("GET", "/user/avatar/" + self.alice.id, {}),
-                 ("GET", "/session/list?user_id=" + self.alice.id, {}),
-                 ("POST", "/session/create", {"json": {"user_id": self.alice.id}}),
-                 ("GET", "/session/alice-session/history", {}),
-                 ("PATCH", "/session/alice-session/title", {"json": {"title": "Changed"}}),
-                 ("PATCH", "/session/alice-session/pin", {"json": {"is_pinned": True}}),
-                 ("PATCH", "/session/alice-session/mode", {"json": {"mode": "AUTO"}}),
-                 ("DELETE", "/session/alice-session/messages", {}), ("DELETE", "/session/alice-session", {}),
-                 ("GET", "/document/list?session_id=alice-session", {}),
-                 ("GET", "/document/document/chunks", {}),
-                 ("DELETE", "/document/document?session_id=alice-session", {}),
-                 ("GET", "/media/assets", {}), ("GET", "/media/session/alice-session", {}),
-                 ("DELETE", "/media/assets/image", {}),
-                 ("GET", "/media/content/media/image", {}),
-                 ("POST", "/chat/stream", {"json": {"session_id": "alice-session", "message": "hello"}}),
-                 ("POST", "/document/upload", {"data": {"session_id": "alice-session"}, "files": {"file": ("fixture.txt", b"fixture")}}),
-                 ("POST", "/media/upload", {"files": {"file": ("fixture.png", b"fixture", "image/png")}}),
-                 ("POST", "/user/avatar", {"data": {"user_id": self.alice.id}, "files": {"file": ("fixture.png", b"fixture", "image/png")}}),
-                 ("DELETE", "/user/avatar?user_id=" + self.alice.id, {}),
-                 ("POST", "/user/change-password", {"json": {"user_id": self.alice.id, "old_password": "Durable!482Strong", "new_password": "Another!482Strong"}})]
+        cases = [
+            ("GET", "/user/me", {}),
+            ("PATCH", "/user/profile", {"json": {"user_id": self.alice.id}}),
+            ("GET", "/user/avatar/" + self.alice.id, {}),
+            ("GET", "/session/list?user_id=" + self.alice.id, {}),
+            ("POST", "/session/create", {"json": {"user_id": self.alice.id}}),
+            ("GET", "/session/alice-session/history", {}),
+            ("PATCH", "/session/alice-session/title", {"json": {"title": "Changed"}}),
+            ("PATCH", "/session/alice-session/pin", {"json": {"is_pinned": True}}),
+            ("PATCH", "/session/alice-session/mode", {"json": {"mode": "AUTO"}}),
+            ("DELETE", "/session/alice-session/messages", {}),
+            ("DELETE", "/session/alice-session", {}),
+            ("GET", "/document/list?session_id=alice-session", {}),
+            ("GET", "/document/document/chunks", {}),
+            ("DELETE", "/document/document?session_id=alice-session", {}),
+            ("GET", "/media/assets", {}),
+            ("GET", "/media/session/alice-session", {}),
+            ("DELETE", "/media/assets/image", {}),
+            ("GET", "/media/content/media/image", {}),
+            (
+                "POST",
+                "/chat/stream",
+                {"json": {"session_id": "alice-session", "message": "hello"}},
+            ),
+            (
+                "POST",
+                "/document/upload",
+                {
+                    "data": {"session_id": "alice-session"},
+                    "files": {"file": ("fixture.txt", b"fixture")},
+                },
+            ),
+            (
+                "POST",
+                "/media/upload",
+                {"files": {"file": ("fixture.png", b"fixture", "image/png")}},
+            ),
+            (
+                "POST",
+                "/user/avatar",
+                {
+                    "data": {"user_id": self.alice.id},
+                    "files": {"file": ("fixture.png", b"fixture", "image/png")},
+                },
+            ),
+            ("DELETE", "/user/avatar?user_id=" + self.alice.id, {}),
+            (
+                "POST",
+                "/user/change-password",
+                {
+                    "json": {
+                        "user_id": self.alice.id,
+                        "old_password": "Durable!482Strong",
+                        "new_password": "Another!482Strong",
+                    }
+                },
+            ),
+        ]
         for method, path, kwargs in cases:
             with self.subTest(path=path):
                 self.assertEqual(self.request(method, path, **kwargs).status_code, 401)
 
     def test_cross_user_matrix(self):
-        cases = [("GET", "/session/alice-session/history", {}),
-                 ("PATCH", "/session/alice-session/title", {"json": {"title": "Changed"}}),
-                 ("DELETE", "/session/alice-session", {}),
-                 ("GET", "/document/document/chunks", {}),
-                 ("DELETE", "/document/document?session_id=alice-session", {}),
-                 ("DELETE", "/media/assets/image", {}),
-                 ("GET", "/media/content/media/image", {}),
-                 ("GET", "/media/assets?session_id=alice-session", {}),
-                 ("GET", "/user/me?user_id=" + self.alice.id, {}),
-                 ("POST", "/session/create", {"json": {"session_id": "alice-session", "user_id": self.bob.id}}),
-                 ("POST", "/chat/stream", {"json": {"session_id": "alice-session", "message": "hello"}})]
+        cases = [
+            ("GET", "/session/alice-session/history", {}),
+            ("PATCH", "/session/alice-session/title", {"json": {"title": "Changed"}}),
+            ("DELETE", "/session/alice-session", {}),
+            ("GET", "/document/document/chunks", {}),
+            ("DELETE", "/document/document?session_id=alice-session", {}),
+            ("DELETE", "/media/assets/image", {}),
+            ("GET", "/media/content/media/image", {}),
+            ("GET", "/media/assets?session_id=alice-session", {}),
+            ("GET", "/user/me?user_id=" + self.alice.id, {}),
+            (
+                "POST",
+                "/session/create",
+                {"json": {"session_id": "alice-session", "user_id": self.bob.id}},
+            ),
+            (
+                "POST",
+                "/chat/stream",
+                {"json": {"session_id": "alice-session", "message": "hello"}},
+            ),
+        ]
         for method, path, kwargs in cases:
             with self.subTest(path=path):
-                self.assertIn(self.request(method, path, self.other_token, **kwargs).status_code, (403, 404))
+                self.assertIn(
+                    self.request(method, path, self.other_token, **kwargs).status_code,
+                    (403, 404),
+                )
 
     def test_owned_reads_and_default_library_are_scoped(self):
-        for path in ("/user/me", "/session/alice-session/history", "/document/document/chunks", "/media/session/alice-session"):
+        for path in (
+            "/user/me",
+            "/session/alice-session/history",
+            "/document/document/chunks",
+            "/media/session/alice-session",
+        ):
             self.assertEqual(self.request("GET", path, self.token).status_code, 200)
-        self.assertEqual(self.request("GET", "/media/assets", self.other_token).json()["total"], 0)
-        self.assertEqual(self.request("GET", "/media/assets", self.token).json()["total"], 2)
+        self.assertEqual(
+            self.request("GET", "/media/assets", self.other_token).json()["total"], 0
+        )
+        self.assertEqual(
+            self.request("GET", "/media/assets", self.token).json()["total"], 2
+        )
 
     def test_forged_and_expired_credentials(self):
         self.assertEqual(self.request("GET", "/user/me", "forged").status_code, 401)
         with database.get_db_connection() as conn:
-            conn.execute("UPDATE auth_sessions SET expires_at=0 WHERE token_hash=?", (self.principal.token_hash,))
+            conn.execute(
+                "UPDATE auth_sessions SET expires_at=0 WHERE token_hash=?",
+                (self.principal.token_hash,),
+            )
         self.assertEqual(self.request("GET", "/user/me", self.token).status_code, 401)
 
     def test_logout_revokes_download_and_api_credentials(self):
         url = security.download_url("image", self.principal)
-        self.assertEqual(self.request("GET", url.removeprefix("/api/v1")).content, b"fixture-image")
-        self.assertEqual(self.request("POST", "/user/logout", self.token).status_code, 200)
+        self.assertEqual(
+            self.request("GET", url.removeprefix("/api/v1")).content, b"fixture-image"
+        )
+        self.assertEqual(
+            self.request("POST", "/user/logout", self.token).status_code, 200
+        )
         self.assertEqual(self.request("GET", "/user/me", self.token).status_code, 401)
-        self.assertEqual(self.request("GET", url.removeprefix("/api/v1")).status_code, 401)
+        self.assertEqual(
+            self.request("GET", url.removeprefix("/api/v1")).status_code, 401
+        )
 
     def test_password_change_invalidates_existing_sessions(self):
         with database.get_db_connection() as conn:
-            conn.execute("UPDATE users SET password_hash='changed' WHERE id=?", (self.alice.id,))
+            conn.execute(
+                "UPDATE users SET password_hash='changed' WHERE id=?", (self.alice.id,)
+            )
         self.assertEqual(self.request("GET", "/user/me", self.token).status_code, 401)
 
     def test_download_scope_expiry_and_static_bypass(self):
-        url = security.download_url("document", self.principal, "document").removeprefix("/api/v1")
+        url = security.download_url(
+            "document", self.principal, "document"
+        ).removeprefix("/api/v1")
         self.assertEqual(self.request("GET", url).content, b"fixture")
-        self.assertEqual(self.request("GET", url.replace("/document/document", "/media/image")).status_code, 401)
+        self.assertEqual(
+            self.request(
+                "GET", url.replace("/document/document", "/media/image")
+            ).status_code,
+            401,
+        )
         with database.get_db_connection() as conn:
             conn.execute("UPDATE download_tickets SET expires_at=0")
         self.assertEqual(self.request("GET", url).status_code, 401)
-        self.assertEqual(self.request("GET", "/media/uploads/fixture.png").status_code, 404)
+        self.assertEqual(
+            self.request("GET", "/media/uploads/fixture.png").status_code, 404
+        )
 
     def test_guests_are_isolated_and_cannot_use_user_or_admin_features(self):
         first = self.request("POST", "/user/guest").json()
         second = self.request("POST", "/user/guest").json()
         payload = {"session_id": "guest-fixture", "message": "guest message"}
-        self.assertEqual(self.request("POST", "/chat/stream", first["access_token"], json=payload).status_code, 200)
-        self.assertEqual(self.request("POST", "/chat/stream", second["access_token"], json=payload).status_code, 404)
-        self.assertEqual(self.request("GET", "/user/me", first["access_token"]).status_code, 403)
+        self.assertEqual(
+            self.request(
+                "POST", "/chat/stream", first["access_token"], json=payload
+            ).status_code,
+            200,
+        )
+        self.assertEqual(
+            self.request(
+                "POST", "/chat/stream", second["access_token"], json=payload
+            ).status_code,
+            404,
+        )
+        self.assertEqual(
+            self.request("GET", "/user/me", first["access_token"]).status_code, 403
+        )
         with database.get_db_connection() as conn:
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM messages WHERE session_id='guest-fixture'").fetchone()[0], 0)
+            self.assertEqual(
+                conn.execute(
+                    "SELECT COUNT(*) FROM messages WHERE session_id='guest-fixture'"
+                ).fetchone()[0],
+                0,
+            )
         for path in ("/document/clear-all", "/session/purge-temporary"):
             self.assertEqual(self.request("POST", path, self.token).status_code, 403)
             settings.ADMIN_USER_IDS = [self.alice.id]
             try:
-                self.assertEqual(self.request("POST", path, self.token).status_code, 200)
+                self.assertEqual(
+                    self.request("POST", path, self.token).status_code, 200
+                )
             finally:
                 settings.ADMIN_USER_IDS = []
 
     def test_duplicate_session_creation_preserves_children_and_owner(self):
         from app.services.chat_history_service import chat_history_service
+
         chat_history_service.save_message("alice-session", "user", "Keep me")
-        response = self.request("POST", "/session/create", self.token, json={"user_id": self.alice.id, "session_id": "alice-session"})
+        response = self.request(
+            "POST",
+            "/session/create",
+            self.token,
+            json={"user_id": self.alice.id, "session_id": "alice-session"},
+        )
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.json()["message_count"], 1)
 
     def test_attachment_id_is_authorized_and_url_cannot_choose_a_fetch_target(self):
-        payload = {"session_id": "bob-session", "message": "hello", "attachments": [{"id": "image", "url": "http://private.invalid", "file_type": "image"}]}
-        self.assertEqual(self.request("POST", "/chat/stream", self.other_token, json=payload).status_code, 404)
+        payload = {
+            "session_id": "bob-session",
+            "message": "hello",
+            "attachments": [
+                {"id": "image", "url": "http://private.invalid", "file_type": "image"}
+            ],
+        }
+        self.assertEqual(
+            self.request(
+                "POST", "/chat/stream", self.other_token, json=payload
+            ).status_code,
+            404,
+        )
         payload["session_id"] = "alice-session"
-        self.assertEqual(self.request("POST", "/chat/stream", self.token, json=payload).status_code, 200)
+        self.assertEqual(
+            self.request("POST", "/chat/stream", self.token, json=payload).status_code,
+            200,
+        )
 
     def test_registration_and_password_login_issue_credentials(self):
-        registered = self.request("POST", "/user/register", json={
-            "username": "newperson", "email": "newperson@example.invalid",
-            "display_name": "Third Person", "password": "Durable!482Strong",
-        })
+        registered = self.request(
+            "POST",
+            "/user/register",
+            json={
+                "username": "newperson",
+                "email": "newperson@example.invalid",
+                "display_name": "Third Person",
+                "password": "Durable!482Strong",
+            },
+        )
         self.assertEqual(registered.status_code, 201)
-        self.assertEqual(self.request("GET", "/user/me", registered.json()["access_token"]).json()["id"], registered.json()["id"])
-        response = self.request("POST", "/user/login", json={"username_or_email": "alice", "password": "Durable!482Strong"})
+        self.assertEqual(
+            self.request("GET", "/user/me", registered.json()["access_token"]).json()[
+                "id"
+            ],
+            registered.json()["id"],
+        )
+        response = self.request(
+            "POST",
+            "/user/login",
+            json={"username_or_email": "alice", "password": "Durable!482Strong"},
+        )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(self.request("GET", "/user/me", response.json()["access_token"]).json()["id"], self.alice.id)
-        self.assertNotIn("access_token", self.request("GET", "/user/me", self.token).json())
+        self.assertEqual(
+            self.request("GET", "/user/me", response.json()["access_token"]).json()[
+                "id"
+            ],
+            self.alice.id,
+        )
+        self.assertNotIn(
+            "access_token", self.request("GET", "/user/me", self.token).json()
+        )
 
     def test_upgrade_preserves_existing_users_sessions_and_assets(self):
         # Recreate the prior schema using only this test's disposable database.
@@ -305,101 +1805,196 @@ class SecurityTests(unittest.TestCase):
             conn.execute("ALTER TABLE users DROP COLUMN google_subject")
         database.init_db()
         database.init_db()
-        response = self.request("POST", "/user/login", json={
-            "username_or_email": "alice", "password": "Durable!482Strong",
-        })
+        response = self.request(
+            "POST",
+            "/user/login",
+            json={
+                "username_or_email": "alice",
+                "password": "Durable!482Strong",
+            },
+        )
         self.assertEqual(response.status_code, 200)
         token = response.json()["access_token"]
         self.assertEqual(response.json()["id"], self.alice.id)
-        self.assertEqual(self.request("GET", "/session/alice-session/history", token).status_code, 200)
+        self.assertEqual(
+            self.request("GET", "/session/alice-session/history", token).status_code,
+            200,
+        )
         self.assertEqual(self.request("GET", "/media/assets", token).json()["total"], 2)
-        self.assertEqual(self.request("GET", "/media/content/media/image", token).content, b"fixture-image")
+        self.assertEqual(
+            self.request("GET", "/media/content/media/image", token).content,
+            b"fixture-image",
+        )
 
     def test_otp_login_and_password_reset_credentials(self):
         def otp(identifier, purpose):
             with database.get_db_connection() as conn:
                 conn.execute(
                     "INSERT INTO email_otps(id,email,otp_code,expires_at,created_at,purpose,delivery_status) VALUES(?,?,?,?,?,?,?)",
-                    (identifier, self.alice.email, hash_password("123456", identifier), time.time() + 300, "2026-01-01", purpose, "sent"),
+                    (
+                        identifier,
+                        self.alice.email,
+                        hash_password("123456", identifier),
+                        time.time() + 300,
+                        "2026-01-01",
+                        purpose,
+                        "sent",
+                    ),
                 )
 
         otp("login-code", "login")
-        response = self.request("POST", "/user/otp/verify", json={
-            "email_or_username": "alice", "otp": "123456",
-        })
+        response = self.request(
+            "POST",
+            "/user/otp/verify",
+            json={
+                "email_or_username": "alice",
+                "otp": "123456",
+            },
+        )
         self.assertEqual(response.status_code, 200)
         otp_token = response.json()["access_token"]
         self.assertEqual(self.request("GET", "/user/me", otp_token).status_code, 200)
-        self.assertEqual(self.request("POST", "/user/otp/verify", json={
-            "email_or_username": "alice", "otp": "123456",
-        }).status_code, 400)
+        self.assertEqual(
+            self.request(
+                "POST",
+                "/user/otp/verify",
+                json={
+                    "email_or_username": "alice",
+                    "otp": "123456",
+                },
+            ).status_code,
+            400,
+        )
         otp("reset-code", "reset")
-        response = self.request("POST", "/user/password-reset/verify", json={
-            "email_or_username": "alice", "otp": "123456", "new_password": "Another!482Strong",
-        })
+        response = self.request(
+            "POST",
+            "/user/password-reset/verify",
+            json={
+                "email_or_username": "alice",
+                "otp": "123456",
+                "new_password": "Another!482Strong",
+            },
+        )
         self.assertEqual(response.status_code, 200)
         for token in (self.token, otp_token):
             self.assertEqual(self.request("GET", "/user/me", token).status_code, 401)
-        self.assertEqual(self.request("POST", "/user/login", json={
-            "username_or_email": "alice", "password": "Another!482Strong",
-        }).status_code, 200)
+        self.assertEqual(
+            self.request(
+                "POST",
+                "/user/login",
+                json={
+                    "username_or_email": "alice",
+                    "password": "Another!482Strong",
+                },
+            ).status_code,
+            200,
+        )
 
     def test_owned_image_avatar_uploads_and_protected_downloads(self):
         image = self.image_fixture()
-        response = self.request("POST", "/media/upload", self.token,
-                                data={"session_id": "alice-session"},
-                                files={"file": ("../../fixture.png", image, "image/png")})
+        response = self.request(
+            "POST",
+            "/media/upload",
+            self.token,
+            data={"session_id": "alice-session"},
+            files={"file": ("../../fixture.png", image, "image/png")},
+        )
         self.assertEqual(response.status_code, 201)
         attachment = response.json()
         url = attachment["url"].removeprefix("/api/v1")
         self.assertEqual(self.request("GET", url).content, image)
-        self.assertEqual(self.request("GET", "/media/content/media/" + attachment["id"], self.other_token).status_code, 404)
-        avatar = self.request("POST", "/user/avatar", self.token, data={"user_id": self.alice.id},
-                              files={"file": ("fixture.png", image, "image/png")})
+        self.assertEqual(
+            self.request(
+                "GET", "/media/content/media/" + attachment["id"], self.other_token
+            ).status_code,
+            404,
+        )
+        avatar = self.request(
+            "POST",
+            "/user/avatar",
+            self.token,
+            data={"user_id": self.alice.id},
+            files={"file": ("fixture.png", image, "image/png")},
+        )
         self.assertEqual(avatar.status_code, 200)
         avatar_url = avatar.json()["avatar_url"].removeprefix("/api/v1")
         self.assertEqual(self.request("GET", avatar_url).content, image)
-        self.assertEqual(self.request("GET", "/media/content/avatar/" + self.alice.id, self.other_token).status_code, 403)
-        self.assertEqual(self.request("DELETE", "/user/avatar?user_id=" + self.alice.id, self.token).status_code, 200)
+        self.assertEqual(
+            self.request(
+                "GET", "/media/content/avatar/" + self.alice.id, self.other_token
+            ).status_code,
+            403,
+        )
+        self.assertEqual(
+            self.request(
+                "DELETE", "/user/avatar?user_id=" + self.alice.id, self.token
+            ).status_code,
+            200,
+        )
         self.assertEqual(self.request("GET", avatar_url).status_code, 404)
 
     def test_raster_uploads_use_verified_mime_types_and_safe_download_headers(self):
-        for image_format, extension, mime in (("PNG", "png", "image/png"), ("JPEG", "jpg", "image/jpeg"),
-                                              ("WEBP", "webp", "image/webp"), ("GIF", "gif", "image/gif"),
-                                              ("BMP", "bmp", "image/bmp")):
+        for image_format, extension, mime in (
+            ("PNG", "png", "image/png"),
+            ("JPEG", "jpg", "image/jpeg"),
+            ("WEBP", "webp", "image/webp"),
+            ("GIF", "gif", "image/gif"),
+            ("BMP", "bmp", "image/bmp"),
+        ):
             with self.subTest(format=image_format):
                 image = self.image_fixture(image_format)
-                response = self.request("POST", "/media/upload", self.token, data={"session_id": "alice-session"},
-                                        files={"file": (f"fixture.{extension}", image, "text/html")})
+                response = self.request(
+                    "POST",
+                    "/media/upload",
+                    self.token,
+                    data={"session_id": "alice-session"},
+                    files={"file": (f"fixture.{extension}", image, "text/html")},
+                )
                 self.assertEqual(response.status_code, 201)
                 asset = response.json()
                 self.assertEqual(asset["mime_type"], mime)
                 downloaded = self.request("GET", asset["url"].removeprefix("/api/v1"))
                 self.assertEqual(downloaded.content, image)
                 self.assertEqual(downloaded.headers["content-type"], mime)
-                self.assertEqual(downloaded.headers["x-content-type-options"], "nosniff")
-                self.assertEqual(downloaded.headers["content-security-policy"], "sandbox")
+                self.assertEqual(
+                    downloaded.headers["x-content-type-options"], "nosniff"
+                )
+                self.assertEqual(
+                    downloaded.headers["content-security-policy"], "sandbox"
+                )
                 self.assertNotIn("content-disposition", downloaded.headers)
 
     def test_invalid_images_are_rejected_before_storage_and_registration(self):
         from app.services.storage_service import storage_service
 
         svg = b'<svg xmlns="http://www.w3.org/2000/svg"><script>window.fixture=true</script></svg>'
-        invalid = [("fixture.svg", svg), ("renamed.png", svg), ("html.jpg", b"<html>fixture</html>"),
-                   ("corrupt.png", self.image_fixture()[:25]), ("mismatch.jpg", self.image_fixture()),
-                   ("empty.png", b"")]
+        invalid = [
+            ("fixture.svg", svg),
+            ("renamed.png", svg),
+            ("html.jpg", b"<html>fixture</html>"),
+            ("corrupt.png", self.image_fixture()[:25]),
+            ("mismatch.jpg", self.image_fixture()),
+            ("empty.png", b""),
+        ]
         with database.get_db_connection() as conn:
             before = conn.execute("SELECT COUNT(*) FROM media_assets").fetchone()[0]
         with patch.object(storage_service, "upload_file") as upload:
             for filename, data in invalid:
                 with self.subTest(filename=filename):
-                    response = self.request("POST", "/media/upload", self.token, data={"session_id": "alice-session"},
-                                            files={"file": (filename, data, "image/png")})
+                    response = self.request(
+                        "POST",
+                        "/media/upload",
+                        self.token,
+                        data={"session_id": "alice-session"},
+                        files={"file": (filename, data, "image/png")},
+                    )
                     self.assertEqual(response.status_code, 400)
                     self.assertIsInstance(response.json()["detail"], str)
             upload.assert_not_called()
         with database.get_db_connection() as conn:
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM media_assets").fetchone()[0], before)
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM media_assets").fetchone()[0], before
+            )
 
     def test_image_pixel_animation_size_and_concurrency_limits(self):
         import struct
@@ -413,7 +2008,10 @@ class SecurityTests(unittest.TestCase):
         with self.assertRaises(security.HTTPException) as raised:
             image_validation.validate_image(bytes(bomb_header), "fixture.bmp")
         self.assertEqual(raised.exception.status_code, 413)
-        with patch.object(image_validation, "MAX_IMAGE_PIXELS", 1), self.assertRaises(security.HTTPException) as raised:
+        with (
+            patch.object(image_validation, "MAX_IMAGE_PIXELS", 1),
+            self.assertRaises(security.HTTPException) as raised,
+        ):
             image_validation.validate_image(image, "fixture.png")
         self.assertEqual(raised.exception.status_code, 413)
         with self.assertRaises(security.HTTPException) as raised:
@@ -421,23 +2019,36 @@ class SecurityTests(unittest.TestCase):
         self.assertEqual(raised.exception.status_code, 413)
         animated = self.image_fixture("GIF", animated=True)
         for field, limit in (("MAX_IMAGE_FRAMES", 1), ("MAX_TOTAL_IMAGE_PIXELS", 65)):
-            with patch.object(image_validation, field, limit), self.assertRaises(security.HTTPException) as raised:
+            with (
+                patch.object(image_validation, field, limit),
+                self.assertRaises(security.HTTPException) as raised,
+            ):
                 image_validation.validate_image(animated, "fixture.gif")
             self.assertEqual(raised.exception.status_code, 413)
         slots = threading.BoundedSemaphore(1)
         slots.acquire()
-        with patch.object(image_validation, "_validation_slots", slots), self.assertRaises(security.HTTPException) as raised:
+        with (
+            patch.object(image_validation, "_validation_slots", slots),
+            self.assertRaises(security.HTTPException) as raised,
+        ):
             image_validation.validate_image(image, "fixture.png")
         self.assertEqual(raised.exception.status_code, 503)
         slots.release()
-        self.assertEqual(image_validation.validate_image(image, "fixture.png")[1], "image/png")
+        self.assertEqual(
+            image_validation.validate_image(image, "fixture.png")[1], "image/png"
+        )
 
     def test_valid_animated_images_keep_their_frames(self):
         from PIL import Image
 
         image = self.image_fixture("GIF", animated=True)
-        response = self.request("POST", "/media/upload", self.token, data={"session_id": "alice-session"},
-                                files={"file": ("animated.gif", image, "image/gif")})
+        response = self.request(
+            "POST",
+            "/media/upload",
+            self.token,
+            data={"session_id": "alice-session"},
+            files={"file": ("animated.gif", image, "image/gif")},
+        )
         self.assertEqual(response.status_code, 201)
         downloaded = self.request("GET", response.json()["url"].removeprefix("/api/v1"))
         with Image.open(io.BytesIO(downloaded.content)) as decoded:
@@ -447,20 +2058,40 @@ class SecurityTests(unittest.TestCase):
         from app.services.storage_service import storage_service
 
         image = self.image_fixture()
-        response = self.request("POST", "/user/avatar", self.token, data={"user_id": self.alice.id},
-                                files={"file": ("fixture.png", image, "image/png")})
+        response = self.request(
+            "POST",
+            "/user/avatar",
+            self.token,
+            data={"user_id": self.alice.id},
+            files={"file": ("fixture.png", image, "image/png")},
+        )
         self.assertEqual(response.status_code, 200)
         with patch.object(storage_service, "upload_file") as upload:
-            invalid = self.request("POST", "/user/avatar", self.token, data={"user_id": self.alice.id},
-                                   files={"file": ("fake.png", b"<svg>fixture</svg>", "image/png")})
+            invalid = self.request(
+                "POST",
+                "/user/avatar",
+                self.token,
+                data={"user_id": self.alice.id},
+                files={"file": ("fake.png", b"<svg>fixture</svg>", "image/png")},
+            )
             self.assertEqual(invalid.status_code, 400)
             upload.assert_not_called()
-        self.assertEqual(self.request("GET", "/user/avatar/" + self.alice.id, self.token).content, image)
+        self.assertEqual(
+            self.request("GET", "/user/avatar/" + self.alice.id, self.token).content,
+            image,
+        )
         # Simulate an old SVG/HTML upload mislabeled as PNG, without executing it.
-        (root / "avatars" / f"{self.alice.id}.png").write_bytes(b"<svg>legacy fixture</svg>")
-        for url in ("/user/avatar/" + self.alice.id, "/media/content/avatar/" + self.alice.id):
+        (root / "avatars" / f"{self.alice.id}.png").write_bytes(
+            b"<svg>legacy fixture</svg>"
+        )
+        for url in (
+            "/user/avatar/" + self.alice.id,
+            "/media/content/avatar/" + self.alice.id,
+        ):
             downloaded = self.request("GET", url, self.token)
-            self.assertEqual(downloaded.headers["content-type"], "application/octet-stream")
+            self.assertEqual(
+                downloaded.headers["content-type"], "application/octet-stream"
+            )
             self.assertEqual(downloaded.headers["content-disposition"], "attachment")
             self.assertEqual(downloaded.headers["x-content-type-options"], "nosniff")
             self.assertEqual(downloaded.headers["content-security-policy"], "sandbox")
@@ -475,10 +2106,15 @@ class SecurityTests(unittest.TestCase):
         self.assertEqual(response.headers["content-disposition"], "attachment")
         self.assertEqual(response.headers["content-type"], "application/octet-stream")
         with database.get_db_connection() as conn:
-            conn.execute("UPDATE media_assets SET file_path='media/uploads/cloud-active.png' WHERE id='image'")
+            conn.execute(
+                "UPDATE media_assets SET file_path='media/uploads/cloud-active.png' WHERE id='image'"
+            )
         client = Mock()
         client.get_object.return_value = {"Body": io.BytesIO(active)}
-        with patch.object(storage_service, "_s3_client", client), patch.object(storage_service, "_initialized", True):
+        with (
+            patch.object(storage_service, "_s3_client", client),
+            patch.object(storage_service, "_initialized", True),
+        ):
             response = self.request("GET", "/media/content/media/image", self.token)
         self.assertEqual(response.headers["content-disposition"], "attachment")
         self.assertEqual(response.headers["content-type"], "application/octet-stream")
@@ -489,28 +2125,59 @@ class SecurityTests(unittest.TestCase):
 
         image = self.image_fixture()
         client = Mock()
-        with patch.object(storage_service, "_s3_client", client), patch.object(storage_service, "_initialized", True):
-            response = self.request("POST", "/media/upload", self.token, data={"session_id": "alice-session"},
-                                    files={"file": ("fixture.png", image, "text/html")})
+        with (
+            patch.object(storage_service, "_s3_client", client),
+            patch.object(storage_service, "_initialized", True),
+        ):
+            response = self.request(
+                "POST",
+                "/media/upload",
+                self.token,
+                data={"session_id": "alice-session"},
+                files={"file": ("fixture.png", image, "text/html")},
+            )
             self.assertEqual(response.status_code, 201)
-            self.assertEqual(client.put_object.call_args.kwargs["ContentType"], "image/png")
-            generated = media_service.save_generated_image(image, "fixture", "alice-session", self.alice.id, ext=".jpg")
+            self.assertEqual(
+                client.put_object.call_args.kwargs["ContentType"], "image/png"
+            )
+            generated = media_service.save_generated_image(
+                image, "fixture", "alice-session", self.alice.id, ext=".jpg"
+            )
             self.assertEqual(generated.mime_type, "image/png")
             self.assertTrue((generated.file_name or "").endswith(".png"))
-            self.assertEqual(client.put_object.call_args.kwargs["ContentType"], "image/png")
+            self.assertEqual(
+                client.put_object.call_args.kwargs["ContentType"], "image/png"
+            )
             client.put_object.reset_mock()
             with self.assertRaises(security.HTTPException):
-                media_service.save_generated_image(b"<svg>invalid fixture</svg>", "fixture", "alice-session", self.alice.id)
+                media_service.save_generated_image(
+                    b"<svg>invalid fixture</svg>",
+                    "fixture",
+                    "alice-session",
+                    self.alice.id,
+                )
             client.put_object.assert_not_called()
 
     def test_cloud_documents_cannot_spoof_active_image_content_types(self):
         from app.services.storage_service import storage_service
 
         client = Mock()
-        with patch.object(storage_service, "_s3_client", client), patch.object(storage_service, "_initialized", True):
-            storage_service.upload_file(b"<svg>fixture</svg>", "documents/alice-session/fixture.txt", "image/svg+xml")
-        self.assertEqual(client.put_object.call_args.kwargs["ContentType"], "application/octet-stream")
-        self.assertEqual(client.put_object.call_args.kwargs["ContentDisposition"], "attachment")
+        with (
+            patch.object(storage_service, "_s3_client", client),
+            patch.object(storage_service, "_initialized", True),
+        ):
+            storage_service.upload_file(
+                b"<svg>fixture</svg>",
+                "documents/alice-session/fixture.txt",
+                "image/svg+xml",
+            )
+        self.assertEqual(
+            client.put_object.call_args.kwargs["ContentType"],
+            "application/octet-stream",
+        )
+        self.assertEqual(
+            client.put_object.call_args.kwargs["ContentDisposition"], "attachment"
+        )
 
     def test_document_upload_sanitizes_paths_and_removes_temporary_files(self):
         from app.repositories.session_store import session_store_repo
@@ -521,14 +2188,22 @@ class SecurityTests(unittest.TestCase):
 
         def index(file_path, filename, session_id, user_id, storage_url):
             temporary_paths.append(file_path)
-            self.assertTrue(file_path.resolve().is_relative_to(settings.UPLOAD_DIR.resolve()))
+            self.assertTrue(
+                file_path.resolve().is_relative_to(settings.UPLOAD_DIR.resolve())
+            )
             metadata = DocumentMetadata(
-                document_id=f"uploaded-document-{len(temporary_paths)}", filename=filename, file_type="txt",
-                file_size_bytes=len(file_path.read_bytes()), total_chunks=1,
-                storage_url=storage_url, uploaded_at="2026-01-01",
+                document_id=f"uploaded-document-{len(temporary_paths)}",
+                filename=filename,
+                file_type="txt",
+                file_size_bytes=len(file_path.read_bytes()),
+                total_chunks=1,
+                storage_url=storage_url,
+                uploaded_at="2026-01-01",
             )
             session_store_repo.save_document_metadata(metadata, user_id, session_id)
-            session_store_repo.attach_document_to_session(session_id, metadata.document_id)
+            session_store_repo.attach_document_to_session(
+                session_id, metadata.document_id
+            )
             return metadata
 
         import re
@@ -536,21 +2211,40 @@ class SecurityTests(unittest.TestCase):
         from app.services.storage_service import storage_service
 
         with patch.object(rag_service, "process_and_index_document", side_effect=index):
-            for original, expected in (("../../fixture.txt", "fixture.txt"),
-                                       (r"..\..\windows.txt", "windows.txt"),
-                                       ("CON.txt", "CON.txt"), ("fixture:stream.txt", "fixture:stream.txt")):
+            for original, expected in (
+                ("../../fixture.txt", "fixture.txt"),
+                (r"..\..\windows.txt", "windows.txt"),
+                ("CON.txt", "CON.txt"),
+                ("fixture:stream.txt", "fixture:stream.txt"),
+            ):
                 with self.subTest(filename=original):
-                    response = self.request("POST", "/document/upload", self.token,
-                                            data={"session_id": "alice-session"},
-                                            files={"file": (original, b"uploaded document", "text/plain")})
+                    response = self.request(
+                        "POST",
+                        "/document/upload",
+                        self.token,
+                        data={"session_id": "alice-session"},
+                        files={"file": (original, b"uploaded document", "text/plain")},
+                    )
                     self.assertEqual(response.status_code, 201)
                     document = response.json()["document"]
                     self.assertEqual(document["filename"], expected)
                     with database.get_db_connection() as conn:
-                        stored = conn.execute("SELECT storage_url FROM documents WHERE id=?", (document["document_id"],)).fetchone()[0]
-                    key = storage_service.owned_storage_key({"storage_url": stored}, "document")
-                    self.assertIsNotNone(re.fullmatch(r"documents/alice-session/[0-9a-f]{32}\.txt", key))
-                    self.assertEqual(self.request("GET", document["storage_url"].removeprefix("/api/v1")).content, b"uploaded document")
+                        stored = conn.execute(
+                            "SELECT storage_url FROM documents WHERE id=?",
+                            (document["document_id"],),
+                        ).fetchone()[0]
+                    key = storage_service.owned_storage_key(
+                        {"storage_url": stored}, "document"
+                    )
+                    self.assertIsNotNone(
+                        re.fullmatch(r"documents/alice-session/[0-9a-f]{32}\.txt", key)
+                    )
+                    self.assertEqual(
+                        self.request(
+                            "GET", document["storage_url"].removeprefix("/api/v1")
+                        ).content,
+                        b"uploaded document",
+                    )
         self.assertTrue(temporary_paths)
         self.assertTrue(all(not path.exists() for path in temporary_paths))
 
@@ -558,12 +2252,36 @@ class SecurityTests(unittest.TestCase):
         from app.services.rag_service import rag_service
         from app.services.storage_service import storage_service
 
-        with patch.object(rag_service, "process_and_index_document") as index, patch.object(storage_service, "upload_file") as upload:
-            for session in ("../outside", r"..\outside", "/absolute", "C:/absolute", "nested/session", "%2e%2e", "x" * 129):
+        with (
+            patch.object(rag_service, "process_and_index_document") as index,
+            patch.object(storage_service, "upload_file") as upload,
+        ):
+            for session in (
+                "../outside",
+                r"..\outside",
+                "/absolute",
+                "C:/absolute",
+                "nested/session",
+                "%2e%2e",
+                "x" * 129,
+            ):
                 for path in ("/document/upload", "/media/upload"):
                     with self.subTest(session=session, path=path):
-                        response = self.request("POST", path, self.token, data={"session_id": session},
-                                                files={"file": ("fixture.txt" if path.startswith("/document") else "fixture.png", b"fixture", "application/octet-stream")})
+                        response = self.request(
+                            "POST",
+                            path,
+                            self.token,
+                            data={"session_id": session},
+                            files={
+                                "file": (
+                                    "fixture.txt"
+                                    if path.startswith("/document")
+                                    else "fixture.png",
+                                    b"fixture",
+                                    "application/octet-stream",
+                                )
+                            },
+                        )
                         self.assertEqual(response.status_code, 400)
             index.assert_not_called()
             upload.assert_not_called()
@@ -574,15 +2292,34 @@ class SecurityTests(unittest.TestCase):
         data = root / (self.__class__.__name__ + "-storage-keys")
         data.mkdir()
         client = Mock()
-        keys = ("", "/absolute.txt", "../outside.txt", "media/../../outside.txt", r"..\outside.txt",
-                "C:/outside.txt", r"\\host\share\outside.txt", "media/file.txt:stream.txt",
-                "media/CON.txt", "media/NUL.txt", "media/file.txt.", "media/file.txt ",
-                "media//file.txt", "media/./file.txt", "media/invalid\x00.txt")
-        with patch.object(settings, "DATA_DIR", data), patch.object(storage_service, "_s3_client", client):
+        keys = (
+            "",
+            "/absolute.txt",
+            "../outside.txt",
+            "media/../../outside.txt",
+            r"..\outside.txt",
+            "C:/outside.txt",
+            r"\\host\share\outside.txt",
+            "media/file.txt:stream.txt",
+            "media/CON.txt",
+            "media/NUL.txt",
+            "media/file.txt.",
+            "media/file.txt ",
+            "media//file.txt",
+            "media/./file.txt",
+            "media/invalid\x00.txt",
+        )
+        with (
+            patch.object(settings, "DATA_DIR", data),
+            patch.object(storage_service, "_s3_client", client),
+        ):
             for cloud in (False, True):
                 with patch.object(storage_service, "_initialized", cloud):
                     for key in keys:
-                        with self.subTest(cloud=cloud, key=key), self.assertRaises(ValueError):
+                        with (
+                            self.subTest(cloud=cloud, key=key),
+                            self.assertRaises(ValueError),
+                        ):
                             storage_service.upload_file(b"fixture", key)
             client.put_object.assert_not_called()
         self.assertEqual(list(data.iterdir()), [])
@@ -593,17 +2330,26 @@ class SecurityTests(unittest.TestCase):
         data = root / (self.__class__.__name__ + "-storage-valid")
         data.mkdir()
         client = Mock()
-        with patch.object(settings, "DATA_DIR", data), patch.object(storage_service, "_s3_client", client):
+        with (
+            patch.object(settings, "DATA_DIR", data),
+            patch.object(storage_service, "_s3_client", client),
+        ):
             with patch.object(storage_service, "_initialized", False):
-                _, key = storage_service.upload_file(b"local", "documents/session/object.txt")
+                _, key = storage_service.upload_file(
+                    b"local", "documents/session/object.txt"
+                )
                 self.assertEqual((data / key).read_bytes(), b"local")
             with patch.object(storage_service, "_initialized", True):
-                _, key = storage_service.upload_file(b"cloud", "media/uploads/object.png")
+                _, key = storage_service.upload_file(
+                    b"cloud", "media/uploads/object.png"
+                )
                 self.assertEqual(key, "media/uploads/object.png")
                 self.assertEqual(client.put_object.call_args.kwargs["Key"], key)
                 self.assertFalse((data / key).exists())
                 client.put_object.side_effect = RuntimeError("fixture provider failure")
-                _, key = storage_service.upload_file(b"fallback", "media/generated/object.png")
+                _, key = storage_service.upload_file(
+                    b"fallback", "media/generated/object.png"
+                )
                 self.assertEqual((data / key).read_bytes(), b"fallback")
 
     @unittest.skipUnless(sys.platform == "win32", "Windows junction regression")
@@ -620,7 +2366,11 @@ class SecurityTests(unittest.TestCase):
         sentinel.write_bytes(b"unchanged")
         _winapi.CreateJunction(str(outside), str(data / "linked"))
         client = Mock()
-        with patch.object(settings, "DATA_DIR", data), patch.object(storage_service, "_s3_client", client), patch.object(storage_service, "_initialized", True):
+        with (
+            patch.object(settings, "DATA_DIR", data),
+            patch.object(storage_service, "_s3_client", client),
+            patch.object(storage_service, "_initialized", True),
+        ):
             with self.assertRaises(ValueError):
                 storage_service.upload_file(b"overwrite", "linked/fixture.txt")
             client.put_object.assert_not_called()
@@ -636,8 +2386,13 @@ class SecurityTests(unittest.TestCase):
             raise RuntimeError("fixture index failure")
 
         with patch.object(rag_service, "process_and_index_document", side_effect=fail):
-            response = self.request("POST", "/document/upload", self.token, data={"session_id": "alice-session"},
-                                    files={"file": ("../../fixture.txt", b"fixture", "text/plain")})
+            response = self.request(
+                "POST",
+                "/document/upload",
+                self.token,
+                data={"session_id": "alice-session"},
+                files={"file": ("../../fixture.txt", b"fixture", "text/plain")},
+            )
         self.assertEqual(response.status_code, 500)
         self.assertTrue(paths)
         self.assertTrue(all(not path.exists() for path in paths))
@@ -646,7 +2401,13 @@ class SecurityTests(unittest.TestCase):
         from app.services.pdf_service import extract_pdf_pages
 
         path = root / "extraction-fixture.pdf"
-        path.write_bytes(self.pdf_fixture("First page fixture text for indexing.", "", "Third page fixture text for indexing."))
+        path.write_bytes(
+            self.pdf_fixture(
+                "First page fixture text for indexing.",
+                "",
+                "Third page fixture text for indexing.",
+            )
+        )
         pages = extract_pdf_pages(path)
         self.assertEqual([number for _, number in pages], [1, 3])
         self.assertIn("Third page fixture", pages[1][0])
@@ -654,23 +2415,59 @@ class SecurityTests(unittest.TestCase):
         embedder = Mock()
         embedder.embed_batch.side_effect = lambda texts: [[1.0] for _ in texts]
         setattr(embedding, "embedding_service", embedder)
-        with patch.dict(sys.modules, {embedding.__name__: embedding}), patch.multiple(
-            settings, CHUNK_SIZE=800, CHUNK_OVERLAP=150, TOP_K_RETRIEVAL=4, SIMILARITY_THRESHOLD=0.2, create=True
+        with (
+            patch.dict(sys.modules, {embedding.__name__: embedding}),
+            patch.multiple(
+                settings,
+                CHUNK_SIZE=800,
+                CHUNK_OVERLAP=150,
+                TOP_K_RETRIEVAL=4,
+                SIMILARITY_THRESHOLD=0.2,
+                create=True,
+            ),
         ):
-            actual = runpy.run_path(str(Path(__file__).resolve().parents[1] / "app/services/rag_service.py"))["rag_service"]
-        with patch.object(actual, "extract_text_from_file", side_effect=AssertionError("Do not parse twice")):
-            metadata = actual.process_and_index_document(path, "fixture.pdf", "alice-session", self.alice.id, extracted_pages=pages)
+            actual = runpy.run_path(
+                str(Path(__file__).resolve().parents[1] / "app/services/rag_service.py")
+            )["rag_service"]
+        with patch.object(
+            actual,
+            "extract_text_from_file",
+            side_effect=AssertionError("Do not parse twice"),
+        ):
+            metadata = actual.process_and_index_document(
+                path,
+                "fixture.pdf",
+                "alice-session",
+                self.alice.id,
+                extracted_pages=pages,
+            )
         self.assertEqual(metadata.total_chunks, 2)
-        self.assertEqual([item["page_number"] for item in vectors.add_chunks.call_args.kwargs["metadatas"]], [1, 3])
+        self.assertEqual(
+            [
+                item["page_number"]
+                for item in vectors.add_chunks.call_args.kwargs["metadatas"]
+            ],
+            [1, 3],
+        )
         from app.api.v1.endpoints import document
 
         with patch.object(document, "rag_service", actual):
-            response = self.request("POST", "/document/upload", self.token, data={"session_id": "alice-session"},
-                                    files={"file": ("fixture.pdf", path.read_bytes(), "application/pdf")})
+            response = self.request(
+                "POST",
+                "/document/upload",
+                self.token,
+                data={"session_id": "alice-session"},
+                files={"file": ("fixture.pdf", path.read_bytes(), "application/pdf")},
+            )
         self.assertEqual(response.status_code, 201)
         uploaded = response.json()["document"]
         self.assertEqual(uploaded["total_chunks"], 2)
-        self.assertEqual(self.request("GET", uploaded["storage_url"].removeprefix("/api/v1")).content, path.read_bytes())
+        self.assertEqual(
+            self.request(
+                "GET", uploaded["storage_url"].removeprefix("/api/v1")
+            ).content,
+            path.read_bytes(),
+        )
 
     def test_pdf_parsing_does_not_block_health_requests(self):
         import threading
@@ -687,10 +2484,18 @@ class SecurityTests(unittest.TestCase):
             raise PDFProcessingError("fixture rejection")
 
         async def exercise():
-            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://fixture.invalid") as client:
-                upload = asyncio.create_task(client.post("/api/v1/document/upload",
-                    headers={"Authorization": "Bearer " + self.token}, data={"session_id": "alice-session"},
-                    files={"file": ("fixture.pdf", b"fixture", "application/pdf")}))
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app),
+                base_url="http://fixture.invalid",
+            ) as client:
+                upload = asyncio.create_task(
+                    client.post(
+                        "/api/v1/document/upload",
+                        headers={"Authorization": "Bearer " + self.token},
+                        data={"session_id": "alice-session"},
+                        files={"file": ("fixture.pdf", b"fixture", "application/pdf")},
+                    )
+                )
                 try:
                     for _ in range(100):
                         if started.is_set():
@@ -698,7 +2503,9 @@ class SecurityTests(unittest.TestCase):
                         await asyncio.sleep(0.01)
                     self.assertTrue(started.is_set())
                     self.assertFalse(upload.done())
-                    health = await asyncio.wait_for(client.get("/api/v1/health"), timeout=1)
+                    health = await asyncio.wait_for(
+                        client.get("/api/v1/health"), timeout=1
+                    )
                     self.assertEqual(health.status_code, 200)
                     self.assertFalse(upload.done())
                 finally:
@@ -706,7 +2513,9 @@ class SecurityTests(unittest.TestCase):
                     response = await upload
                 self.assertEqual(response.status_code, 422)
 
-        with patch.object(document.rag_service, "extract_text_from_file", side_effect=wait_for_release):
+        with patch.object(
+            document.rag_service, "extract_text_from_file", side_effect=wait_for_release
+        ):
             asyncio.run(exercise())
 
     def test_pdf_worker_rejects_page_text_size_and_encryption_limits(self):
@@ -714,8 +2523,16 @@ class SecurityTests(unittest.TestCase):
 
         path = root / "limits-fixture.pdf"
         path.write_bytes(self.pdf_fixture("First fixture page", "Second fixture page"))
-        for field, value in (("PDF_MAX_PAGES", 1), ("PDF_MAX_TEXT_CHARS", 3), ("PDF_MAX_FILE_SIZE_BYTES", 3)):
-            with self.subTest(limit=field), patch.object(settings, field, value), self.assertRaises(PDFProcessingError) as raised:
+        for field, value in (
+            ("PDF_MAX_PAGES", 1),
+            ("PDF_MAX_TEXT_CHARS", 3),
+            ("PDF_MAX_FILE_SIZE_BYTES", 3),
+        ):
+            with (
+                self.subTest(limit=field),
+                patch.object(settings, field, value),
+                self.assertRaises(PDFProcessingError) as raised,
+            ):
                 extract_pdf_pages(path)
             self.assertEqual(raised.exception.status_code, 413)
         path.write_bytes(self.pdf_fixture("Encrypted fixture", encrypted=True))
@@ -733,9 +2550,12 @@ class SecurityTests(unittest.TestCase):
         path = root / "timeout-fixture.pdf"
         path.write_bytes(b"fixture")
         slots = threading.BoundedSemaphore(1)
-        with patch.object(pdf_service, "_worker", script), patch.object(pdf_service, "_slots", slots), patch.object(
-            settings, "PDF_PARSE_TIMEOUT_SECONDS", 0.1
-        ), self.assertRaises(pdf_service.PDFProcessingError) as raised:
+        with (
+            patch.object(pdf_service, "_worker", script),
+            patch.object(pdf_service, "_slots", slots),
+            patch.object(settings, "PDF_PARSE_TIMEOUT_SECONDS", 0.1),
+            self.assertRaises(pdf_service.PDFProcessingError) as raised,
+        ):
             pdf_service.extract_pdf_pages(path)
         self.assertIn("timed out", str(raised.exception))
         self.assertTrue(slots.acquire(blocking=False))
@@ -750,7 +2570,10 @@ class SecurityTests(unittest.TestCase):
         path.write_bytes(b"fixture")
         slots = threading.BoundedSemaphore(1)
         slots.acquire()
-        with patch.object(pdf_service, "_slots", slots), patch.object(pdf_service.subprocess, "Popen") as spawn:
+        with (
+            patch.object(pdf_service, "_slots", slots),
+            patch.object(pdf_service.subprocess, "Popen") as spawn,
+        ):
             with self.assertRaises(pdf_service.PDFProcessingError) as raised:
                 pdf_service.extract_pdf_pages(path)
             self.assertEqual(raised.exception.status_code, 503)
@@ -763,15 +2586,35 @@ class SecurityTests(unittest.TestCase):
         from app.services.storage_service import storage_service
 
         before = set(settings.UPLOAD_DIR.iterdir())
-        with patch.object(document.rag_service, "extract_text_from_file", side_effect=extract_pdf_pages), patch.object(
-            document.rag_service, "process_and_index_document"
-        ) as index, patch.object(storage_service, "upload_file") as upload:
-            response = self.request("POST", "/document/upload", self.token, data={"session_id": "alice-session"},
-                                    files={"file": ("malformed.pdf", b"invalid fixture", "application/pdf")})
+        with (
+            patch.object(
+                document.rag_service,
+                "extract_text_from_file",
+                side_effect=extract_pdf_pages,
+            ),
+            patch.object(document.rag_service, "process_and_index_document") as index,
+            patch.object(storage_service, "upload_file") as upload,
+        ):
+            response = self.request(
+                "POST",
+                "/document/upload",
+                self.token,
+                data={"session_id": "alice-session"},
+                files={
+                    "file": ("malformed.pdf", b"invalid fixture", "application/pdf")
+                },
+            )
             self.assertEqual(response.status_code, 422)
             with patch.object(settings, "PDF_MAX_FILE_SIZE_BYTES", 3):
-                response = self.request("POST", "/document/upload", self.token, data={"session_id": "alice-session"},
-                                        files={"file": ("large.pdf", b"oversized fixture", "application/pdf")})
+                response = self.request(
+                    "POST",
+                    "/document/upload",
+                    self.token,
+                    data={"session_id": "alice-session"},
+                    files={
+                        "file": ("large.pdf", b"oversized fixture", "application/pdf")
+                    },
+                )
             self.assertEqual(response.status_code, 413)
             index.assert_not_called()
             upload.assert_not_called()
@@ -789,7 +2632,12 @@ class SecurityTests(unittest.TestCase):
             "job=worker['apply_resource_limits'](64, 10)\n"
             "try:\n data=bytearray(128*1024*1024)\nexcept MemoryError:\n print('bounded')\n"
         )
-        result = subprocess.run([sys.executable, "-I", "-B", "-c", code], capture_output=True, text=True, timeout=15)
+        result = subprocess.run(
+            [sys.executable, "-I", "-B", "-c", code],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
         self.assertEqual(result.returncode, 0)
         self.assertEqual(result.stdout.strip(), "bounded")
 
@@ -804,28 +2652,48 @@ class SecurityTests(unittest.TestCase):
         manager = Mock()
         manager.__enter__ = Mock(return_value=writer)
         manager.__exit__ = Mock(return_value=False)
-        with patch.object(document.tempfile, "NamedTemporaryFile", return_value=manager), patch.object(
-            document.rag_service, "process_and_index_document"
-        ) as index:
-            response = self.request("POST", "/document/upload", self.token, data={"session_id": "alice-session"},
-                                    files={"file": ("fixture.txt", b"fixture", "text/plain")})
+        with (
+            patch.object(document.tempfile, "NamedTemporaryFile", return_value=manager),
+            patch.object(document.rag_service, "process_and_index_document") as index,
+        ):
+            response = self.request(
+                "POST",
+                "/document/upload",
+                self.token,
+                data={"session_id": "alice-session"},
+                files={"file": ("fixture.txt", b"fixture", "text/plain")},
+            )
         self.assertEqual(response.status_code, 500)
         self.assertFalse(path.exists())
         index.assert_not_called()
 
-
     def test_document_attachments_are_persisted_and_route_to_grounding(self):
         from app.api.v1.endpoints import chat
         from app.services.rag_service import rag_service
+
         providers = {}
-        for name, attribute in (("llm_service", "llm_service"), ("image_gen_service", "image_gen_service"), ("web_search_service", "web_search_service")):
+        for name, attribute in (
+            ("llm_service", "llm_service"),
+            ("image_gen_service", "image_gen_service"),
+            ("web_search_service", "web_search_service"),
+        ):
             stub = types.ModuleType("app.services." + name)
             setattr(stub, attribute, Mock())
             providers[stub.__name__] = stub
         with patch.dict(sys.modules, providers):
-            implementation = runpy.run_path(str(Path(__file__).resolve().parents[1] / "app/services/orchestrator.py"))
+            implementation = runpy.run_path(
+                str(
+                    Path(__file__).resolve().parents[1] / "app/services/orchestrator.py"
+                )
+            )
         actual = implementation["chat_orchestrator"]
-        context = [{"text": "fixture document", "metadata": {"document_id": "document"}, "similarity_score": 1.0}]
+        context = [
+            {
+                "text": "fixture document",
+                "metadata": {"document_id": "document"},
+                "similarity_score": 1.0,
+            }
+        ]
 
         async def grounded(query, session_id, history, **kwargs):
             self.assertEqual(kwargs["context_chunks"], context)
@@ -835,22 +2703,58 @@ class SecurityTests(unittest.TestCase):
             raise AssertionError("Documents must not enter the vision route")
             yield ""
 
-        with patch.object(chat, "chat_orchestrator", actual), patch.object(actual, "_execute_document_rag", grounded), patch.object(actual, "_execute_multimodal", vision), patch.object(rag_service, "retrieve_context_for_query", return_value=context) as retrieve:
+        with (
+            patch.object(chat, "chat_orchestrator", actual),
+            patch.object(actual, "_execute_document_rag", grounded),
+            patch.object(actual, "_execute_multimodal", vision),
+            patch.object(
+                rag_service, "retrieve_context_for_query", return_value=context
+            ) as retrieve,
+        ):
             for mode in ("AUTO", "DOCUMENT_RAG", "MULTIMODAL"):
-                response = self.request("POST", "/chat/stream", self.token, json={
-                    "session_id": "alice-session", "message": "review", "mode": mode,
-                    "attachments": [{"id": "document", "file_type": "document", "url": "http://untrusted.invalid"}],
-                })
+                response = self.request(
+                    "POST",
+                    "/chat/stream",
+                    self.token,
+                    json={
+                        "session_id": "alice-session",
+                        "message": "review",
+                        "mode": mode,
+                        "attachments": [
+                            {
+                                "id": "document",
+                                "file_type": "document",
+                                "url": "http://untrusted.invalid",
+                            }
+                        ],
+                    },
+                )
                 self.assertEqual(response.status_code, 200)
-                retrieve.assert_called_with("review", "alice-session", document_ids=["document"])
-        history = self.request("GET", "/session/alice-session/history", self.token).json()
+                retrieve.assert_called_with(
+                    "review", "alice-session", document_ids=["document"]
+                )
+        history = self.request(
+            "GET", "/session/alice-session/history", self.token
+        ).json()
         attachment = history["messages"][-1]["attachments"][0]
         self.assertEqual(attachment["file_type"], "document")
         self.assertEqual(attachment["file_name"], "fixture.txt")
-        self.assertEqual(self.request("GET", attachment["url"].removeprefix("/api/v1")).content, b"fixture")
-        denied = self.request("POST", "/chat/stream", self.other_token, json={
-            "session_id": "bob-session", "message": "review", "attachments": [{"id": "document", "file_type": "document", "url": "ignored"}],
-        })
+        self.assertEqual(
+            self.request("GET", attachment["url"].removeprefix("/api/v1")).content,
+            b"fixture",
+        )
+        denied = self.request(
+            "POST",
+            "/chat/stream",
+            self.other_token,
+            json={
+                "session_id": "bob-session",
+                "message": "review",
+                "attachments": [
+                    {"id": "document", "file_type": "document", "url": "ignored"}
+                ],
+            },
+        )
         self.assertEqual(denied.status_code, 404)
 
     def test_grounding_honors_explicit_document_selection(self):
@@ -858,16 +2762,38 @@ class SecurityTests(unittest.TestCase):
         embedder = Mock()
         embedder.embed_text.return_value = [1.0]
         setattr(embedding, "embedding_service", embedder)
-        with patch.dict(sys.modules, {embedding.__name__: embedding}), patch.multiple(
-            settings, CHUNK_SIZE=800, CHUNK_OVERLAP=150, TOP_K_RETRIEVAL=4, SIMILARITY_THRESHOLD=0.2, create=True
+        with (
+            patch.dict(sys.modules, {embedding.__name__: embedding}),
+            patch.multiple(
+                settings,
+                CHUNK_SIZE=800,
+                CHUNK_OVERLAP=150,
+                TOP_K_RETRIEVAL=4,
+                SIMILARITY_THRESHOLD=0.2,
+                create=True,
+            ),
         ):
-            implementation = runpy.run_path(str(Path(__file__).resolve().parents[1] / "app/services/rag_service.py"))
+            implementation = runpy.run_path(
+                str(Path(__file__).resolve().parents[1] / "app/services/rag_service.py")
+            )
             actual = implementation["rag_service"]
             with patch.object(vectors, "similarity_search", return_value=[]) as search:
-                self.assertEqual(actual.retrieve_context_for_query("review", "alice-session", document_ids=["selected-fixture"]), [])
-                self.assertEqual(search.call_args.kwargs["document_ids"], ["selected-fixture"])
+                self.assertEqual(
+                    actual.retrieve_context_for_query(
+                        "review", "alice-session", document_ids=["selected-fixture"]
+                    ),
+                    [],
+                )
+                self.assertEqual(
+                    search.call_args.kwargs["document_ids"], ["selected-fixture"]
+                )
                 search.reset_mock()
-                self.assertEqual(actual.retrieve_context_for_query("review", "alice-session", document_ids=[]), [])
+                self.assertEqual(
+                    actual.retrieve_context_for_query(
+                        "review", "alice-session", document_ids=[]
+                    ),
+                    [],
+                )
                 search.assert_not_called()
 
     def test_real_orchestrator_streams_owned_media_without_external_requests(self):
@@ -878,23 +2804,61 @@ class SecurityTests(unittest.TestCase):
             yield "Offline answer"
 
         async def vision(*args, **kwargs):
-            self.assertEqual(media_service.get_media_bytes(kwargs["attachments"][0].url), b"fixture-image")
+            self.assertEqual(
+                media_service.get_media_bytes(kwargs["attachments"][0].url),
+                b"fixture-image",
+            )
             yield "Offline vision"
 
         providers = {}
-        for name, attribute in (("llm_service", "llm_service"), ("image_gen_service", "image_gen_service"),
-                                ("web_search_service", "web_search_service")):
+        for name, attribute in (
+            ("llm_service", "llm_service"),
+            ("image_gen_service", "image_gen_service"),
+            ("web_search_service", "web_search_service"),
+        ):
             stub = types.ModuleType("app.services." + name)
-            setattr(stub, attribute, Mock(stream_conversational_answer=answer, stream_multimodal_answer=vision))
+            setattr(
+                stub,
+                attribute,
+                Mock(
+                    stream_conversational_answer=answer, stream_multimodal_answer=vision
+                ),
+            )
             providers[stub.__name__] = stub
         with patch.dict(sys.modules, providers):
-            implementation = runpy.run_path(str(Path(__file__).resolve().parents[1] / "app/services/orchestrator.py"))
-        with patch.object(chat, "chat_orchestrator", implementation["chat_orchestrator"]):
-            for mode, attachments, expected in (("AUTO", [], "Offline answer"),
-                                               ("MULTIMODAL", [{"id": "image", "file_type": "image", "url": "http://internal.invalid"}], "Offline vision")):
-                response = self.request("POST", "/chat/stream", self.token, json={
-                    "session_id": "alice-session", "message": "hello", "mode": mode, "attachments": attachments,
-                })
+            implementation = runpy.run_path(
+                str(
+                    Path(__file__).resolve().parents[1] / "app/services/orchestrator.py"
+                )
+            )
+        with patch.object(
+            chat, "chat_orchestrator", implementation["chat_orchestrator"]
+        ):
+            for mode, attachments, expected in (
+                ("AUTO", [], "Offline answer"),
+                (
+                    "MULTIMODAL",
+                    [
+                        {
+                            "id": "image",
+                            "file_type": "image",
+                            "url": "http://internal.invalid",
+                        }
+                    ],
+                    "Offline vision",
+                ),
+            ):
+                response = self.request(
+                    "POST",
+                    "/chat/stream",
+                    self.token,
+                    json={
+                        "session_id": "alice-session",
+                        "message": "hello",
+                        "mode": mode,
+                        "attachments": attachments,
+                    },
+                )
                 self.assertEqual(response.status_code, 200)
                 self.assertIn(expected, response.text)
                 self.assertNotIn('"event": "error"', response.text)
@@ -903,25 +2867,43 @@ class SecurityTests(unittest.TestCase):
         distribution = root / "frontend/dist"
         distribution.mkdir(parents=True, exist_ok=True)
         (distribution / "index.html").write_text("fixture frontend", encoding="utf-8")
-        (distribution / "public.txt").write_text("fixture public file", encoding="utf-8")
+        (distribution / "public.txt").write_text(
+            "fixture public file", encoding="utf-8"
+        )
         assets = distribution / "assets"
         assets.mkdir(exist_ok=True)
         (assets / "main.js").write_text("fixture asset", encoding="utf-8")
         (root / "private-fixture.txt").write_text("private fixture", encoding="utf-8")
-        production = runpy.run_path(str(Path(__file__).resolve().parents[1] / "app/main.py"))["app"]
+        production = runpy.run_path(
+            str(Path(__file__).resolve().parents[1] / "app/main.py")
+        )["app"]
 
         async def check():
-            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=production), base_url="http://fixture.invalid") as client:
-                self.assertEqual((await client.get("/c/alice-session")).text, "fixture frontend")
-                self.assertEqual((await client.get("/public.txt")).text, "fixture public file")
-                self.assertEqual((await client.get("/assets/main.js")).text, "fixture asset")
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=production),
+                base_url="http://fixture.invalid",
+            ) as client:
+                self.assertEqual(
+                    (await client.get("/c/alice-session")).text, "fixture frontend"
+                )
+                self.assertEqual(
+                    (await client.get("/public.txt")).text, "fixture public file"
+                )
+                self.assertEqual(
+                    (await client.get("/assets/main.js")).text, "fixture asset"
+                )
                 for path in (
                     "/%2e%2e/%2e%2e/private-fixture.txt",
                     "/..%5c..%5cprivate-fixture.txt",
                     "/assets/..%5c..%5c..%5cprivate-fixture.txt",
-                    "/api", "/api/", "/api/v1/not-a-route",
-                    "/api%5cv1%5cnot-a-route", "/%2e/api", "/other/%2e%2e/api",
-                    "/api/v1/media/uploads/fixture.png", "/docs/not-a-route",
+                    "/api",
+                    "/api/",
+                    "/api/v1/not-a-route",
+                    "/api%5cv1%5cnot-a-route",
+                    "/%2e/api",
+                    "/other/%2e%2e/api",
+                    "/api/v1/media/uploads/fixture.png",
+                    "/docs/not-a-route",
                 ):
                     with self.subTest(path=path):
                         self.assertEqual((await client.get(path)).status_code, 404)
@@ -942,11 +2924,19 @@ class SecurityTests(unittest.TestCase):
         link_name = self.__class__.__name__ + "-linked"
         _winapi.CreateJunction(str(outside), str(distribution / link_name))
         _winapi.CreateJunction(str(outside), str(assets / link_name))
-        production = runpy.run_path(str(Path(__file__).resolve().parents[1] / "app/main.py"))["app"]
+        production = runpy.run_path(
+            str(Path(__file__).resolve().parents[1] / "app/main.py")
+        )["app"]
 
         async def check():
-            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=production), base_url="http://fixture.invalid") as client:
-                for path in (f"/{link_name}/private.txt", f"/assets/{link_name}/private.txt"):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=production),
+                base_url="http://fixture.invalid",
+            ) as client:
+                for path in (
+                    f"/{link_name}/private.txt",
+                    f"/assets/{link_name}/private.txt",
+                ):
                     with self.subTest(path=path):
                         response = await client.get(path)
                         self.assertEqual(response.status_code, 404)
@@ -955,34 +2945,86 @@ class SecurityTests(unittest.TestCase):
         asyncio.run(check())
 
     def test_direct_email_google_login_is_rejected(self):
-        self.assertEqual(self.request("POST", "/user/auth/google", json={"email": self.alice.email}).status_code, 422)
+        self.assertEqual(
+            self.request(
+                "POST", "/user/auth/google", json={"email": self.alice.email}
+            ).status_code,
+            422,
+        )
 
     def test_profile_and_upload_identity_cannot_be_overridden(self):
         for method, path, kwargs in (
-            ("PATCH", "/user/profile", {"json": {"user_id": self.alice.id, "display_name": "Attacker"}}),
-            ("POST", "/media/upload", {"data": {"user_id": self.alice.id}, "files": {"file": ("fixture.png", b"fixture", "image/png")}}),
-            ("POST", "/document/upload", {"data": {"session_id": "alice-session"}, "files": {"file": ("fixture.txt", b"fixture")}}),
+            (
+                "PATCH",
+                "/user/profile",
+                {"json": {"user_id": self.alice.id, "display_name": "Attacker"}},
+            ),
+            (
+                "POST",
+                "/media/upload",
+                {
+                    "data": {"user_id": self.alice.id},
+                    "files": {"file": ("fixture.png", b"fixture", "image/png")},
+                },
+            ),
+            (
+                "POST",
+                "/document/upload",
+                {
+                    "data": {"session_id": "alice-session"},
+                    "files": {"file": ("fixture.txt", b"fixture")},
+                },
+            ),
         ):
             with self.subTest(path=path):
-                self.assertIn(self.request(method, path, self.other_token, **kwargs).status_code, (403, 404))
+                self.assertIn(
+                    self.request(method, path, self.other_token, **kwargs).status_code,
+                    (403, 404),
+                )
 
     def test_guest_document_metadata_has_owned_downloads(self):
         from app.services.chat_history_service import chat_history_service
+
         guest = security.create_guest()
         principal = security.resolve_principal(security.digest(guest["access_token"]))
         security.ensure_session("guest-document-session", principal)
-        chat_history_service.save_document("guest-document", principal.user_id, "guest-document-session",
-                                           "fixture.txt", "txt", 7, 1, "documents/alice-session/fixture.txt")
-        url = security.download_url("guest-document", principal, "document").removeprefix("/api/v1")
+        chat_history_service.save_document(
+            "guest-document",
+            principal.user_id,
+            "guest-document-session",
+            "fixture.txt",
+            "txt",
+            7,
+            1,
+            "documents/alice-session/fixture.txt",
+        )
+        url = security.download_url(
+            "guest-document", principal, "document"
+        ).removeprefix("/api/v1")
         self.assertEqual(self.request("GET", url).content, b"fixture")
-        self.assertEqual(self.request("GET", "/document/guest-document/chunks", self.token).status_code, 404)
+        self.assertEqual(
+            self.request(
+                "GET", "/document/guest-document/chunks", self.token
+            ).status_code,
+            404,
+        )
 
-    def test_unowned_legacy_assets_are_denied_and_missing_attachments_do_not_break_history(self):
+    def test_unowned_legacy_assets_are_denied_and_missing_attachments_do_not_break_history(
+        self,
+    ):
         from app.services.chat_history_service import chat_history_service
+
         with database.get_db_connection() as conn:
-            conn.execute("UPDATE media_assets SET user_id=NULL,session_id=NULL WHERE id='image'")
-        self.assertEqual(self.request("GET", "/media/content/media/image", self.token).status_code, 404)
-        chat_history_service.save_message("alice-session", "user", "Old message", attachments=[{"url": "/legacy.png"}])
+            conn.execute(
+                "UPDATE media_assets SET user_id=NULL,session_id=NULL WHERE id='image'"
+            )
+        self.assertEqual(
+            self.request("GET", "/media/content/media/image", self.token).status_code,
+            404,
+        )
+        chat_history_service.save_message(
+            "alice-session", "user", "Old message", attachments=[{"url": "/legacy.png"}]
+        )
         response = self.request("GET", "/session/alice-session/history", self.token)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["messages"][0]["attachments"], [])
@@ -993,41 +3035,85 @@ class SecurityTests(unittest.TestCase):
         response = self.request("GET", "/media/assets", self.token)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["total"], 2)
-        self.assertEqual(self.request("GET", "/media/content/media/image", self.token).content, b"fixture-image")
+        self.assertEqual(
+            self.request("GET", "/media/content/media/image", self.token).content,
+            b"fixture-image",
+        )
 
     def test_verified_google_subject_is_persistent_and_client_email_is_ignored(self):
         import app.services.user_service as service_module
-        claims = {"sub": "google-fixture", "email": "new@gmail.com", "name": "Google Person", "email_verified": True}
-        with patch.object(service_module, "verify_google_credential", return_value=claims):
-            first = self.request("POST", "/user/auth/google", json={"credential": "verified-by-fixture", "email": self.alice.email})
+
+        claims = {
+            "sub": "google-fixture",
+            "email": "new@gmail.com",
+            "name": "Google Person",
+            "email_verified": True,
+        }
+        with patch.object(
+            service_module, "verify_google_credential", return_value=claims
+        ):
+            first = self.request(
+                "POST",
+                "/user/auth/google",
+                json={"credential": "verified-by-fixture", "email": self.alice.email},
+            )
             self.assertEqual(first.status_code, 200)
             self.assertEqual(first.json()["email"], "new@gmail.com")
             claims["email"] = "changed@gmail.com"
-            second = self.request("POST", "/user/auth/google", json={"credential": "verified-by-fixture"})
+            second = self.request(
+                "POST", "/user/auth/google", json={"credential": "verified-by-fixture"}
+            )
             self.assertEqual(second.json()["id"], first.json()["id"])
 
     def test_third_party_email_cannot_automatically_link_to_existing_account(self):
         import app.services.user_service as service_module
-        claims = {"sub": "google-fixture", "email": self.alice.email, "email_verified": True}
-        with patch.object(service_module, "verify_google_credential", return_value=claims):
-            self.assertEqual(self.request("POST", "/user/auth/google", json={"credential": "verified-by-fixture"}).status_code, 409)
+
+        claims = {
+            "sub": "google-fixture",
+            "email": self.alice.email,
+            "email_verified": True,
+        }
+        with patch.object(
+            service_module, "verify_google_credential", return_value=claims
+        ):
+            self.assertEqual(
+                self.request(
+                    "POST",
+                    "/user/auth/google",
+                    json={"credential": "verified-by-fixture"},
+                ).status_code,
+                409,
+            )
 
     def test_cloud_file_download_uses_exact_owned_key_without_http_fallback(self):
         from app.services.storage_service import storage_service
+
         with database.get_db_connection() as conn:
-            conn.execute("UPDATE media_assets SET file_path='media/uploads/cloud-fixture.png' WHERE id='image'")
+            conn.execute(
+                "UPDATE media_assets SET file_path='media/uploads/cloud-fixture.png' WHERE id='image'"
+            )
         body = io.BytesIO(b"cloud fixture")
         client = Mock()
         client.get_object.return_value = {"Body": body}
-        with patch.object(storage_service, "_s3_client", client), patch.object(storage_service, "_initialized", True):
+        with (
+            patch.object(storage_service, "_s3_client", client),
+            patch.object(storage_service, "_initialized", True),
+        ):
             response = self.request("GET", "/media/content/media/image", self.token)
         self.assertEqual(response.content, b"cloud fixture")
-        client.get_object.assert_called_once_with(Bucket="fixture", Key="media/uploads/cloud-fixture.png")
+        client.get_object.assert_called_once_with(
+            Bucket="fixture", Key="media/uploads/cloud-fixture.png"
+        )
         self.assertTrue(body.closed)
 
     def test_generated_stream_media_gets_an_owned_download_ticket(self):
         fixture_orchestrator.emit_media = True
-        response = self.request("POST", "/chat/stream", self.token, json={"session_id": "alice-session", "message": "hello"})
+        response = self.request(
+            "POST",
+            "/chat/stream",
+            self.token,
+            json={"session_id": "alice-session", "message": "hello"},
+        )
         event = json.loads(response.text.split("\n\n")[0].removeprefix("data: "))
         url = event["media"]["url"].removeprefix("/api/v1")
         self.assertEqual(self.request("GET", url).content, b"fixture-image")
@@ -1038,12 +3124,26 @@ class SecurityTests(unittest.TestCase):
         private = root / "private-read-fixture.txt"
         private.write_bytes(b"private fixture")
         client = Mock()
-        keys = ["", str(private), "../private-read-fixture.txt", "media/../private-read-fixture.txt",
-                "media//uploads/fixture.png", r"media\uploads\fixture.png", "media/uploads/CON.txt",
-                "media/uploads/fixture.png:stream", "media/uploads/fixture.png.", "private-read-fixture.txt",
-                "http://127.0.0.1/private", "http://169.254.169.254/latest/meta-data/",
-                "file:///private", "//internal.invalid/media/uploads/fixture.png"]
-        with patch.object(storage_service, "_s3_client", client), patch.object(storage_service, "_initialized", True):
+        keys = [
+            "",
+            str(private),
+            "../private-read-fixture.txt",
+            "media/../private-read-fixture.txt",
+            "media//uploads/fixture.png",
+            r"media\uploads\fixture.png",
+            "media/uploads/CON.txt",
+            "media/uploads/fixture.png:stream",
+            "media/uploads/fixture.png.",
+            "private-read-fixture.txt",
+            "http://127.0.0.1/private",
+            "http://169.254.169.254/latest/meta-data/",
+            "file:///private",
+            "//internal.invalid/media/uploads/fixture.png",
+        ]
+        with (
+            patch.object(storage_service, "_s3_client", client),
+            patch.object(storage_service, "_initialized", True),
+        ):
             for key in keys:
                 with self.subTest(key=key):
                     self.assertIsNone(storage_service.download_owned_file(key))
@@ -1054,21 +3154,33 @@ class SecurityTests(unittest.TestCase):
         from app.services.storage_service import storage_service
 
         key = "media/uploads/fixture.png"
-        with patch.object(settings, "CLOUDFLARE_R2_PUBLIC_URL", "https://cdn.fixture.invalid/files"), patch.object(
-            settings, "r2_endpoint_url", "https://r2.fixture.invalid"
-        ), patch.object(storage_service, "download_owned_file", return_value=b"fixture") as read:
-            for url in ("https://cdn.fixture.invalid/files/" + key,
-                        "https://r2.fixture.invalid/fixture/" + key,
-                        "/api/v1/media/uploads/fixture.png?ticket=fixture"):
+        with (
+            patch.object(
+                settings,
+                "CLOUDFLARE_R2_PUBLIC_URL",
+                "https://cdn.fixture.invalid/files",
+            ),
+            patch.object(settings, "r2_endpoint_url", "https://r2.fixture.invalid"),
+            patch.object(
+                storage_service, "download_owned_file", return_value=b"fixture"
+            ) as read,
+        ):
+            for url in (
+                "https://cdn.fixture.invalid/files/" + key,
+                "https://r2.fixture.invalid/fixture/" + key,
+                "/api/v1/media/uploads/fixture.png?ticket=fixture",
+            ):
                 self.assertEqual(storage_service.download_file(url), b"fixture")
                 read.assert_called_with(key)
-            for url in ("https://cdn.fixture.invalid.evil.invalid/files/" + key,
-                        "https://evil.invalid/fixture/" + key,
-                        "https://evil.invalid/https://cdn.fixture.invalid/files/" + key,
-                        "https://cdn.fixture.invalid/filesevil/" + key,
-                        "https://cdn.fixture.invalid:444/files/" + key,
-                        "https://user@cdn.fixture.invalid/files/" + key,
-                        "https://cdn.fixture.invalid/files/media/%2e%2e/private.txt"):
+            for url in (
+                "https://cdn.fixture.invalid.evil.invalid/files/" + key,
+                "https://evil.invalid/fixture/" + key,
+                "https://evil.invalid/https://cdn.fixture.invalid/files/" + key,
+                "https://cdn.fixture.invalid/filesevil/" + key,
+                "https://cdn.fixture.invalid:444/files/" + key,
+                "https://user@cdn.fixture.invalid/files/" + key,
+                "https://cdn.fixture.invalid/files/media/%2e%2e/private.txt",
+            ):
                 self.assertIsNone(storage_service._extract_key_from_url(url))
                 with self.assertRaises(security.HTTPException):
                     storage_service.owned_storage_key({"file_path": url}, "media")
@@ -1076,14 +3188,30 @@ class SecurityTests(unittest.TestCase):
     def test_owned_downloads_bound_reads_and_close_cloud_bodies(self):
         from app.services.storage_service import storage_service
 
-        self.assertIsNone(storage_service.download_owned_file("media/uploads/fixture.png", max_bytes=3))
-        self.assertEqual(storage_service.download_owned_file("media/uploads/fixture.png", max_bytes=13), b"fixture-image")
+        self.assertIsNone(
+            storage_service.download_owned_file(
+                "media/uploads/fixture.png", max_bytes=3
+            )
+        )
+        self.assertEqual(
+            storage_service.download_owned_file(
+                "media/uploads/fixture.png", max_bytes=13
+            ),
+            b"fixture-image",
+        )
         for declared in (0, 100):
             body = io.BytesIO(b"oversized fixture")
             client = Mock()
             client.get_object.return_value = {"Body": body, "ContentLength": declared}
-            with patch.object(storage_service, "_s3_client", client), patch.object(storage_service, "_initialized", True):
-                self.assertIsNone(storage_service.download_owned_file("media/uploads/cloud-limit.png", max_bytes=3))
+            with (
+                patch.object(storage_service, "_s3_client", client),
+                patch.object(storage_service, "_initialized", True),
+            ):
+                self.assertIsNone(
+                    storage_service.download_owned_file(
+                        "media/uploads/cloud-limit.png", max_bytes=3
+                    )
+                )
             self.assertTrue(body.closed)
 
     def test_cloud_failure_never_falls_back_to_http(self):
@@ -1091,11 +3219,26 @@ class SecurityTests(unittest.TestCase):
 
         client = Mock()
         client.get_object.side_effect = RuntimeError("fixture storage failure")
-        with patch.object(storage_service, "_s3_client", client), patch.object(storage_service, "_initialized", True), patch.object(
-            settings, "CLOUDFLARE_R2_PUBLIC_URL", "https://cdn.fixture.invalid"
-        ), patch.object(httpx, "Client", side_effect=AssertionError("HTTP fallback is forbidden")):
-            self.assertIsNone(storage_service.download_file("https://cdn.fixture.invalid/media/uploads/cloud-missing.png"))
-        client.get_object.assert_called_once_with(Bucket="fixture", Key="media/uploads/cloud-missing.png")
+        with (
+            patch.object(storage_service, "_s3_client", client),
+            patch.object(storage_service, "_initialized", True),
+            patch.object(
+                settings, "CLOUDFLARE_R2_PUBLIC_URL", "https://cdn.fixture.invalid"
+            ),
+            patch.object(
+                httpx,
+                "Client",
+                side_effect=AssertionError("HTTP fallback is forbidden"),
+            ),
+        ):
+            self.assertIsNone(
+                storage_service.download_file(
+                    "https://cdn.fixture.invalid/media/uploads/cloud-missing.png"
+                )
+            )
+        client.get_object.assert_called_once_with(
+            Bucket="fixture", Key="media/uploads/cloud-missing.png"
+        )
 
     @unittest.skipUnless(sys.platform == "win32", "Windows junction regression")
     def test_owned_downloads_reject_junctions_into_private_data(self):
@@ -1110,10 +3253,14 @@ class SecurityTests(unittest.TestCase):
         (private / "fixture.txt").write_bytes(b"private fixture")
         _winapi.CreateJunction(str(private), str(data / "media/linked"))
         client = Mock()
-        with patch.object(settings, "DATA_DIR", data), patch.object(storage_service, "_s3_client", client), patch.object(
-            storage_service, "_initialized", True
+        with (
+            patch.object(settings, "DATA_DIR", data),
+            patch.object(storage_service, "_s3_client", client),
+            patch.object(storage_service, "_initialized", True),
         ):
-            self.assertIsNone(storage_service.download_owned_file("media/linked/fixture.txt"))
+            self.assertIsNone(
+                storage_service.download_owned_file("media/linked/fixture.txt")
+            )
             client.get_object.assert_not_called()
 
     def test_vision_reads_only_media_keys_with_the_upload_size_limit(self):
@@ -1121,10 +3268,20 @@ class SecurityTests(unittest.TestCase):
         from app.services.storage_service import storage_service
 
         with patch.object(implementation, "MAX_FILE_SIZE_BYTES", 3):
-            self.assertIsNone(implementation.media_service.get_media_bytes("media/uploads/fixture.png"))
+            self.assertIsNone(
+                implementation.media_service.get_media_bytes(
+                    "media/uploads/fixture.png"
+                )
+            )
         with patch.object(storage_service, "download_owned_file") as read:
-            self.assertIsNone(implementation.media_service.get_media_bytes("documents/alice-session/fixture.txt"))
-            self.assertIsNone(implementation.media_service.get_media_bytes("http://internal.invalid"))
+            self.assertIsNone(
+                implementation.media_service.get_media_bytes(
+                    "documents/alice-session/fixture.txt"
+                )
+            )
+            self.assertIsNone(
+                implementation.media_service.get_media_bytes("http://internal.invalid")
+            )
             read.assert_not_called()
 
     def test_reference_generation_uses_owned_keys_in_local_and_cloud_modes(self):
@@ -1135,7 +3292,10 @@ class SecurityTests(unittest.TestCase):
 
         async def reference(**kwargs):
             self.assertTrue(kwargs["reference_image_path"].startswith("media/uploads/"))
-            self.assertEqual(media_service.get_media_bytes(kwargs["reference_image_path"]), b"fixture-image")
+            self.assertEqual(
+                media_service.get_media_bytes(kwargs["reference_image_path"]),
+                b"fixture-image",
+            )
             return MediaAttachment(id="image", url="ignored", file_type="image")
 
         providers = {}
@@ -1143,23 +3303,55 @@ class SecurityTests(unittest.TestCase):
             stub = types.ModuleType("app.services." + name)
             setattr(stub, name, Mock())
             providers[stub.__name__] = stub
-        generator = getattr(providers["app.services.image_gen_service"], "image_gen_service")
+        generator = getattr(
+            providers["app.services.image_gen_service"], "image_gen_service"
+        )
         generator.generate_from_reference = AsyncMock(side_effect=reference)
-        generator.generate_image = AsyncMock(side_effect=AssertionError("Must use the attached reference"))
+        generator.generate_image = AsyncMock(
+            side_effect=AssertionError("Must use the attached reference")
+        )
         with patch.dict(sys.modules, providers):
-            actual = runpy.run_path(str(Path(__file__).resolve().parents[1] / "app/services/orchestrator.py"))["chat_orchestrator"]
+            actual = runpy.run_path(
+                str(
+                    Path(__file__).resolve().parents[1] / "app/services/orchestrator.py"
+                )
+            )["chat_orchestrator"]
         client = Mock()
-        client.get_object.side_effect = lambda **kwargs: {"Body": io.BytesIO(b"fixture-image")}
-        with patch.object(chat, "chat_orchestrator", actual), patch.object(storage_service, "_s3_client", client):
+        client.get_object.side_effect = lambda **kwargs: {
+            "Body": io.BytesIO(b"fixture-image")
+        }
+        with (
+            patch.object(chat, "chat_orchestrator", actual),
+            patch.object(storage_service, "_s3_client", client),
+        ):
             for cloud in (False, True):
-                key = "media/uploads/cloud-reference.png" if cloud else "media/uploads/fixture.png"
+                key = (
+                    "media/uploads/cloud-reference.png"
+                    if cloud
+                    else "media/uploads/fixture.png"
+                )
                 with database.get_db_connection() as conn:
-                    conn.execute("UPDATE media_assets SET file_path=? WHERE id='image'", (key,))
+                    conn.execute(
+                        "UPDATE media_assets SET file_path=? WHERE id='image'", (key,)
+                    )
                 with patch.object(storage_service, "_initialized", cloud):
-                    response = self.request("POST", "/chat/stream", self.token, json={
-                        "session_id": "alice-session", "message": "Generate a new image using this reference", "mode": "IMAGE_GENERATION",
-                        "attachments": [{"id": "image", "file_type": "image", "url": "http://internal.invalid"}],
-                    })
+                    response = self.request(
+                        "POST",
+                        "/chat/stream",
+                        self.token,
+                        json={
+                            "session_id": "alice-session",
+                            "message": "Generate a new image using this reference",
+                            "mode": "IMAGE_GENERATION",
+                            "attachments": [
+                                {
+                                    "id": "image",
+                                    "file_type": "image",
+                                    "url": "http://internal.invalid",
+                                }
+                            ],
+                        },
+                    )
                 self.assertEqual(response.status_code, 200)
                 self.assertNotIn('"event": "error"', response.text)
                 self.assertIn('"event": "media"', response.text)
@@ -1167,18 +3359,36 @@ class SecurityTests(unittest.TestCase):
         generator.generate_image.assert_not_called()
 
     def test_incoming_attachment_url_is_replaced_with_owned_storage_key(self):
-        response = self.request("POST", "/chat/stream", self.token, json={
-            "session_id": "alice-session", "message": "hello",
-            "attachments": [{"id": "image", "file_type": "image", "url": "http://internal.invalid/secret"}],
-        })
+        response = self.request(
+            "POST",
+            "/chat/stream",
+            self.token,
+            json={
+                "session_id": "alice-session",
+                "message": "hello",
+                "attachments": [
+                    {
+                        "id": "image",
+                        "file_type": "image",
+                        "url": "http://internal.invalid/secret",
+                    }
+                ],
+            },
+        )
         self.assertEqual(response.status_code, 200)
         assert fixture_orchestrator.last_request is not None
-        self.assertEqual(fixture_orchestrator.last_request.attachments[0].url, "media/uploads/fixture.png")
+        self.assertEqual(
+            fixture_orchestrator.last_request.attachments[0].url,
+            "media/uploads/fixture.png",
+        )
 
     def issue_otp(self, purpose="login", delivered=True):
         from app.services import user_service as service_module
+
         sender = AsyncMock(return_value=delivered)
-        method = "send_otp_email" if purpose == "login" else "send_password_reset_otp_email"
+        method = (
+            "send_otp_email" if purpose == "login" else "send_password_reset_otp_email"
+        )
         path = "/user/otp/send" if purpose == "login" else "/user/password-reset/send"
         with patch.object(service_module.email_service, method, sender):
             response = self.request("POST", path, json={"email_or_username": "alice"})
@@ -1202,7 +3412,9 @@ class SecurityTests(unittest.TestCase):
             for attempt in range(1, 4):
                 self.assertEqual(self.verify_otp(wrong, purpose).status_code, 400)
                 with database.get_db_connection() as conn:
-                    row = conn.execute("SELECT attempts,is_used,otp_code FROM email_otps").fetchone()
+                    row = conn.execute(
+                        "SELECT attempts,is_used,otp_code FROM email_otps"
+                    ).fetchone()
                     self.assertEqual(row["attempts"], attempt)
                     self.assertEqual(row["is_used"], int(attempt == 3))
                     self.assertNotEqual(row["otp_code"], code)
@@ -1221,14 +3433,21 @@ class SecurityTests(unittest.TestCase):
             conn.execute("UPDATE email_otps SET expires_at = 0")
         self.assertEqual(self.verify_otp(reset_code, "reset").status_code, 400)
         with database.get_db_connection() as conn:
-            self.assertEqual(conn.execute("SELECT is_used FROM email_otps WHERE purpose='reset'").fetchone()[0], 1)
+            self.assertEqual(
+                conn.execute(
+                    "SELECT is_used FROM email_otps WHERE purpose='reset'"
+                ).fetchone()[0],
+                1,
+            )
 
     def test_failed_email_is_reported_and_cannot_authenticate(self):
         failed, code = self.issue_otp(delivered=False)
         self.assertEqual(failed.status_code, 503)
         self.assertEqual(self.verify_otp(code).status_code, 400)
         with database.get_db_connection() as conn:
-            row = conn.execute("SELECT delivery_status,is_used FROM email_otps").fetchone()
+            row = conn.execute(
+                "SELECT delivery_status,is_used FROM email_otps"
+            ).fetchone()
             self.assertEqual((row[0], row[1]), ("failed", 1))
         self.assertEqual(self.issue_otp()[0].status_code, 429)
 
@@ -1237,7 +3456,9 @@ class SecurityTests(unittest.TestCase):
             response, _ = self.issue_otp("login" if i % 2 == 0 else "reset")
             self.assertEqual(response.status_code, 200)
             with database.get_db_connection() as conn:
-                conn.execute("UPDATE email_otps SET requested_at = requested_at - 31, is_used = 1")
+                conn.execute(
+                    "UPDATE email_otps SET requested_at = requested_at - 31, is_used = 1"
+                )
         self.assertEqual(self.issue_otp()[0].status_code, 429)
 
     def test_pending_email_cannot_authenticate_and_delivery_is_awaited(self):
@@ -1245,12 +3466,15 @@ class SecurityTests(unittest.TestCase):
 
         async def delivery(**kwargs):
             from fastapi import HTTPException
+
             with self.assertRaises(HTTPException):
                 user_service.verify_login_otp("alice", kwargs["otp_code"])
             return True
 
         with patch.object(service_module.email_service, "send_otp_email", delivery):
-            result = self.request("POST", "/user/otp/send", json={"email_or_username": "alice"})
+            result = self.request(
+                "POST", "/user/otp/send", json={"email_or_username": "alice"}
+            )
         self.assertEqual(result.status_code, 200)
 
     def test_concurrent_otp_use_has_one_winner(self):
@@ -1288,41 +3512,60 @@ class SecurityTests(unittest.TestCase):
     def test_password_update_failure_rolls_back_otp_consumption(self):
         _, code = self.issue_otp("reset")
         with database.get_db_connection() as conn:
-            original = conn.execute("SELECT password_hash FROM users WHERE id=?", (self.alice.id,)).fetchone()[0]
-            conn.execute("CREATE TRIGGER reject_password BEFORE UPDATE OF password_hash ON users "
-                         "BEGIN SELECT RAISE(ABORT, 'fixture update failure'); END")
+            original = conn.execute(
+                "SELECT password_hash FROM users WHERE id=?", (self.alice.id,)
+            ).fetchone()[0]
+            conn.execute(
+                "CREATE TRIGGER reject_password BEFORE UPDATE OF password_hash ON users "
+                "BEGIN SELECT RAISE(ABORT, 'fixture update failure'); END"
+            )
         with self.assertRaises(Exception):
             self.verify_otp(code, "reset")
         with database.get_db_connection() as conn:
-            self.assertEqual(conn.execute("SELECT is_used FROM email_otps").fetchone()[0], 0)
-            self.assertEqual(conn.execute("SELECT password_hash FROM users WHERE id=?", (self.alice.id,)).fetchone()[0], original)
+            self.assertEqual(
+                conn.execute("SELECT is_used FROM email_otps").fetchone()[0], 0
+            )
+            self.assertEqual(
+                conn.execute(
+                    "SELECT password_hash FROM users WHERE id=?", (self.alice.id,)
+                ).fetchone()[0],
+                original,
+            )
             conn.execute("DROP TRIGGER reject_password")
         self.assertEqual(self.verify_otp(code, "reset").status_code, 200)
 
     def test_multi_statement_failure_rolls_back_inserts(self):
         with self.assertRaises(Exception):
             with database.get_db_connection() as conn:
-                conn.execute("INSERT INTO email_otps(id,email,otp_code,expires_at,created_at) "
-                             "VALUES('rollback-fixture','fixture@example.invalid','unused',0,'fixture')")
-                conn.execute("INSERT INTO email_otps(id,email,otp_code,expires_at,created_at) "
-                             "VALUES('broken-fixture',NULL,'unused',0,'fixture')")
+                conn.execute(
+                    "INSERT INTO email_otps(id,email,otp_code,expires_at,created_at) "
+                    "VALUES('rollback-fixture','fixture@example.invalid','unused',0,'fixture')"
+                )
+                conn.execute(
+                    "INSERT INTO email_otps(id,email,otp_code,expires_at,created_at) "
+                    "VALUES('broken-fixture',NULL,'unused',0,'fixture')"
+                )
         with database.get_db_connection() as conn:
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM email_otps").fetchone()[0], 0)
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM email_otps").fetchone()[0], 0
+            )
 
     def test_legacy_otp_migration_revokes_codes_and_is_repeatable(self):
         with database.get_db_connection() as conn:
             conn.execute("DROP INDEX idx_otp_email_requested")
             for name in ("purpose", "delivery_status", "requested_at"):
                 conn.execute(f"ALTER TABLE email_otps DROP COLUMN {name}")
-            conn.execute("INSERT INTO email_otps(id,email,otp_code,expires_at,created_at) "
-                         "VALUES('legacy-fixture',?,'123456',?,'fixture')", (self.alice.email, time.time() + 300))
+            conn.execute(
+                "INSERT INTO email_otps(id,email,otp_code,expires_at,created_at) "
+                "VALUES('legacy-fixture',?,'123456',?,'fixture')",
+                (self.alice.email, time.time() + 300),
+            )
         database.init_db()
         database.init_db()
         self.assertEqual(self.verify_otp("123456").status_code, 400)
         with database.get_db_connection() as conn:
             row = conn.execute("SELECT is_used,otp_code FROM email_otps").fetchone()
             self.assertEqual((row[0], row[1]), (1, ""))
-
 
     def test_resend_replaces_only_its_own_purpose(self):
         self.issue_otp()
@@ -1333,20 +3576,35 @@ class SecurityTests(unittest.TestCase):
             conn.execute("UPDATE email_otps SET requested_at = requested_at - 31")
         _, latest_code = self.issue_otp()
         with database.get_db_connection() as conn:
-            rows = conn.execute("SELECT purpose,is_used FROM email_otps ORDER BY requested_at").fetchall()
-            self.assertEqual([(row[0], row[1]) for row in rows], [("login", 1), ("reset", 0), ("login", 0)])
+            rows = conn.execute(
+                "SELECT purpose,is_used FROM email_otps ORDER BY requested_at"
+            ).fetchall()
+            self.assertEqual(
+                [(row[0], row[1]) for row in rows],
+                [("login", 1), ("reset", 0), ("login", 0)],
+            )
         self.assertEqual(self.verify_otp(latest_code).status_code, 200)
 
     def test_delivery_exception_is_redacted_and_challenge_revoked(self):
         from app.services import user_service as service_module
-        sender = AsyncMock(side_effect=RuntimeError("sensitive fixture provider response"))
-        with patch.object(service_module.email_service, "send_otp_email", sender), patch.object(service_module.logger, "error") as log:
-            result = self.request("POST", "/user/otp/send", json={"email_or_username": "alice"})
+
+        sender = AsyncMock(
+            side_effect=RuntimeError("sensitive fixture provider response")
+        )
+        with (
+            patch.object(service_module.email_service, "send_otp_email", sender),
+            patch.object(service_module.logger, "error") as log,
+        ):
+            result = self.request(
+                "POST", "/user/otp/send", json={"email_or_username": "alice"}
+            )
         self.assertEqual(result.status_code, 503)
         self.assertNotIn("sensitive fixture", str(log.call_args))
         with database.get_db_connection() as conn:
-            self.assertEqual(conn.execute("SELECT delivery_status FROM email_otps").fetchone()[0], "failed")
-
+            self.assertEqual(
+                conn.execute("SELECT delivery_status FROM email_otps").fetchone()[0],
+                "failed",
+            )
 
 
 class CloudAdapterSecurityTests(SecurityTests):
@@ -1354,18 +3612,25 @@ class CloudAdapterSecurityTests(SecurityTests):
 
     This verifies statement/row compatibility, not remote Turso or its FK setup.
     """
+
     def setUp(self):
         super().setUp()
         import libsql_client
+
         original = libsql_client.create_client_sync
+
         # Run the installed SDK and its transaction/row classes against
         # disposable local SQL, without contacting a remote server.
         def client(**kwargs):
             return original(url=database.DB_FILE.resolve().as_uri())
 
-        for replacement in (patch.object(database, "is_turso_configured", return_value=True),
-                            patch.object(database, "get_turso_url", return_value="wss://fixture.invalid"),
-                            patch.object(libsql_client, "create_client_sync", side_effect=client)):
+        for replacement in (
+            patch.object(database, "is_turso_configured", return_value=True),
+            patch.object(
+                database, "get_turso_url", return_value="wss://fixture.invalid"
+            ),
+            patch.object(libsql_client, "create_client_sync", side_effect=client),
+        ):
             replacement.start()
             self.addCleanup(replacement.stop)
 
@@ -1376,30 +3641,65 @@ class CloudAdapterSecurityTests(SecurityTests):
 
 class EmailDeliveryTests(unittest.TestCase):
     def setUp(self):
-        module_path = Path(__file__).resolve().parents[1] / "app/services/email_service.py"
+        module_path = (
+            Path(__file__).resolve().parents[1] / "app/services/email_service.py"
+        )
         self.namespace = runpy.run_path(str(module_path))
         self.mail = self.namespace["EmailService"]()
 
     def test_unconfigured_smtp_fails_without_logging_email_content(self):
-        with patch.object(settings, "SMTP_HOST", "", create=True), patch.object(logger, "warning") as log:
-            self.assertFalse(self.mail._send_smtp_sync("fixture@example.invalid", "secret subject", "secret body", "secret html"))
+        with (
+            patch.object(settings, "SMTP_HOST", "", create=True),
+            patch.object(logger, "warning") as log,
+        ):
+            self.assertFalse(
+                self.mail._send_smtp_sync(
+                    "fixture@example.invalid",
+                    "secret subject",
+                    "secret body",
+                    "secret html",
+                )
+            )
         self.assertNotIn("secret", str(log.call_args))
 
     def test_provider_error_body_is_not_logged(self):
         import urllib.error
-        with patch.multiple(settings, BREVO_API_KEY="fixture", BREVO_FROM_EMAIL="fixture@example.invalid",
-                            BREVO_FROM_NAME="Fixture", create=True), patch("urllib.request.urlopen", side_effect=urllib.error.HTTPError(
-                                "https://fixture.invalid", 400, "fixture", Message(), io.BytesIO(b"secret provider response"))), patch.object(logger, "error") as log:
-            self.assertFalse(self.mail._send_brevo_http("fixture@example.invalid", "secret", "secret", "secret"))
+
+        with (
+            patch.multiple(
+                settings,
+                BREVO_API_KEY="fixture",
+                BREVO_FROM_EMAIL="fixture@example.invalid",
+                BREVO_FROM_NAME="Fixture",
+                create=True,
+            ),
+            patch(
+                "urllib.request.urlopen",
+                side_effect=urllib.error.HTTPError(
+                    "https://fixture.invalid",
+                    400,
+                    "fixture",
+                    Message(),
+                    io.BytesIO(b"secret provider response"),
+                ),
+            ),
+            patch.object(logger, "error") as log,
+        ):
+            self.assertFalse(
+                self.mail._send_brevo_http(
+                    "fixture@example.invalid", "secret", "secret", "secret"
+                )
+            )
         self.assertNotIn("secret", str(log.call_args))
 
     def test_turso_transport_supports_transactions(self):
-        for source, expected in (("libsql://fixture.invalid", "libsql://fixture.invalid"),
-                                 ("https://fixture.invalid", "wss://fixture.invalid"),
-                                 ("http://localhost:8080", "ws://localhost:8080")):
+        for source, expected in (
+            ("libsql://fixture.invalid", "libsql://fixture.invalid"),
+            ("https://fixture.invalid", "wss://fixture.invalid"),
+            ("http://localhost:8080", "ws://localhost:8080"),
+        ):
             with patch.object(settings, "TURSO_DATABASE_URL", source):
                 self.assertEqual(database.get_turso_url(), expected)
-
 
 
 class GoogleVerificationTests(unittest.TestCase):
@@ -1408,32 +3708,73 @@ class GoogleVerificationTests(unittest.TestCase):
         from cryptography.hazmat.primitives import serialization
         from cryptography.hazmat.primitives.asymmetric import rsa
         from google.auth.crypt import RSASigner
+
         key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-        private = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+        private = key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
         cls.signer = RSASigner.from_string(private, key_id="fixture-key")
-        cls.public = key.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo).decode()
+        cls.public = (
+            key.public_key()
+            .public_bytes(
+                serialization.Encoding.PEM,
+                serialization.PublicFormat.SubjectPublicKeyInfo,
+            )
+            .decode()
+        )
 
     def token(self, **updates):
         from google.auth import jwt
-        claims = {"iss": "https://accounts.google.com", "aud": "fixture-client", "sub": "fixture-subject",
-                  "email": "fixture@gmail.com", "email_verified": True, "iat": int(time.time()), "exp": int(time.time()) + 3600}
+
+        claims = {
+            "iss": "https://accounts.google.com",
+            "aud": "fixture-client",
+            "sub": "fixture-subject",
+            "email": "fixture@gmail.com",
+            "email_verified": True,
+            "iat": int(time.time()),
+            "exp": int(time.time()) + 3600,
+        }
         claims.update(updates)
         return jwt.encode(self.signer, claims).decode()
 
     def test_real_google_library_validates_signed_claims(self):
         from fastapi import HTTPException
-        response = types.SimpleNamespace(status=200, data=json.dumps({"fixture-key": self.public}).encode())
-        with patch.object(google_auth, "Request", return_value=lambda *args, **kwargs: response):
-            self.assertEqual(google_auth.verify_google_credential(self.token())["sub"], "fixture-subject")
-            for updates in ({"aud": "wrong"}, {"iss": "attacker.invalid"}, {"exp": 1},
-                            {"email_verified": False}, {"sub": ""}, {"email": ""}):
+
+        response = types.SimpleNamespace(
+            status=200, data=json.dumps({"fixture-key": self.public}).encode()
+        )
+        with patch.object(
+            google_auth, "Request", return_value=lambda *args, **kwargs: response
+        ):
+            self.assertEqual(
+                google_auth.verify_google_credential(self.token())["sub"],
+                "fixture-subject",
+            )
+            for updates in (
+                {"aud": "wrong"},
+                {"iss": "attacker.invalid"},
+                {"exp": 1},
+                {"email_verified": False},
+                {"sub": ""},
+                {"email": ""},
+            ):
                 with self.subTest(updates=updates), self.assertRaises(HTTPException):
                     google_auth.verify_google_credential(self.token(**updates))
             with self.assertRaises(HTTPException):
                 google_auth.verify_google_credential(self.token()[:-10] + "forged")
-            self.assertEqual(google_auth.verify_google_credential(self.token(nonce="challenge"), "challenge")["nonce"], "challenge")
+            self.assertEqual(
+                google_auth.verify_google_credential(
+                    self.token(nonce="challenge"), "challenge"
+                )["nonce"],
+                "challenge",
+            )
             with self.assertRaises(HTTPException):
-                google_auth.verify_google_credential(self.token(nonce="different"), "challenge")
+                google_auth.verify_google_credential(
+                    self.token(nonce="different"), "challenge"
+                )
 
 
 if __name__ == "__main__":

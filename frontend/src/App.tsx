@@ -243,6 +243,7 @@ export const App: React.FC = () => {
         try {
           const history = await apiService.getSessionHistory(sessionId);
           if (authVersion !== authVersionRef.current) return;
+          setIsTemporaryChat(Boolean(history.session?.is_temporary));
           if (history.session?.mode) {
             setCurrentMode(history.session.mode);
           }
@@ -458,6 +459,14 @@ export const App: React.FC = () => {
       removeSession(sessionId);
 
       if (activeSessionId === sessionId) {
+        authVersionRef.current++;
+        abortControllerRef.current?.abort();
+        abortControllerRef.current = null;
+        setIsSending(false);
+        setIsUploading(false);
+        setUploadStatusText("");
+        setAttachedMedia([]);
+        setReplyingTo(null);
         setActiveSessionId(null);
         setMessages([]);
         setDocuments([]);
@@ -567,6 +576,7 @@ export const App: React.FC = () => {
           file,
           targetSessionId,
           currentUser?.id,
+          isTemporaryChat,
         );
         if (authVersion !== authVersionRef.current) return;
         setAttachedMedia((prev) => [...prev, mediaRes]);
@@ -591,6 +601,7 @@ export const App: React.FC = () => {
         file,
         targetSessionId,
         currentUser?.id,
+        isTemporaryChat,
       );
       if (authVersion !== authVersionRef.current) return;
       setPendingDocumentIds((prev) => [...prev, res.document.document_id]);
@@ -897,6 +908,7 @@ export const App: React.FC = () => {
       mediaToSend,
       userToUse?.id,
       replyToPayload,
+      isTemporaryChat,
     );
   };
 

@@ -22,8 +22,12 @@ from app.services.chat_history_service import chat_history_service
 async def _periodic_temporary_cleanup():
     while True:
         try:
-            await asyncio.sleep(21600)  # Every 6 hours
-            chat_history_service.purge_expired_temporary_sessions()
+            await asyncio.sleep(
+                60
+            )  # Retry pending cleanup as well as newly expired chats
+            await asyncio.to_thread(
+                chat_history_service.purge_expired_temporary_sessions
+            )
         except asyncio.CancelledError:
             break
         except Exception:
@@ -35,7 +39,7 @@ async def lifespan(application: FastAPI):
     logger.info(f"Starting {settings.PROJECT_NAME}...")
     init_db()
     try:
-        chat_history_service.purge_expired_temporary_sessions()
+        await asyncio.to_thread(chat_history_service.purge_expired_temporary_sessions)
     except Exception:
         logger.warning("Initial temporary chat purge notice", exc_info=True)
     cleanup_task = asyncio.create_task(_periodic_temporary_cleanup())
@@ -66,10 +70,16 @@ app.add_middleware(
 )
 
 # API Routers
-app.include_router(health.router, prefix=f"{settings.API_V1_STR}/health", tags=["Health"])
+app.include_router(
+    health.router, prefix=f"{settings.API_V1_STR}/health", tags=["Health"]
+)
 app.include_router(user.router, prefix=f"{settings.API_V1_STR}/user", tags=["Users"])
-app.include_router(session.router, prefix=f"{settings.API_V1_STR}/session", tags=["Sessions"])
-app.include_router(document.router, prefix=f"{settings.API_V1_STR}/document", tags=["Documents"])
+app.include_router(
+    session.router, prefix=f"{settings.API_V1_STR}/session", tags=["Sessions"]
+)
+app.include_router(
+    document.router, prefix=f"{settings.API_V1_STR}/document", tags=["Documents"]
+)
 app.include_router(media.router, prefix=f"{settings.API_V1_STR}/media", tags=["Media"])
 app.include_router(chat.router, prefix=f"{settings.API_V1_STR}/chat", tags=["Chat"])
 
@@ -86,7 +96,9 @@ if frontend_dist.exists() and (frontend_dist / "index.html").exists():
     @app.get("/{full_path:path}")
     async def serve_frontend(full_path: str):
         route_path = posixpath.normpath(full_path.replace("\\", "/")).lstrip("/")
-        if route_path == "api" or route_path.startswith(("api/", "docs", "redoc", "openapi.json")):
+        if route_path == "api" or route_path.startswith(
+            ("api/", "docs", "redoc", "openapi.json")
+        ):
             raise HTTPException(status_code=404, detail="Not Found")
         candidate = (frontend_dist / full_path).resolve()
         if not candidate.is_relative_to(frontend_dist.resolve()):
@@ -95,6 +107,7 @@ if frontend_dist.exists() and (frontend_dist / "index.html").exists():
             return FileResponse(candidate)
         return FileResponse(frontend_dist / "index.html")
 else:
+
     @app.get("/")
     async def root():
         return {
@@ -102,5 +115,5 @@ else:
             "service": settings.PROJECT_NAME,
             "version": "1.0.0",
             "api_docs": "/docs",
-            "frontend_dev_url": "http://localhost:8000"
+            "frontend_dev_url": "http://localhost:8000",
         }

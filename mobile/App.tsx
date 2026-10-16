@@ -551,6 +551,7 @@ export default function App() {
     try {
       const hist = await apiService.getSessionHistory(sessionId);
       if (authVersion !== authVersionRef.current) return;
+      setIsTemporaryChat(Boolean(hist?.session?.is_temporary));
       if (hist?.session?.mode) setCurrentMode(hist.session.mode);
       setMessages(Array.isArray(hist?.messages) ? hist.messages : []);
       setDocuments(Array.isArray(hist?.documents) ? hist.documents : []);
@@ -669,6 +670,12 @@ export default function App() {
       setSessions(updated);
       setTotalSessions((prev) => Math.max(0, prev - 1));
       if (activeSessionId === sessionId) {
+        authVersionRef.current++;
+        streamAbortRef.current?.();
+        streamAbortRef.current = null;
+        isSendingRef.current = false;
+        setIsSending(false);
+        setIsUploading(false);
         if (updated.length > 0) {
           selectSession(updated[0].id, updated[0].mode);
         } else {
@@ -907,6 +914,7 @@ export default function App() {
       mediaToSend.length > 0 ? mediaToSend : undefined,
       userToUse ? userToUse.id : null,
       replyToPayload,
+      isTempActive,
     );
 
     streamAbortRef.current = cancel;
@@ -987,6 +995,8 @@ export default function App() {
           file.uri,
           file.name,
           file.mimeType,
+          currentUser?.id,
+          isTempActive,
         );
         if (authVersion !== authVersionRef.current) return;
         setAttachedMedia((prev) => [...prev, media]);
@@ -1012,6 +1022,7 @@ export default function App() {
         file.name,
         file.mimeType,
         currentUser?.id,
+        isTempActive,
       );
       if (authVersion !== authVersionRef.current) return;
       setDocuments((prev) => [...(Array.isArray(prev) ? prev : []), doc]);

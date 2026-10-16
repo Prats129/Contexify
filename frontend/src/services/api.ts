@@ -582,8 +582,10 @@ export const apiService = {
     file: File,
     sessionId?: string,
     userId?: string,
+    isTemporary = false,
   ): Promise<MediaAttachment> {
     const formData = new FormData();
+    formData.append("is_temporary", String(isTemporary));
     formData.append("file", file);
     if (sessionId) formData.append("session_id", sessionId);
     if (userId) formData.append("user_id", userId);
@@ -738,8 +740,10 @@ export const apiService = {
     file: File,
     sessionId: string,
     userId?: string,
+    isTemporary = false,
   ): Promise<DocumentUploadResponse> {
     const formData = new FormData();
+    formData.append("is_temporary", String(isTemporary));
     formData.append("file", file);
     formData.append("session_id", sessionId);
     if (userId) {
@@ -819,6 +823,7 @@ export const apiService = {
     attachments?: MediaAttachment[],
     userId?: string | null,
     reply_to?: MessageReplyReference | null,
+    isTemporary = false,
   ): Promise<void> {
     const { onCitations, onMedia, onToken, onError, onDone } = handlers;
 
@@ -832,6 +837,7 @@ export const apiService = {
           message,
           mode,
           reply_to: reply_to || undefined,
+          is_temporary: isTemporary,
           attachments: attachments || [],
         }),
         signal,

@@ -691,9 +691,11 @@ export const apiService = {
     fileName: string,
     mimeType: string = "image/png",
     userId?: string,
+    isTemporary = false,
   ): Promise<MediaAttachment> {
     const url = await getEndpoint("/media/upload");
     const formData = new FormData();
+    formData.append("is_temporary", String(isTemporary));
     formData.append("session_id", sessionId);
     if (userId) {
       formData.append("user_id", userId);
@@ -895,9 +897,11 @@ export const apiService = {
     fileName: string,
     mimeType: string = "application/pdf",
     userId?: string,
+    isTemporary = false,
   ): Promise<DocumentMetadata> {
     const url = await getEndpoint("/document/upload");
     const formData = new FormData();
+    formData.append("is_temporary", String(isTemporary));
     formData.append("session_id", sessionId);
     if (userId) {
       formData.append("user_id", userId);
@@ -938,6 +942,7 @@ export const apiService = {
     attachments?: MediaAttachment[],
     userId?: string | null,
     reply_to?: MessageReplyReference | null,
+    isTemporary = false,
   ): () => void {
     let isAborted = false;
     let hasEnded = false;
@@ -1070,6 +1075,7 @@ export const apiService = {
           query: query || "",
           mode: effectiveMode,
           reply_to: reply_to || undefined,
+          is_temporary: isTemporary,
           attachments: (attachments || []).map((att) => ({
             ...att,
             url: att.url || "",

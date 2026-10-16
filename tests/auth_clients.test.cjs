@@ -13,14 +13,28 @@ for (const platform of ["frontend", "mobile"]) {
       [413, "Image dimensions exceed the allowed pixel limit."],
       [503, "Image processing is busy. Please retry shortly."],
     ]) {
-      const fixture = client(platform, (url) => url.endsWith("/media/upload")
-        ? response({ detail: message }, status) : response(credentials("signed-token")));
+      const fixture = client(platform, (url) =>
+        url.endsWith("/media/upload")
+          ? response({ detail: message }, status)
+          : response(credentials("signed-token")),
+      );
       await fixture.api.login("fixture", "password");
       if (platform === "frontend") {
-        await assert.rejects(fixture.api.uploadMedia({}, "fixture-session"), (error) => error.message === message);
+        await assert.rejects(
+          fixture.api.uploadMedia({}, "fixture-session"),
+          (error) => error.message === message,
+        );
       } else {
-        const pending = fixture.api.uploadMedia("fixture-session", "file:///fixture.png", "fixture.png", "image/png");
-        const rejected = assert.rejects(pending, (error) => error.message === message);
+        const pending = fixture.api.uploadMedia(
+          "fixture-session",
+          "file:///fixture.png",
+          "fixture.png",
+          "image/png",
+        );
+        const rejected = assert.rejects(
+          pending,
+          (error) => error.message === message,
+        );
         await until(() => fixture.uploads[0]?.sent);
         fixture.uploads[0].status = status;
         fixture.uploads[0].responseText = JSON.stringify({ detail: message });
@@ -48,7 +62,8 @@ function client(platform, handleRequest, environment = {}) {
     setRequestHeader(name, value) {
       this.headers[name] = value;
     }
-    send() {
+    send(body) {
+      this.body = body;
       this.sent = true;
     }
     abort() {}
@@ -59,13 +74,20 @@ function client(platform, handleRequest, environment = {}) {
     Headers,
     URLSearchParams,
     AbortController,
+    DOMException,
     console,
     setTimeout,
     clearTimeout,
     process: { env: {} },
     XMLHttpRequest: XHR,
     FormData: class {
-      append() {}
+      values = new Map();
+      append(key, value) {
+        this.values.set(key, value);
+      }
+      get(key) {
+        return this.values.get(key);
+      }
     },
     localStorage: {
       getItem: (key) => storage.get(key) ?? null,
@@ -327,6 +349,8 @@ function appCallbacks(platform, apiService) {
           "handleFileUpload",
           "handleDetachDocument",
           "handleSendMessage",
+          "handleDeleteSession",
+          "selectSession",
         ]
       : [
           "cancelStreamForAuthChange",
@@ -336,6 +360,8 @@ function appCallbacks(platform, apiService) {
           "handleAttachFile",
           "handleDetachDocument",
           "handleSendMessage",
+          "handleDeleteSession",
+          "selectSession",
         ];
   const declarations = new Map();
   function visit(node) {
@@ -364,10 +390,13 @@ function appCallbacks(platform, apiService) {
   const context = {
     exports: {},
     console,
+    useCallback: (callback) => callback,
     apiService,
     isAuthReady: true,
     isSending: false,
     isUploading: false,
+    isTemporaryChat: false,
+    isTempActive: false,
     inputQuery: "review",
     query: "review",
     replyingTo: null,
@@ -520,8 +549,16 @@ for (const platform of ["frontend", "mobile"]) {
 
 for (const platform of ["frontend", "mobile"]) {
   test(`${platform}: sending waits for uploads without clearing the draft`, async () => {
-    const fixture = appCallbacks(platform, { streamChat() { throw new Error("Must wait for the upload"); } });
-    Object.assign(fixture.context, { isUploading: true, attachedMedia: [], pendingDocumentIds: [] });
+    const fixture = appCallbacks(platform, {
+      streamChat() {
+        throw new Error("Must wait for the upload");
+      },
+    });
+    Object.assign(fixture.context, {
+      isUploading: true,
+      attachedMedia: [],
+      pendingDocumentIds: [],
+    });
     fixture.context.isSendingRef.current = false;
     const messagesBefore = fixture.state.messages;
     await fixture.callbacks.handleSendMessage();
@@ -532,10 +569,16 @@ for (const platform of ["frontend", "mobile"]) {
   });
 
   test(`${platform}: document chips detach without deleting session knowledge`, () => {
-    const api = { deleteDocument() { throw new Error("Draft removal must not delete documents"); } };
+    const api = {
+      deleteDocument() {
+        throw new Error("Draft removal must not delete documents");
+      },
+    };
     const fixture = appCallbacks(platform, api);
     fixture.state.pendingDocumentIds = ["document-fixture"];
-    fixture.state.documents = [{ document_id: "document-fixture", filename: "fixture.txt" }];
+    fixture.state.documents = [
+      { document_id: "document-fixture", filename: "fixture.txt" },
+    ];
     fixture.callbacks.handleDetachDocument("document-fixture");
     assert.equal(fixture.state.pendingDocumentIds.length, 0);
     assert.equal(fixture.state.documents.length, 1);
@@ -543,12 +586,24 @@ for (const platform of ["frontend", "mobile"]) {
 
   test(`${platform}: sending includes pending documents and clears only the draft`, async () => {
     let sent;
-    const api = { streamChat(...args) { sent = args; return () => {}; } };
+    const api = {
+      streamChat(...args) {
+        sent = args;
+        return () => {};
+      },
+    };
     const fixture = appCallbacks(platform, api);
     fixture.context.isSendingRef.current = false;
     fixture.context.abortControllerRef.current = null;
     fixture.context.attachedMedia = [];
-    fixture.context.documents = [{ document_id: "document-fixture", filename: "fixture.txt", storage_url: "http://fixture.invalid/download", file_size_bytes: 7 }];
+    fixture.context.documents = [
+      {
+        document_id: "document-fixture",
+        filename: "fixture.txt",
+        storage_url: "http://fixture.invalid/download",
+        file_size_bytes: 7,
+      },
+    ];
     fixture.context.pendingDocumentIds = ["document-fixture"];
     fixture.state.pendingDocumentIds = ["document-fixture"];
     fixture.state.documents = fixture.context.documents;
@@ -556,7 +611,10 @@ for (const platform of ["frontend", "mobile"]) {
     const attachments = platform === "frontend" ? sent[5] : sent[4];
     assert.equal(attachments[0].file_type, "document");
     assert.equal(attachments[0].id, "document-fixture");
-    assert.equal(fixture.state.messages.at(-1).attachments[0].file_name, "fixture.txt");
+    assert.equal(
+      fixture.state.messages.at(-1).attachments[0].file_name,
+      "fixture.txt",
+    );
     assert.equal(fixture.state.pendingDocumentIds.length, 0);
     assert.equal(fixture.state.documents.length, 1);
   });
@@ -565,29 +623,222 @@ for (const platform of ["frontend", "mobile"]) {
 for (const platform of ["frontend", "mobile"]) {
   test(`${platform}: document-only sends use a review prompt`, async () => {
     let sent;
-    const fixture = appCallbacks(platform, { streamChat(...args) { sent = args; return () => {}; } });
-    Object.assign(fixture.context, { query: "", inputQuery: "", attachedMedia: [], pendingDocumentIds: ["document-fixture"], documents: [{ document_id: "document-fixture", filename: "fixture.txt", storage_url: "http://fixture.invalid/download" }] });
+    const fixture = appCallbacks(platform, {
+      streamChat(...args) {
+        sent = args;
+        return () => {};
+      },
+    });
+    Object.assign(fixture.context, {
+      query: "",
+      inputQuery: "",
+      attachedMedia: [],
+      pendingDocumentIds: ["document-fixture"],
+      documents: [
+        {
+          document_id: "document-fixture",
+          filename: "fixture.txt",
+          storage_url: "http://fixture.invalid/download",
+        },
+      ],
+    });
     fixture.context.isSendingRef.current = false;
     fixture.context.abortControllerRef.current = null;
     await fixture.callbacks.handleSendMessage();
     assert.equal(sent[1], "Review the attached documents.");
-    assert.equal(fixture.state.messages.at(-1).content, "Review the attached documents.");
+    assert.equal(
+      fixture.state.messages.at(-1).content,
+      "Review the attached documents.",
+    );
   });
 
   test(`${platform}: uploaded document links target the backend host`, async () => {
-    const document = { document_id: "document-fixture", filename: "fixture.txt", storage_url: "/api/v1/media/content/document/document-fixture?ticket=fixture" };
-    const fixture = client(platform, (url) => url.endsWith("/document/upload") ? response({ document }) : response(credentials("signed-token")), { VITE_API_BASE_URL: "http://fixture.invalid" });
+    const document = {
+      document_id: "document-fixture",
+      filename: "fixture.txt",
+      storage_url:
+        "/api/v1/media/content/document/document-fixture?ticket=fixture",
+    };
+    const fixture = client(
+      platform,
+      (url) =>
+        url.endsWith("/document/upload")
+          ? response({ document })
+          : response(credentials("signed-token")),
+      { VITE_API_BASE_URL: "http://fixture.invalid" },
+    );
     await fixture.api.login("fixture", "password");
     let uploaded;
     if (platform === "frontend") {
-      uploaded = (await fixture.api.uploadDocument({}, "fixture-session")).document;
+      uploaded = (await fixture.api.uploadDocument({}, "fixture-session"))
+        .document;
     } else {
-      const pending = fixture.api.uploadDocument("fixture-session", "file:///fixture.txt", "fixture.txt", "text/plain");
+      const pending = fixture.api.uploadDocument(
+        "fixture-session",
+        "file:///fixture.txt",
+        "fixture.txt",
+        "text/plain",
+      );
       await until(() => fixture.uploads[0]?.sent);
       fixture.uploads[0].responseText = JSON.stringify({ document });
       fixture.uploads[0].onload();
       uploaded = await pending;
     }
-    assert.equal(uploaded.storage_url, `http://fixture.invalid${document.storage_url}`);
+    assert.equal(
+      uploaded.storage_url,
+      `http://fixture.invalid${document.storage_url}`,
+    );
+  });
+}
+
+for (const platform of ["frontend", "mobile"]) {
+  test(`${platform}: temporary flag reaches upload and chat fallback requests`, async () => {
+    const fixture = client(platform, (url) => {
+      if (url.endsWith("/user/login"))
+        return response(credentials("signed-token"));
+      if (url.endsWith("/chat/stream"))
+        return response({ detail: "fixture" }, 400);
+      return response({
+        id: "asset",
+        url: "/fixture.png",
+        document: { document_id: "doc", filename: "fixture.txt" },
+      });
+    });
+    await fixture.api.login("fixture", "password");
+    for (const temporary of [true, false]) {
+      for (const kind of ["uploadMedia", "uploadDocument"]) {
+        if (platform === "frontend") {
+          await fixture.api[kind]({}, "fixture-session", undefined, temporary);
+          assert.equal(
+            fixture.requests.at(-1).options.body.get("is_temporary"),
+            String(temporary),
+          );
+        } else {
+          const count = fixture.uploads.length;
+          const pending = fixture.api[kind](
+            "fixture-session",
+            "file:///fixture",
+            "fixture",
+            "text/plain",
+            undefined,
+            temporary,
+          );
+          await until(
+            () =>
+              fixture.uploads.length > count && fixture.uploads.at(-1)?.sent,
+          );
+          const upload = fixture.uploads.at(-1);
+          assert.equal(upload.body.get("is_temporary"), String(temporary));
+          upload.responseText = JSON.stringify({
+            id: "asset",
+            url: "/fixture.png",
+            document: { document_id: "doc" },
+          });
+          upload.onload();
+          await pending;
+        }
+      }
+      const handlers = {
+        onError() {},
+        onComplete() {},
+        onDone() {},
+        onToken() {},
+        onCitations() {},
+      };
+      if (platform === "frontend") {
+        await fixture.api.streamChat(
+          "fixture-session",
+          "fixture",
+          "AUTO",
+          handlers,
+          undefined,
+          [],
+          undefined,
+          null,
+          temporary,
+        );
+        assert.equal(
+          JSON.parse(fixture.requests.at(-1).options.body).is_temporary,
+          temporary,
+        );
+      } else {
+        const count = fixture.uploads.length;
+        fixture.api.streamChat(
+          "fixture-session",
+          "fixture",
+          "AUTO",
+          handlers,
+          [],
+          undefined,
+          null,
+          temporary,
+        );
+        await until(
+          () => fixture.uploads.length > count && fixture.uploads.at(-1)?.sent,
+        );
+        const stream = fixture.uploads.at(-1);
+        assert.equal(JSON.parse(stream.body).is_temporary, temporary);
+        stream.responseText = 'data: {"event":"done","data":"[DONE]"}\n\n';
+        stream.onload();
+      }
+    }
+  });
+}
+
+for (const platform of ["frontend", "mobile"]) {
+  test(`${platform}: deleting the active chat cancels late uploads and streams`, async () => {
+    const fixture = appCallbacks(platform, { deleteSession: async () => {} });
+    Object.assign(fixture.context, {
+      currentUser: profile,
+      currentUserRef: { current: profile },
+      sessions: [{ id: "fixture-session", title: "Fixture", mode: "AUTO" }],
+      confirm: async () => true,
+      removeSession() {},
+    });
+    await fixture.callbacks.handleDeleteSession("fixture-session");
+    assert.equal(fixture.cancelled(), 1);
+    assert.equal(fixture.context.authVersionRef.current, 1);
+    assert.equal(fixture.state.isSending, false);
+    assert.equal(fixture.state.isUploading, false);
+    assert.equal(fixture.state.messages.length, 0);
+    assert.equal(fixture.state.attachedMedia.length, 0);
+  });
+}
+
+for (const platform of ["frontend", "mobile"]) {
+  test(`${platform}: reopening a chat restores the server retention status`, async () => {
+    for (const temporary of [true, false, undefined]) {
+      const fixture = appCallbacks(platform, {
+        getSessionHistory: async () => ({
+          session: { mode: "AUTO", is_temporary: temporary },
+          messages: [],
+          documents: [],
+        }),
+      });
+      fixture.context.currentUser = profile;
+      await fixture.callbacks.selectSession("fixture-session");
+      assert.equal(fixture.state.isTemporaryChat, Boolean(temporary));
+    }
+  });
+
+  test(`${platform}: a late history response cannot change the new identity's retention status`, async () => {
+    let release;
+    const fixture = appCallbacks(platform, {
+      getSessionHistory: () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    });
+    fixture.context.currentUser = profile;
+    const pending = fixture.callbacks.selectSession("fixture-session");
+    await until(() => release);
+    fixture.context.authVersionRef.current++;
+    release({
+      session: { mode: "AUTO", is_temporary: true },
+      messages: [],
+      documents: [],
+    });
+    await pending;
+    assert.equal(fixture.state.isTemporaryChat, false);
   });
 }

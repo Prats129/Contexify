@@ -1,9 +1,8 @@
 import json
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.core.config import settings
 from app.core.logging import logger
 from app.db.database import get_db_connection
 from app.schemas.chat import ChatMode, Citation, MediaAttachment, MessageReplyReference
@@ -13,6 +12,12 @@ from app.schemas.session import (
     MessageResponse,
     SessionHistoryResponse,
 )
+from app.services.session_lifecycle import (
+    active_session,
+    purge_expired_sessions,
+    request_deletion,
+)
+from app.services.upload_lifecycle import publish_upload
 
 
 def get_row_value(row: Any, key: str, default: Any = None) -> Any:
@@ -23,6 +28,7 @@ def get_row_value(row: Any, key: str, default: Any = None) -> Any:
     except (KeyError, IndexError, TypeError):
         return default
 
+
 class ChatHistoryService:
     """Chat session, message history, and document persistence service."""
 
@@ -32,39 +38,24 @@ class ChatHistoryService:
         session_id: Optional[str] = None,
         title: str = "New Conversation",
         mode: ChatMode = ChatMode.WEB_SEARCH,
-        is_temporary: bool = False
+        is_temporary: bool = False,
     ) -> ChatSessionResponse:
+        from app.core.security import Principal, ensure_session
+
         session_id = session_id or str(uuid.uuid4())
-        now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
-        expires_at = None
-        if is_temporary:
-            expires_at = (datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=settings.TEMPORARY_CHAT_RETENTION_DAYS)).isoformat()
-        
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                INSERT OR REPLACE INTO chat_sessions (id, user_id, title, mode, is_temporary, expires_at, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (session_id, user_id, title, mode.value if hasattr(mode, 'value') else str(mode), 1 if is_temporary else 0, expires_at, now, now)
-            )
-            
-        logger.info(f"Created/registered chat session '{session_id}' for user '{user_id}' [Temporary={is_temporary}]")
-        return ChatSessionResponse(
-            id=session_id,
-            user_id=user_id,
-            title=title,
-            mode=ChatMode(mode) if isinstance(mode, str) else mode,
-            is_temporary=is_temporary,
-            expires_at=expires_at,
-            is_pinned=False,
-            pinned_at=None,
-            created_at=now,
-            updated_at=now,
-            message_count=0,
-            document_count=0
+        ensure_session(
+            session_id,
+            Principal(user_id, "", user_id.startswith("guest_")),
+            mode,
+            title,
+            is_temporary,
         )
+        session = self.get_session(session_id)
+        if session is None:
+            from fastapi import HTTPException
+
+            raise HTTPException(404, "Session not found.")
+        return session
 
     def get_session(self, session_id: str) -> Optional[ChatSessionResponse]:
         with get_db_connection() as conn:
@@ -77,9 +68,9 @@ class ChatHistoryService:
                     (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) AS message_count,
                     (SELECT COUNT(*) FROM documents d WHERE d.session_id = s.id) AS document_count
                 FROM chat_sessions s
-                WHERE s.id = ?
+                WHERE s.id = ? AND NOT EXISTS (SELECT 1 FROM session_deletions x WHERE x.session_id=s.id)
                 """,
-                (session_id,)
+                (session_id,),
             )
             row = cursor.fetchone()
             if not row:
@@ -96,7 +87,7 @@ class ChatHistoryService:
                 created_at=row["created_at"],
                 updated_at=row["updated_at"],
                 message_count=row["message_count"],
-                document_count=row["document_count"]
+                document_count=row["document_count"],
             )
 
     def list_user_sessions(
@@ -105,25 +96,36 @@ class ChatHistoryService:
         limit: Optional[int] = None,
         offset: int = 0,
         search: Optional[str] = None,
-        sort_by: Optional[str] = "last_created"
+        sort_by: Optional[str] = "last_created",
     ) -> Tuple[List[ChatSessionResponse], int]:
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            
-            where_clauses = ["s.user_id = ?", "(s.is_temporary IS NULL OR s.is_temporary = 0)"]
+
+            where_clauses = [
+                "s.user_id = ?",
+                "(s.is_temporary IS NULL OR s.is_temporary = 0)",
+                "NOT EXISTS (SELECT 1 FROM session_deletions x WHERE x.session_id=s.id)",
+            ]
             params: list = [user_id]
-            
+
             if search and search.strip():
                 where_clauses.append("LOWER(s.title) LIKE ?")
                 params.append(f"%{search.strip().lower()}%")
-                
+
             where_sql = " AND ".join(where_clauses)
-            
+
             # Count total matching sessions
-            cursor.execute(f"SELECT COUNT(*) AS total FROM chat_sessions s WHERE {where_sql}", tuple(params))
+            cursor.execute(
+                f"SELECT COUNT(*) AS total FROM chat_sessions s WHERE {where_sql}",
+                tuple(params),
+            )
             total_row = cursor.fetchone()
-            total = int(total_row["total"]) if total_row and total_row["total"] is not None else 0
-            
+            total = (
+                int(total_row["total"])
+                if total_row and total_row["total"] is not None
+                else 0
+            )
+
             # Determine sorting order (pinned always float to top)
             if sort_by == "first_created":
                 order_sql = "COALESCE(s.is_pinned, 0) DESC, s.created_at ASC"
@@ -140,15 +142,15 @@ class ChatHistoryService:
                 WHERE {where_sql}
                 ORDER BY {order_sql}
             """
-            
+
             query_params = list(params)
             if limit is not None:
                 query += " LIMIT ? OFFSET ?"
                 query_params.extend([max(1, limit), max(0, offset)])
-                
+
             cursor.execute(query, tuple(query_params))
             rows = cursor.fetchall()
-            
+
             sessions = [
                 ChatSessionResponse(
                     id=row["id"],
@@ -162,7 +164,7 @@ class ChatHistoryService:
                     created_at=row["created_at"],
                     updated_at=row["updated_at"],
                     message_count=row["message_count"],
-                    document_count=row["document_count"]
+                    document_count=row["document_count"],
                 )
                 for row in rows
             ]
@@ -176,7 +178,7 @@ class ChatHistoryService:
             cursor = conn.cursor()
             cursor.execute(
                 "UPDATE chat_sessions SET is_pinned = ?, pinned_at = ?, updated_at = ? WHERE id = ?",
-                (pin_val, pinned_at, now, session_id)
+                (pin_val, pinned_at, now, session_id),
             )
             return cursor.rowcount > 0
 
@@ -186,18 +188,18 @@ class ChatHistoryService:
             cursor = conn.cursor()
             cursor.execute(
                 "UPDATE chat_sessions SET title = ?, updated_at = ? WHERE id = ?",
-                (title, now, session_id)
+                (title, now, session_id),
             )
             return cursor.rowcount > 0
 
     def update_session_mode(self, session_id: str, mode: ChatMode) -> bool:
         now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
-        mode_val = mode.value if hasattr(mode, 'value') else str(mode)
+        mode_val = mode.value if hasattr(mode, "value") else str(mode)
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "UPDATE chat_sessions SET mode = ?, updated_at = ? WHERE id = ?",
-                (mode_val, now, session_id)
+                (mode_val, now, session_id),
             )
             return cursor.rowcount > 0
 
@@ -207,14 +209,11 @@ class ChatHistoryService:
             cursor = conn.cursor()
             cursor.execute(
                 "UPDATE chat_sessions SET updated_at = ? WHERE id = ?",
-                (now, session_id)
+                (now, session_id),
             )
 
     def delete_session(self, session_id: str) -> bool:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM chat_sessions WHERE id = ?", (session_id,))
-            return cursor.rowcount > 0
+        return request_deletion(session_id)
 
     def clear_session_messages(self, session_id: str) -> bool:
         now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
@@ -223,10 +222,9 @@ class ChatHistoryService:
             cursor.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
             cursor.execute(
                 "UPDATE chat_sessions SET updated_at = ? WHERE id = ?",
-                (now, session_id)
+                (now, session_id),
             )
             return True
-
 
     def save_message(
         self,
@@ -235,12 +233,12 @@ class ChatHistoryService:
         content: str,
         citations: Optional[List[Dict[str, Any]]] = None,
         attachments: Optional[List[Any]] = None,
-        reply_to: Optional[Any] = None
+        reply_to: Optional[Any] = None,
     ) -> MessageResponse:
         message_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
         citations_json = json.dumps(citations) if citations else None
-        
+
         # Serialize attachments to JSON
         attachments_json = "[]"
         attachments_obj = None
@@ -253,9 +251,13 @@ class ChatHistoryService:
                     elif isinstance(a, dict):
                         dumped.append(a)
                 attachments_json = json.dumps(dumped)
-                attachments_obj = [MediaAttachment(**a) if isinstance(a, dict) else a for a in dumped]
+                attachments_obj = [
+                    MediaAttachment(**a) if isinstance(a, dict) else a for a in dumped
+                ]
             except Exception as e:
-                logger.exception(f"Error serializing attachments for session {session_id}: {e}")
+                logger.exception(
+                    f"Error serializing attachments for session {session_id}: {e}"
+                )
                 attachments_json = "[]"
 
         # Serialize reply_to to JSON
@@ -272,29 +274,41 @@ class ChatHistoryService:
                 reply_to_json = json.dumps(dumped_r)
                 reply_to_obj = MessageReplyReference(**dumped_r)
             except Exception as e:
-                logger.exception(f"Error serializing reply_to for session {session_id}: {e}")
+                logger.exception(
+                    f"Error serializing reply_to for session {session_id}: {e}"
+                )
                 reply_to_json = None
 
-        # Only persist to SQLite if the session is registered in the database (logged-in user)
-        db_session = self.get_session(session_id)
-        if db_session is not None and not db_session.user_id.startswith("guest_"):
-            with get_db_connection() as conn:
+        with get_db_connection(write=True) as conn:
+            db_session = active_session(conn, session_id)
+            if not db_session["user_id"].startswith("guest_"):
                 cursor = conn.cursor()
                 cursor.execute(
                     """
                     INSERT INTO messages (id, session_id, role, content, citations_json, attachments_json, reply_to_json, created_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (message_id, session_id, role, content, citations_json, attachments_json, reply_to_json, now)
+                    (
+                        message_id,
+                        session_id,
+                        role,
+                        content,
+                        citations_json,
+                        attachments_json,
+                        reply_to_json,
+                        now,
+                    ),
                 )
                 cursor.execute(
                     "UPDATE chat_sessions SET updated_at = ? WHERE id = ?",
-                    (now, session_id)
+                    (now, session_id),
                 )
 
         citations_obj = None
         if citations:
-            citations_obj = [Citation(**c) if isinstance(c, dict) else c for c in citations]
+            citations_obj = [
+                Citation(**c) if isinstance(c, dict) else c for c in citations
+            ]
 
         return MessageResponse(
             id=message_id,
@@ -304,7 +318,7 @@ class ChatHistoryService:
             citations=citations_obj,
             attachments=attachments_obj,
             reply_to=reply_to_obj,
-            created_at=now
+            created_at=now,
         )
 
     def get_session_messages(self, session_id: str) -> List[MessageResponse]:
@@ -317,10 +331,10 @@ class ChatHistoryService:
                 WHERE session_id = ?
                 ORDER BY created_at ASC
                 """,
-                (session_id,)
+                (session_id,),
             )
             rows = cursor.fetchall()
-            
+
             messages = []
             for row in rows:
                 citations = None
@@ -329,7 +343,9 @@ class ChatHistoryService:
                         raw_c = json.loads(row["citations_json"])
                         citations = [Citation(**c) for c in raw_c]
                     except Exception as e:
-                        logger.exception(f"Error parsing citations for message {row['id']}: {e}")
+                        logger.exception(
+                            f"Error parsing citations for message {row['id']}: {e}"
+                        )
 
                 attachments = None
                 attachments_json = get_row_value(row, "attachments_json")
@@ -339,8 +355,10 @@ class ChatHistoryService:
                         if raw_att:
                             attachments = [MediaAttachment(**a) for a in raw_att]
                     except Exception as e:
-                        logger.exception(f"Error parsing attachments for message {row['id']}: {e}")
-                
+                        logger.exception(
+                            f"Error parsing attachments for message {row['id']}: {e}"
+                        )
+
                 reply_to = None
                 reply_to_json = get_row_value(row, "reply_to_json")
                 if reply_to_json:
@@ -349,18 +367,22 @@ class ChatHistoryService:
                         if raw_r and isinstance(raw_r, dict):
                             reply_to = MessageReplyReference(**raw_r)
                     except Exception as e:
-                        logger.exception(f"Error parsing reply_to for message {row['id']}: {e}")
+                        logger.exception(
+                            f"Error parsing reply_to for message {row['id']}: {e}"
+                        )
 
-                messages.append(MessageResponse(
-                    id=row["id"],
-                    session_id=row["session_id"],
-                    role=row["role"],
-                    content=row["content"],
-                    citations=citations,
-                    attachments=attachments,
-                    reply_to=reply_to,
-                    created_at=row["created_at"]
-                ))
+                messages.append(
+                    MessageResponse(
+                        id=row["id"],
+                        session_id=row["session_id"],
+                        role=row["role"],
+                        content=row["content"],
+                        citations=citations,
+                        attachments=attachments,
+                        reply_to=reply_to,
+                        created_at=row["created_at"],
+                    )
+                )
             return messages
 
     def save_document(
@@ -372,21 +394,31 @@ class ChatHistoryService:
         file_type: str,
         file_size_bytes: int,
         total_chunks: int,
-        storage_url: str = ""
+        storage_url: str = "",
     ) -> DocumentMetadata:
         now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
-        # Only persist to SQLite if the session is registered in the database
-        if self.get_session(session_id) is not None:
-            with get_db_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    INSERT OR REPLACE INTO documents (id, user_id, session_id, filename, file_type, file_size_bytes, total_chunks, storage_url, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (document_id, user_id, session_id, filename, file_type, file_size_bytes, total_chunks, storage_url, now)
-                )
-            
+        with get_db_connection(write=True) as conn:
+            active_session(conn, session_id)
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT OR REPLACE INTO documents (id, user_id, session_id, filename, file_type, file_size_bytes, total_chunks, storage_url, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    document_id,
+                    user_id,
+                    session_id,
+                    filename,
+                    file_type,
+                    file_size_bytes,
+                    total_chunks,
+                    storage_url,
+                    now,
+                ),
+            )
+            publish_upload(conn)
+
         return DocumentMetadata(
             document_id=document_id,
             filename=filename,
@@ -394,7 +426,7 @@ class ChatHistoryService:
             file_size_bytes=file_size_bytes,
             total_chunks=total_chunks,
             storage_url=storage_url if storage_url else None,
-            uploaded_at=now
+            uploaded_at=now,
         )
 
     def list_session_documents(self, session_id: str) -> List[DocumentMetadata]:
@@ -407,7 +439,7 @@ class ChatHistoryService:
                 WHERE session_id = ?
                 ORDER BY created_at DESC
                 """,
-                (session_id,)
+                (session_id,),
             )
             rows = cursor.fetchall()
             return [
@@ -418,7 +450,7 @@ class ChatHistoryService:
                     file_size_bytes=row["file_size_bytes"],
                     total_chunks=row["total_chunks"],
                     storage_url=get_row_value(row, "storage_url", None),
-                    uploaded_at=row["created_at"]
+                    uploaded_at=row["created_at"],
                 )
                 for row in rows
             ]
@@ -426,7 +458,9 @@ class ChatHistoryService:
     def get_document_storage_url(self, document_id: str) -> Optional[str]:
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT storage_url FROM documents WHERE id = ?", (document_id,))
+            cursor.execute(
+                "SELECT storage_url FROM documents WHERE id = ?", (document_id,)
+            )
             row = cursor.fetchone()
             if row:
                 storage_url = get_row_value(row, "storage_url", None)
@@ -447,50 +481,11 @@ class ChatHistoryService:
         messages = self.get_session_messages(session_id)
         documents = self.list_session_documents(session_id)
         return SessionHistoryResponse(
-            session=session,
-            messages=messages,
-            documents=documents
+            session=session, messages=messages, documents=documents
         )
 
     def purge_expired_temporary_sessions(self) -> int:
-        """
-        Purge all temporary chat sessions that have passed their expiration timestamp.
-        Deletes vector store chunks, attached files, and cascades DB deletion.
-        """
-        now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
-        purged_count = 0
-        try:
-            with get_db_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    SELECT id FROM chat_sessions
-                    WHERE is_temporary = 1 AND expires_at IS NOT NULL AND expires_at < ?
-                    """,
-                    (now,)
-                )
-                expired_rows = cursor.fetchall()
-                expired_session_ids = [row["id"] for row in expired_rows]
+        return purge_expired_sessions()
 
-            if not expired_session_ids:
-                return 0
-
-            from app.repositories.vector_store import vector_store_repo
-            for sess_id in expired_session_ids:
-                docs = self.list_session_documents(sess_id)
-                for doc in docs:
-                    try:
-                        vector_store_repo.delete_document(doc.document_id)
-                    except Exception as ve:
-                        logger.warning(f"Error purging vector store for doc '{doc.document_id}': {ve}", exc_info=True)
-
-                self.delete_session(sess_id)
-                purged_count += 1
-
-            logger.info(f"Successfully purged {purged_count} expired temporary chat session(s).")
-        except Exception as e:
-            logger.exception(f"Error purging expired temporary sessions: {e}")
-
-        return purged_count
 
 chat_history_service = ChatHistoryService()
