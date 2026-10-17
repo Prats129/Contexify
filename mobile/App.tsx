@@ -1291,15 +1291,11 @@ export default function App() {
           <Header
             onOpenDrawer={handleOpenDrawer}
             onNewChat={handleNewChat}
-            onToggleTheme={handleToggleTheme}
             isDark={isDark}
             theme={theme}
             isTemporaryChat={isTempActive}
             onToggleTemporaryChat={
               currentUser ? handleToggleTemporaryChat : undefined
-            }
-            onOpenAttachments={
-              currentUser ? () => setAttachmentsVisible(true) : undefined
             }
             onClearChat={
               currentUser &&
@@ -1806,6 +1802,7 @@ export default function App() {
             }
             onOpenAuth={() => setAuthVisible(true)}
             onOpenProfile={() => setProfileVisible(true)}
+            onToggleTheme={handleToggleTheme}
             onOpenServerConfig={() => setServerConfigVisible(true)}
             onLogout={handleLogout}
             isDark={isDark}
