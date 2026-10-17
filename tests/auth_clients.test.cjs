@@ -6,6 +6,184 @@ const path = require("node:path");
 const vm = require("node:vm");
 const ts = require("../frontend/node_modules/typescript");
 
+async function mobileStreamFixture() {
+  const fixture = client("mobile", () => response(credentials("stream-token")));
+  await fixture.api.login("fixture", "password");
+  return async () => {
+    const events = [];
+    const cancel = fixture.api.streamChat("fixture-session", "hello", "AUTO", {
+      onToken: (value) => events.push(["token", value]),
+      onCitations: (value) => events.push(["citations", value]),
+      onMedia: (value) => events.push(["media", value]),
+      onComplete: () => events.push(["complete"]),
+      onError: (value) => events.push(["error", value]),
+    });
+    const xhr = fixture.uploads.at(-1);
+    await until(() => xhr.sent);
+    xhr.responseText = "";
+    return { xhr, events, cancel };
+  };
+}
+
+test("mobile: SSE survives every split without delaying complete events", async () => {
+  const stream = await mobileStreamFixture();
+  const first = 'data: {"event":"token","data":"Hello 🌍 नमस्ते"}\n\n';
+  const second = 'data: {"event":"token","data":" next"}\n\n';
+  for (let split = 0; split <= second.length; split++) {
+    const { xhr, events } = await stream();
+    xhr.responseText = first + second.slice(0, split);
+    xhr.onprogress();
+    assert.equal(events[0]?.[1], "Hello 🌍 नमस्ते");
+    assert.equal(events.length, split === second.length ? 2 : 1);
+    xhr.responseText = first + second;
+    xhr.onprogress();
+    xhr.onprogress();
+    xhr.onload();
+    assert.deepEqual(events, [
+      ["token", "Hello 🌍 नमस्ते"],
+      ["token", " next"],
+      ["complete"],
+    ]);
+  }
+});
+
+test("mobile: SSE preserves Unicode and event ordering across every split and line ending", async () => {
+  const stream = await mobileStreamFixture();
+  for (const newline of ["\n", "\r\n", "\r"]) {
+    const wire = [
+      ": keepalive",
+      "id: ignored",
+      'data:{"event":"token",',
+      'data:"data":"🌍 नमस्ते"}',
+      "",
+      'data: {"event":"citations","citations":[{"title":"Fixture"}]}',
+      "",
+      'data: {"event":"media","media":{"id":"fixture","url":"/image.png"}}',
+      "",
+      "data: [DONE]",
+      "",
+      'data: {"token":"must not appear"}',
+      "",
+      "",
+    ].join(newline);
+    for (let split = 0; split <= wire.length; split++) {
+      const { xhr, events } = await stream();
+      xhr.responseText = wire.slice(0, split);
+      xhr.onprogress();
+      xhr.responseText = wire;
+      xhr.onprogress();
+      xhr.onload();
+      assert.deepEqual(
+        events.map((event) => event[0]),
+        ["token", "citations", "media", "complete"],
+      );
+      assert.equal(events[0][1], "🌍 नमस्ते");
+      assert.equal(events[1][1][0].title, "Fixture");
+      assert.equal(events[2][1].url, "http://fixture.invalid/image.png");
+    }
+    const { xhr, events } = await stream();
+    for (let length = 1; length <= wire.length; length++) {
+      xhr.responseText = wire.slice(0, length);
+      xhr.onprogress();
+    }
+    xhr.onload();
+    assert.equal(events.length, 4);
+  }
+});
+
+test("mobile: SSE flushes final bytes at EOF and rejects malformed or truncated events", async () => {
+  const stream = await mobileStreamFixture();
+  for (const suffix of ["", "\n", "\n\n", "\r\n\r\n"]) {
+    const { xhr, events } = await stream();
+    xhr.responseText = 'data: {"token":"final"}' + suffix;
+    xhr.onload();
+    xhr.onload();
+    assert.deepEqual(events, [["token", "final"], ["complete"]]);
+  }
+  for (const wire of [
+    'data: {"event":"token","data":"cut',
+    "data: broken\n\n",
+  ]) {
+    const { xhr, events } = await stream();
+    xhr.responseText = wire;
+    xhr.onprogress();
+    xhr.onload();
+    assert.equal(events.length, 1);
+    assert.equal(events[0][0], "error");
+    assert.match(events[0][1], /invalid streaming response/i);
+  }
+  const { xhr, events } = await stream();
+  xhr.responseText = 'data: {"event":"done"}\n\ndata: {"token":"ignored"}\n\n';
+  xhr.onprogress();
+  xhr.onload();
+  assert.deepEqual(events, [["complete"]]);
+});
+
+test("mobile: split SSE errors terminate once and HTTP failures are not treated as tokens", async () => {
+  const stream = await mobileStreamFixture();
+  const wire =
+    'data: {"event":"error","data":"Provider fixture unavailable"}\n\ndata: {"token":"ignored"}\n\n';
+  for (let split = 0; split <= wire.length; split++) {
+    const { xhr, events } = await stream();
+    xhr.responseText = wire.slice(0, split);
+    xhr.onprogress();
+    xhr.responseText = wire;
+    xhr.onprogress();
+    xhr.onload();
+    xhr.onerror();
+    assert.deepEqual(events, [["error", "Provider fixture unavailable"]]);
+  }
+  const { xhr, events } = await stream();
+  xhr.status = 503;
+  xhr.responseText = JSON.stringify({ detail: "Server fixture unavailable" });
+  xhr.onprogress();
+  assert.equal(events.length, 0);
+  xhr.onload();
+  assert.deepEqual(events, [["error", "Server fixture unavailable"]]);
+});
+
+test("mobile: stopping a partial SSE event suppresses all late callbacks", async () => {
+  const stream = await mobileStreamFixture();
+  const wire = 'data: {"token":"late"}\n\n';
+  for (let split = 0; split < wire.length; split++) {
+    const { xhr, events, cancel } = await stream();
+    let aborts = 0;
+    xhr.abort = () => {
+      aborts++;
+      xhr.onabort();
+    };
+    xhr.responseText = wire.slice(0, split);
+    xhr.onprogress();
+    cancel();
+    xhr.responseText = wire;
+    xhr.onprogress();
+    xhr.onload();
+    xhr.onerror();
+    assert.equal(aborts, 1);
+    assert.deepEqual(events, []);
+  }
+});
+
+test("mobile: stream setup failures report an error and immediate cancellation stays silent", async () => {
+  const fixture = client("mobile", () => {
+    throw new Error("fixture offline");
+  });
+  const events = [];
+  const handlers = {
+    onToken: () => events.push("token"),
+    onCitations: () => events.push("citations"),
+    onComplete: () => events.push("complete"),
+    onError: () => events.push("error"),
+  };
+  fixture.api.streamChat("fixture", "hello", "AUTO", handlers);
+  await until(() => events.length > 0);
+  assert.deepEqual(events, ["error"]);
+  const cancel = fixture.api.streamChat("fixture", "hello", "AUTO", handlers);
+  cancel();
+  await tick();
+  assert.deepEqual(events, ["error"]);
+});
+
 test("mobile: clearing history authenticates, encodes IDs and reports API failures", async () => {
   for (const status of [200, 403, 503]) {
     const fixture = client("mobile", (url) =>

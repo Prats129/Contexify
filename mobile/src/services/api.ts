@@ -974,31 +974,29 @@ export const apiService = {
       handlers.onError(errMsg);
     };
 
-    getEndpoint("/chat/stream").then(async (url) => {
-      if (isAborted || hasEnded) return;
-      const host = await getCleanHost();
-      const effectiveMode = resolveBackendMode(mode, attachments);
+    getEndpoint("/chat/stream")
+      .then(async (url) => {
+        if (isAborted || hasEnded) return;
+        const host = await getCleanHost();
+        if (isAborted || hasEnded) return;
+        const effectiveMode = resolveBackendMode(mode, attachments);
 
-      xhr.open("POST", url, true);
-      xhr.setRequestHeader("Content-Type", "application/json");
-      xhr.setRequestHeader("Accept", "text/event-stream");
-      const authorization = await authHeaders(url);
-      if (isAborted || hasEnded) return;
-      xhr.setRequestHeader("Authorization", authorization.Authorization);
+        xhr.open("POST", url, true);
+        xhr.setRequestHeader("Content-Type", "application/json");
+        xhr.setRequestHeader("Accept", "text/event-stream");
+        const authorization = await authHeaders(url);
+        if (isAborted || hasEnded) return;
+        xhr.setRequestHeader("Authorization", authorization.Authorization);
 
-      let lastIndex = 0;
+        let lastIndex = 0;
+        let pendingLine = "";
+        let skipNextLF = false;
+        let dataLines: string[] = [];
 
-      const processChunks = () => {
-        const currText = xhr.responseText || "";
-        if (currText.length <= lastIndex) return;
-        const newChunks = currText.substring(lastIndex);
-        lastIndex = currText.length;
-
-        const lines = newChunks.split("\n");
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed.startsWith("data: ")) continue;
-          const payload = trimmed.substring(6).trim();
+        const dispatchEvent = () => {
+          if (hasEnded || isAborted || dataLines.length === 0) return;
+          const payload = dataLines.join("\n");
+          dataLines = [];
 
           if (payload === "[DONE]") {
             triggerComplete();
@@ -1041,62 +1039,114 @@ export const apiService = {
               return;
             }
           } catch {
-            // Partial JSON chunk, continue
+            triggerError(
+              "Received an invalid streaming response. Please retry.",
+            );
           }
-        }
-      };
+        };
 
-      xhr.onprogress = () => {
-        if (hasEnded || isAborted) return;
-        processChunks();
-      };
+        const processLine = (line: string) => {
+          if (line === "") {
+            dispatchEvent();
+            return;
+          }
+          // Comments and event/id/retry fields do not contain our JSON payload.
+          if (!line.startsWith("data:")) return;
+          const value = line.slice(5);
+          dataLines.push(value.startsWith(" ") ? value.slice(1) : value);
+        };
 
-      xhr.onload = () => {
-        if (xhr.status === 401) void expireSession(authorization.Authorization);
-        if (isAborted || hasEnded) return;
-        if (xhr.status >= 400) {
-          let errorMsg = `Server error: ${xhr.status}`;
-          try {
-            const errJson = JSON.parse(xhr.responseText);
-            errorMsg = extractErrorMessage(errJson, errorMsg);
-          } catch {
-            if (xhr.responseText && xhr.responseText.length < 200) {
-              errorMsg = `${errorMsg} (${xhr.responseText})`;
+        const processChunks = (atEOF = false) => {
+          const currText = xhr.responseText || "";
+          const newText = currText.slice(lastIndex);
+          lastIndex = currText.length;
+          let start = 0;
+          for (let index = 0; index < newText.length; index++) {
+            if (hasEnded || isAborted) return;
+            const char = newText[index];
+            if (skipNextLF) {
+              skipNextLF = false;
+              if (char === "\n") {
+                start = index + 1;
+                continue;
+              }
             }
+            if (char !== "\r" && char !== "\n") continue;
+            processLine(pendingLine + newText.slice(start, index));
+            pendingLine = "";
+            start = index + 1;
+            skipNextLF = char === "\r";
           }
-          triggerError(errorMsg);
-        } else {
+          if (hasEnded || isAborted) return;
+          pendingLine += newText.slice(start);
+          // Also accept a final event without a trailing blank line, as before.
+          if (atEOF) {
+            if (pendingLine) processLine(pendingLine);
+            pendingLine = "";
+            dispatchEvent();
+          }
+        };
+
+        xhr.onprogress = () => {
+          if (hasEnded || isAborted) return;
+          if (xhr.status >= 400) return;
           processChunks();
-          triggerComplete();
-        }
-      };
+        };
 
-      xhr.onerror = () => {
-        if (!isAborted && !hasEnded) {
-          triggerError("Network connection error with backend server");
-        }
-      };
+        xhr.onload = () => {
+          if (xhr.status === 401)
+            void expireSession(authorization.Authorization);
+          if (isAborted || hasEnded) return;
+          if (xhr.status >= 400) {
+            let errorMsg = `Server error: ${xhr.status}`;
+            try {
+              const errJson = JSON.parse(xhr.responseText);
+              errorMsg = extractErrorMessage(errJson, errorMsg);
+            } catch {
+              if (xhr.responseText && xhr.responseText.length < 200) {
+                errorMsg = `${errorMsg} (${xhr.responseText})`;
+              }
+            }
+            triggerError(errorMsg);
+          } else {
+            processChunks(true);
+            triggerComplete();
+          }
+        };
 
-      xhr.onabort = () => {
-        // Aborted cleanly
-      };
+        xhr.onerror = () => {
+          if (!isAborted && !hasEnded) {
+            triggerError("Network connection error with backend server");
+          }
+        };
 
-      xhr.send(
-        JSON.stringify({
-          session_id: sessionId || `guest_${Date.now()}`,
-          user_id: userId || undefined,
-          message: query || "",
-          query: query || "",
-          mode: effectiveMode,
-          reply_to: reply_to || undefined,
-          is_temporary: isTemporary,
-          attachments: (attachments || []).map((att) => ({
-            ...att,
-            url: att.url || "",
-          })),
-        }),
-      );
-    });
+        xhr.onabort = () => {
+          // Aborted cleanly
+        };
+
+        xhr.send(
+          JSON.stringify({
+            session_id: sessionId || `guest_${Date.now()}`,
+            user_id: userId || undefined,
+            message: query || "",
+            query: query || "",
+            mode: effectiveMode,
+            reply_to: reply_to || undefined,
+            is_temporary: isTemporary,
+            attachments: (attachments || []).map((att) => ({
+              ...att,
+              url: att.url || "",
+            })),
+          }),
+        );
+      })
+      .catch((error: unknown) => {
+        triggerError(
+          error instanceof Error
+            ? error.message
+            : "Could not start the response. Please retry.",
+        );
+      });
 
     // Return cancellation function
     return () => {
