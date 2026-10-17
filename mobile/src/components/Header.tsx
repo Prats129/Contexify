@@ -1,5 +1,12 @@
 import React from "react";
-import { View, Text, TouchableOpacity, StyleSheet, Image } from "react-native";
+import {
+  Alert,
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+  Image,
+} from "react-native";
 import { Feather, MaterialCommunityIcons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { getAppTheme, type AppTheme } from "../theme/colors";
@@ -13,6 +20,7 @@ interface HeaderProps {
   isTemporaryChat?: boolean;
   onToggleTemporaryChat?: () => void;
   onOpenAttachments?: () => void;
+  onClearChat?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -24,6 +32,7 @@ export const Header: React.FC<HeaderProps> = ({
   isTemporaryChat = false,
   onToggleTemporaryChat,
   onOpenAttachments,
+  onClearChat,
 }) => {
   const theme = customTheme || getAppTheme(isDark);
 
@@ -47,6 +56,17 @@ export const Header: React.FC<HeaderProps> = ({
   const handleThemePress = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     onToggleTheme();
+  };
+
+  const handleConversationActions = () => {
+    Alert.alert("Conversation options", undefined, [
+      { text: "Clear chat", style: "destructive", onPress: onClearChat },
+      {
+        text: isDark ? "Switch to Light Mode" : "Switch to Dark Mode",
+        onPress: handleThemePress,
+      },
+      { text: "Cancel", style: "cancel" },
+    ]);
   };
 
   return (
@@ -162,15 +182,19 @@ export const Header: React.FC<HeaderProps> = ({
 
         <TouchableOpacity
           style={[styles.iconButton, { backgroundColor: theme.borderSubtle }]}
-          onPress={handleThemePress}
+          onPress={onClearChat ? handleConversationActions : handleThemePress}
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           activeOpacity={0.7}
           accessibilityLabel={
-            isDark ? "Switch to Light Mode" : "Switch to Dark Mode"
+            onClearChat
+              ? "Conversation options"
+              : isDark
+                ? "Switch to Light Mode"
+                : "Switch to Dark Mode"
           }
         >
           <Feather
-            name={isDark ? "sun" : "moon"}
+            name={onClearChat ? "more-vertical" : isDark ? "sun" : "moon"}
             size={17}
             color={isDark ? "#fbbf24" : theme.textMain}
           />

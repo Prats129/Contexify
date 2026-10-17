@@ -6,6 +6,78 @@ const path = require("node:path");
 const vm = require("node:vm");
 const ts = require("../frontend/node_modules/typescript");
 
+test("mobile: clearing history authenticates, encodes IDs and reports API failures", async () => {
+  for (const status of [200, 403, 503]) {
+    const fixture = client("mobile", (url) =>
+      url.endsWith("/messages")
+        ? response({ detail: "Clear fixture failed" }, status)
+        : response(credentials("signed-token")),
+    );
+    await fixture.api.login("fixture", "password");
+    const pending = fixture.api.clearSessionMessages("chat/fixture");
+    if (status === 200) await pending;
+    else await assert.rejects(pending, /Clear fixture failed/);
+    const request = fixture.requests.find((item) =>
+      item.url.endsWith("/messages"),
+    );
+    assert.ok(request.url.endsWith("/session/chat%2Ffixture/messages"));
+    assert.equal(request.options.method, "DELETE");
+    assert.equal(
+      new Headers(request.options.headers).get("Authorization"),
+      "Bearer signed-token",
+    );
+    await assert.rejects(
+      fixture.api.clearSessionMessages("  "),
+      /Session ID is required/,
+    );
+  }
+});
+
+test("mobile: clear confirmation updates only the cleared chat and preserves files", async () => {
+  for (const outcome of ["success", "failure", "switched"]) {
+    let finish;
+    let calls = 0;
+    const fixture = appCallbacks("mobile", {
+      clearSessionMessages: () => {
+        calls++;
+        return new Promise((resolve, reject) => {
+          finish = () =>
+            outcome === "failure"
+              ? reject(new Error("Clear fixture failed"))
+              : resolve();
+        });
+      },
+    });
+    fixture.context.currentUser = profile;
+    fixture.context.isSendingRef.current = false;
+    const alerts = [];
+    fixture.context.Alert.alert = (...args) => alerts.push(args);
+    fixture.callbacks.handleClearMessages();
+    assert.equal(calls, 0);
+    const pending = alerts[0][2]
+      .find((button) => button.text === "Clear")
+      .onPress();
+    assert.equal(calls, 1);
+    if (outcome === "switched")
+      fixture.context.activeSessionIdRef.current = "other-chat";
+    finish();
+    await pending;
+    assert.equal(fixture.state.documents.length, 1);
+    assert.equal(fixture.state.attachedMedia.length, 1);
+    if (outcome === "success") {
+      assert.equal(fixture.state.messages.length, 0);
+      assert.ok(fixture.state.clearedChats["fixture-session"]);
+    } else {
+      assert.equal(fixture.state.messages.length, 1);
+      if (outcome === "failure") {
+        assert.equal(alerts[1][0], "Clear Failed");
+        assert.deepEqual(fixture.state.clearedChats, {});
+      } else assert.ok(fixture.state.clearedChats["fixture-session"]);
+    }
+    assert.equal(fixture.context.clearingChatRef.current, false);
+  }
+});
+
 for (const platform of ["frontend", "mobile"]) {
   test(`${platform}: image upload errors preserve readable server messages`, async () => {
     for (const [status, message] of [
@@ -354,6 +426,7 @@ function appCallbacks(platform, apiService) {
         ]
       : [
           "cancelStreamForAuthChange",
+          "handleClearMessages",
           "handleNewChat",
           "handleLogout",
           "handleAuthSuccess",
@@ -385,6 +458,7 @@ function appCallbacks(platform, apiService) {
     documents: [{ document_id: "previous-owner" }],
     messages: ["private"],
     streamingMessage: "private",
+    clearedChats: {},
   };
   let cancelled = 0;
   const context = {
@@ -405,6 +479,8 @@ function appCallbacks(platform, apiService) {
     currentUser: null,
     currentUserRef: { current: null },
     activeSessionId: "fixture-session",
+    activeSessionIdRef: { current: "fixture-session" },
+    messages: state.messages,
     currentMode: "AUTO",
     authVersionRef: { current: 0 },
     abortControllerRef: {
@@ -420,6 +496,7 @@ function appCallbacks(platform, apiService) {
       },
     },
     isSendingRef: { current: true },
+    clearingChatRef: { current: false },
     isAtBottomRef: { current: false },
     flatListRef: { current: null },
     generateGuestSessionId: () => "guest-fixture",

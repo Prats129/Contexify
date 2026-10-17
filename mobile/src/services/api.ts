@@ -785,6 +785,20 @@ export const apiService = {
     return res.json();
   },
 
+  async clearSessionMessages(sessionId: string): Promise<void> {
+    if (!sessionId || !sessionId.trim()) {
+      throw new Error("Session ID is required to clear a conversation.");
+    }
+    const url = await getEndpoint(
+      `/session/${encodeURIComponent(sessionId.trim())}/messages`,
+    );
+    const res = await authenticatedFetch(url, { method: "DELETE" });
+    if (!res.ok) {
+      const err = await res.json().catch(() => null);
+      throw new Error(extractErrorMessage(err, "Failed to clear conversation"));
+    }
+  },
+
   async deleteSession(sessionId: string): Promise<void> {
     if (!sessionId || !sessionId.trim()) {
       throw new Error("Session ID is required to delete a conversation.");

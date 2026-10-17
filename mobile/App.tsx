@@ -101,6 +101,13 @@ export default function App() {
     currentUserRef.current = currentUser;
   }, [currentUser]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const activeSessionIdRef = useRef(activeSessionId);
+  activeSessionIdRef.current = activeSessionId;
+  const [clearedChats, setClearedChats] = useState<Record<string, string>>({});
+  const [clearingChatId, setClearingChatId] = useState<string | null>(null);
+  const isClearingChat =
+    clearingChatId !== null && clearingChatId === activeSessionId;
+  const clearingChatRef = useRef(false);
   const [isTemporaryChat, setIsTemporaryChat] = useState(false);
   const isTempActive = Boolean(currentUser && isTemporaryChat);
   const [currentMode, setCurrentMode] = useState<ChatMode>("AUTO");
@@ -732,6 +739,68 @@ export default function App() {
   };
 
   // --- 6. Send Message & Streaming ---
+  const handleClearMessages = () => {
+    if (
+      !currentUser ||
+      !activeSessionId ||
+      messages.length === 0 ||
+      isSendingRef.current ||
+      clearingChatRef.current
+    )
+      return;
+    const sessionId = activeSessionId;
+    const authVersion = authVersionRef.current;
+    Alert.alert(
+      "Clear conversation?",
+      "Clear all messages in this conversation? Attached documents will remain available.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Clear",
+          style: "destructive",
+          onPress: async () => {
+            if (
+              authVersion !== authVersionRef.current ||
+              sessionId !== activeSessionIdRef.current ||
+              isSendingRef.current ||
+              clearingChatRef.current
+            )
+              return;
+            clearingChatRef.current = true;
+            setClearingChatId(sessionId);
+            try {
+              await apiService.clearSessionMessages(sessionId);
+              if (authVersion !== authVersionRef.current) return;
+              setClearedChats((previous) => ({
+                ...previous,
+                [sessionId]: new Date().toISOString(),
+              }));
+              if (sessionId !== activeSessionIdRef.current) return;
+              setMessages([]);
+              setStreamingMessage(null);
+              setReplyingTo(null);
+              setActiveCitations([]);
+              setCitationsVisible(false);
+            } catch (error: unknown) {
+              if (
+                authVersion === authVersionRef.current &&
+                sessionId === activeSessionIdRef.current
+              ) {
+                Alert.alert(
+                  "Clear Failed",
+                  error instanceof Error ? error.message : String(error),
+                );
+              }
+            } finally {
+              clearingChatRef.current = false;
+              setClearingChatId(null);
+            }
+          },
+        },
+      ],
+    );
+  };
+
   const handleSendMessage = async (customQuery?: string) => {
     const textToSend = (customQuery || query).trim();
     if (
@@ -740,7 +809,8 @@ export default function App() {
         pendingDocumentIds.length === 0) ||
       isSending ||
       isUploading ||
-      isSendingRef.current
+      isSendingRef.current ||
+      clearingChatRef.current
     )
       return;
 
@@ -1133,6 +1203,7 @@ export default function App() {
   // --- 10. Auth Success / Logout ---
   const cancelStreamForAuthChange = () => {
     authVersionRef.current++;
+    setClearedChats({});
     isSendingRef.current = false;
     streamAbortRef.current?.();
     streamAbortRef.current = null;
@@ -1204,9 +1275,10 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      {/* Measure keyboard overlap from the screen root, including the header and safe area. */}
+      {/* Android uses native resize (app.json); only iOS needs JS keyboard avoidance. */}
       <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        enabled={Platform.OS === "ios"}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
         style={styles.safeArea}
       >
         <SafeAreaView
@@ -1228,6 +1300,15 @@ export default function App() {
             }
             onOpenAttachments={
               currentUser ? () => setAttachmentsVisible(true) : undefined
+            }
+            onClearChat={
+              currentUser &&
+              messages.length > 0 &&
+              !isSending &&
+              !isUploading &&
+              !isClearingChat
+                ? handleClearMessages
+                : undefined
             }
           />
 
@@ -1293,6 +1374,36 @@ export default function App() {
           <View style={styles.workspace}>
             {/* Main Messages & Conversation Viewport */}
             <View style={styles.chatViewport}>
+              {activeSessionId &&
+                (isClearingChat || clearedChats[activeSessionId]) && (
+                  <View
+                    accessibilityLiveRegion="polite"
+                    style={{
+                      paddingHorizontal: 16,
+                      paddingVertical: 12,
+                      alignItems: "center",
+                    }}
+                  >
+                    <Text style={{ color: theme.textMain, fontWeight: "600" }}>
+                      {isClearingChat ? "Clearing chat…" : "Chat cleared"}
+                    </Text>
+                    {!isClearingChat && (
+                      <>
+                        <Text style={{ color: theme.textMuted, fontSize: 12 }}>
+                          {new Date(
+                            clearedChats[activeSessionId],
+                          ).toLocaleString(undefined, {
+                            dateStyle: "medium",
+                            timeStyle: "short",
+                          })}
+                        </Text>
+                        <Text style={{ color: theme.textMuted, fontSize: 12 }}>
+                          Your documents are still available.
+                        </Text>
+                      </>
+                    )}
+                  </View>
+                )}
               {/* Welcome Screen or ChatGPT Temporary Chat Screen */}
               {messages.length === 0 && !streamingMessage ? (
                 isTempActive ? (
