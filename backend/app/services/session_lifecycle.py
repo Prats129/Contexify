@@ -284,6 +284,12 @@ def cleanup_session(session_id: str) -> bool:
             for table in ("documents", "media_assets"):
                 if temporary:
                     kind = "document" if table == "documents" else "media"
+                    if table == "documents":
+                        conn.execute(
+                            "DELETE FROM session_documents WHERE document_id IN "
+                            "(SELECT id FROM documents WHERE session_id=?)",
+                            (session_id,),
+                        )
                     conn.execute(
                         f"DELETE FROM download_tickets WHERE kind=? AND asset_id IN "
                         f"(SELECT id FROM {table} WHERE session_id=?)",
@@ -292,6 +298,9 @@ def cleanup_session(session_id: str) -> bool:
                     conn.execute(
                         f"DELETE FROM {table} WHERE session_id=?", (session_id,)
                     )
+            conn.execute(
+                "DELETE FROM session_documents WHERE session_id=?", (session_id,)
+            )
             conn.execute("DELETE FROM messages WHERE session_id=?", (session_id,))
             conn.execute("DELETE FROM chat_sessions WHERE id=?", (session_id,))
             conn.execute(

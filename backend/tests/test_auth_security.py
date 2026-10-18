@@ -1323,12 +1323,16 @@ class SecurityTests(unittest.TestCase):
             )
 
     def test_expiry_cleans_temporary_files_but_preserves_other_chat_library(self):
-        from app.repositories.session_store import session_store_repo
+        from app.schemas.chat import MediaAttachment
         from app.services import session_lifecycle
+        from app.services.chat_history_service import chat_history_service
 
         security.ensure_session("expires", self.principal, is_temporary=True)
-        session_store_repo.get_or_create_session("expires").document_ids.append(
-            "document"
+        chat_history_service.save_message(
+            "expires",
+            "user",
+            "Review",
+            attachments=[MediaAttachment(id="document", file_type="document")],
         )
         with database.get_db_connection(write=True) as conn:
             conn.execute(
@@ -1343,6 +1347,10 @@ class SecurityTests(unittest.TestCase):
         self.assertFalse((settings.UPLOAD_IMAGE_DIR / "fixture.png").exists())
         self.assertTrue((root / "documents/alice-session/fixture.txt").exists())
         security.check_asset("document", self.principal, "document")
+        with database.get_db_connection() as conn:
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM session_documents").fetchone()[0], 0
+            )
 
     def test_cleanup_waits_for_inflight_external_writes(self):
         import threading
@@ -2999,7 +3007,7 @@ class SecurityTests(unittest.TestCase):
                     "/chat/stream",
                     self.token,
                     json={
-                        "session_id": "alice-session",
+                        "session_id": "library-target",
                         "message": "review",
                         "mode": mode,
                         "attachments": [
@@ -3013,12 +3021,27 @@ class SecurityTests(unittest.TestCase):
                 )
                 self.assertEqual(response.status_code, 200)
                 retrieve.assert_called_with(
-                    "review", "alice-session", document_ids=["document"]
+                    "review", "library-target", document_ids=["document"]
                 )
+            response = self.request(
+                "POST",
+                "/chat/stream",
+                self.token,
+                json={
+                    "session_id": "library-target",
+                    "mode": "AUTO",
+                    "message": "Which scientific concepts are covered by the document?",
+                },
+            )
+            self.assertEqual(response.status_code, 200)
+            retrieve.assert_called_with(
+                "Which scientific concepts are covered by the document?",
+                "library-target",
+            )
         history = self.request(
-            "GET", "/session/alice-session/history", self.token
+            "GET", "/session/library-target/history", self.token
         ).json()
-        attachment = history["messages"][-1]["attachments"][0]
+        attachment = history["messages"][0]["attachments"][0]
         self.assertEqual(attachment["file_type"], "document")
         self.assertEqual(attachment["file_name"], "fixture.txt")
         self.assertEqual(
@@ -3039,7 +3062,199 @@ class SecurityTests(unittest.TestCase):
         )
         self.assertEqual(denied.status_code, 404)
 
+    def test_library_document_reference_survives_reload_clear_and_source_deletion(self):
+        from app.repositories.session_store import SessionStoreRepository
+        from app.schemas.chat import MediaAttachment
+        from app.services.chat_history_service import chat_history_service
+
+        security.ensure_session("library-target", self.principal)
+        worker = SessionStoreRepository()
+        cached = worker.get_or_create_session("library-target")
+        self.assertEqual(cached.document_ids, [])
+        attachment = MediaAttachment(id="document", file_type="document")
+        for _ in range(2):
+            chat_history_service.save_message(
+                "library-target", "user", "Review", attachments=[attachment]
+            )
+        self.assertEqual(
+            worker.get_or_create_session("library-target").document_ids, ["document"]
+        )
+        database.init_db()  # Repeatable migration must retain existing references.
+        for repository in (worker, SessionStoreRepository()):
+            self.assertEqual(
+                repository.get_or_create_session("library-target").document_ids,
+                ["document"],
+            )
+        history = self.request("GET", "/session/library-target/history", self.token)
+        self.assertEqual(history.status_code, 200)
+        self.assertEqual(history.json()["documents"][0]["document_id"], "document")
+        self.assertEqual(history.json()["session"]["document_count"], 1)
+        self.assertEqual(
+            self.request(
+                "DELETE", "/session/library-target/messages", self.token
+            ).status_code,
+            200,
+        )
+        self.assertEqual(
+            self.request("DELETE", "/session/alice-session", self.token).status_code,
+            200,
+        )
+        self.assertEqual(
+            worker.get_or_create_session("library-target").document_ids, ["document"]
+        )
+        with database.get_db_connection() as conn:
+            document = conn.execute(
+                "SELECT * FROM documents WHERE id='document'"
+            ).fetchone()
+            self.assertIsNone(document["session_id"])
+            self.assertEqual(document["user_id"], self.alice.id)
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM session_documents").fetchone()[0], 1
+            )
+
+    def test_deleting_referencing_chat_preserves_original_document_and_vectors(self):
+        from app.schemas.chat import MediaAttachment
+        from app.services.chat_history_service import chat_history_service
+
+        security.ensure_session("library-target", self.principal)
+        chat_history_service.save_message(
+            "library-target",
+            "user",
+            "Review",
+            attachments=[MediaAttachment(id="document", file_type="document")],
+        )
+        with patch.object(vectors, "delete_document") as delete:
+            response = self.request("DELETE", "/session/library-target", self.token)
+        self.assertEqual(response.status_code, 200)
+        delete.assert_not_called()
+        with database.get_db_connection() as conn:
+            self.assertEqual(
+                conn.execute(
+                    "SELECT session_id FROM documents WHERE id='document'"
+                ).fetchone()[0],
+                "alice-session",
+            )
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM session_documents").fetchone()[0], 0
+            )
+        self.assertTrue((root / "documents/alice-session/fixture.txt").exists())
+
+    def test_invalid_library_reference_rolls_back_message_and_all_links(self):
+        from fastapi import HTTPException
+
+        from app.schemas.chat import MediaAttachment
+        from app.services.chat_history_service import chat_history_service
+
+        security.ensure_session("library-target", self.principal)
+        security.ensure_session(
+            "bob-session", security.resolve_principal(security.digest(self.other_token))
+        )
+        with database.get_db_connection() as conn:
+            conn.execute(
+                "INSERT INTO documents SELECT 'foreign-document',?,'bob-session',filename,"
+                "file_type,file_size_bytes,total_chunks,storage_url,created_at "
+                "FROM documents WHERE id='document'",
+                (self.bob.id,),
+            )
+        for invalid in ("missing", "foreign-document"):
+            with self.assertRaises(HTTPException) as error:
+                chat_history_service.save_message(
+                    "library-target",
+                    "user",
+                    "Review",
+                    attachments=[
+                        MediaAttachment(id=key, file_type="document")
+                        for key in ("document", invalid)
+                    ],
+                )
+            self.assertEqual(error.exception.status_code, 404)
+        with database.get_db_connection() as conn:
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM session_documents").fetchone()[0], 0
+            )
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0], 0
+            )
+
+    def test_deleted_or_expired_source_document_leaves_retrieval_scope_in_all_workers(
+        self,
+    ):
+        from app.repositories.session_store import SessionStoreRepository
+        from app.schemas.chat import MediaAttachment
+        from app.services.chat_history_service import chat_history_service
+
+        security.ensure_session("library-target", self.principal)
+        chat_history_service.save_message(
+            "library-target",
+            "user",
+            "Review",
+            attachments=[MediaAttachment(id="document", file_type="document")],
+        )
+        worker = SessionStoreRepository()
+        self.assertEqual(
+            worker.get_or_create_session("library-target").document_ids, ["document"]
+        )
+        with database.get_db_connection() as conn:
+            conn.execute(
+                "UPDATE chat_sessions SET expires_at='2000-01-01T00:00:00' WHERE id='alice-session'"
+            )
+        for repository in (worker, SessionStoreRepository()):
+            self.assertEqual(
+                repository.get_or_create_session("library-target").document_ids, []
+            )
+        chat_history_service.delete_document("document")
+        with database.get_db_connection() as conn:
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM session_documents").fetchone()[0], 0
+            )
+        self.assertEqual(
+            worker.get_or_create_session("library-target").document_ids, []
+        )
+
+    def test_temporary_source_expiry_removes_document_references_from_normal_chat(self):
+        from app.repositories.session_store import SessionStoreRepository
+        from app.schemas.chat import MediaAttachment
+        from app.services import session_lifecycle
+        from app.services.chat_history_service import chat_history_service
+
+        security.ensure_session("library-target", self.principal)
+        chat_history_service.save_message(
+            "library-target",
+            "user",
+            "Review",
+            attachments=[MediaAttachment(id="document", file_type="document")],
+        )
+        with database.get_db_connection() as conn:
+            conn.execute(
+                "UPDATE chat_sessions SET is_temporary=1,expires_at='2000-01-01T00:00:00' "
+                "WHERE id='alice-session'"
+            )
+        self.assertEqual(session_lifecycle.purge_expired_sessions(), 1)
+        self.assertEqual(
+            SessionStoreRepository()
+            .get_or_create_session("library-target")
+            .document_ids,
+            [],
+        )
+        with database.get_db_connection() as conn:
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM session_documents").fetchone()[0], 0
+            )
+            self.assertIsNone(
+                conn.execute("SELECT id FROM documents WHERE id='document'").fetchone()
+            )
+
     def test_grounding_honors_explicit_document_selection(self):
+        from app.schemas.chat import MediaAttachment
+        from app.services.chat_history_service import chat_history_service
+
+        security.ensure_session("library-target", self.principal)
+        chat_history_service.save_message(
+            "library-target",
+            "user",
+            "Review",
+            attachments=[MediaAttachment(id="document", file_type="document")],
+        )
         embedding = types.ModuleType("app.services.embedding_service")
         embedder = Mock()
         embedder.embed_text.return_value = [1.0]
@@ -3077,6 +3292,8 @@ class SecurityTests(unittest.TestCase):
                     [],
                 )
                 search.assert_not_called()
+                actual.retrieve_context_for_query("follow-up", "library-target")
+                self.assertEqual(search.call_args.kwargs["document_ids"], ["document"])
 
     def test_real_orchestrator_streams_owned_media_without_external_requests(self):
         from app.api.v1.endpoints import chat

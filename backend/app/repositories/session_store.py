@@ -24,14 +24,12 @@ class SessionStoreRepository:
     ) -> SessionState:
         with get_db_connection() as conn:
             row = active_session(conn, session_id)
+        docs = chat_history_service.list_session_documents(session_id)
         if session_id not in self._sessions:
             # Check if exists in DB (logged-in user session)
             db_session = chat_history_service.get_session(session_id)
             if db_session:
-                docs = chat_history_service.list_session_documents(session_id)
                 doc_ids = [d.document_id for d in docs]
-                for d in docs:
-                    self._documents[d.document_id] = d
                 self._sessions[session_id] = SessionState(
                     session_id=session_id,
                     mode=db_session.mode,
@@ -44,6 +42,11 @@ class SessionStoreRepository:
         session = self._sessions.get(session_id)
         if session is None:
             raise HTTPException(404, "Session not found.")
+        # Document references can be added/deleted by another worker. SQL is
+        # authoritative for retrieval scope, just as it is for signed-in history.
+        session.document_ids = [doc.document_id for doc in docs]
+        for doc in docs:
+            self._documents[doc.document_id] = doc
         self.invalidate_cached_history(session_id, row["history_version"])
         return session
 

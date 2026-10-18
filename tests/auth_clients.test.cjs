@@ -1171,6 +1171,7 @@ function appCallbacks(platform, apiService) {
           "handleLogin",
           "handleFileUpload",
           "handleDetachDocument",
+          "handleAttachDocumentFromModal",
           "handleSendMessage",
           "handleStopGeneration",
           "handleNewSession",
@@ -1186,6 +1187,7 @@ function appCallbacks(platform, apiService) {
           "handleAuthSuccess",
           "handleAttachFile",
           "handleDetachDocument",
+          "handleAttachDocumentFromModal",
           "handleSendMessage",
           "handleStopGeneration",
           "handleDeleteSession",
@@ -1480,6 +1482,36 @@ for (const platform of ["frontend", "mobile"]) {
 }
 
 for (const platform of ["frontend", "mobile"]) {
+  test(`${platform}: library selection sends an existing document in the target chat`, async () => {
+    let sent;
+    const fixture = appCallbacks(platform, {
+      streamChat(...args) {
+        sent = args;
+        return () => {};
+      },
+    });
+    fixture.context.setActiveSessionId("target-chat");
+    fixture.workspace.patch(fixture.workspace.active, {
+      currentMode: "WEB_SEARCH",
+      attachedMedia: [],
+      documents: [],
+      pendingDocumentIds: [],
+    });
+    const callbacks = fixture.callbacks;
+    const document = { document_id: "source-document", filename: "source.txt" };
+    callbacks.handleAttachDocumentFromModal(document);
+    callbacks.handleAttachDocumentFromModal(document);
+    assert.equal(fixture.state.currentMode, "DOCUMENT_RAG");
+    assert.equal(fixture.state.pendingDocumentIds.length, 1);
+    assert.equal(fixture.state.documents.length, 1);
+    await fixture.callbacks.handleSendMessage();
+    assert.equal(sent[0], "target-chat");
+    const attachments = platform === "frontend" ? sent[5] : sent[4];
+    assert.equal(attachments.length, 1);
+    assert.equal(attachments[0].id, "source-document");
+    assert.equal(attachments[0].file_type, "document");
+  });
+
   test(`${platform}: sending waits for uploads without clearing the draft`, async () => {
     const fixture = appCallbacks(platform, {
       streamChat() {

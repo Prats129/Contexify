@@ -267,8 +267,11 @@ export const App: React.FC = () => {
         }
         return [...prev, doc];
       });
+      if (currentMode !== "DOCUMENT_RAG" && currentMode !== "AUTO") {
+        setCurrentMode("DOCUMENT_RAG");
+      }
     },
-    [setPendingDocumentIds, setDocuments],
+    [setPendingDocumentIds, setDocuments, currentMode, setCurrentMode],
   );
 
   const handleAssetDeletedFromModal = useCallback(

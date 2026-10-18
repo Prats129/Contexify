@@ -391,6 +391,17 @@ def init_db():
             cursor.execute("DROP TABLE documents")
             cursor.execute("ALTER TABLE documents_retained RENAME TO documents")
 
+        # References do not transfer ownership or duplicate stored files/vectors.
+        cursor.execute("""CREATE TABLE IF NOT EXISTS session_documents (
+            session_id TEXT NOT NULL, document_id TEXT NOT NULL,
+            PRIMARY KEY (session_id,document_id),
+            FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE,
+            FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
+        )""")
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_session_documents_document ON session_documents(document_id)"
+        )
+
         # No cascading foreign keys: cleanup intents must survive parent deletion
         # and remain retryable after provider failures or process restarts.
         cursor.execute("""CREATE TABLE IF NOT EXISTS session_deletions (

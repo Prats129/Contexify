@@ -3,6 +3,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+from fastapi import HTTPException
+
 from app.core.logging import logger
 from app.db.database import get_db_connection
 from app.schemas.chat import ChatMode, Citation, MediaAttachment, MessageReplyReference
@@ -66,7 +68,10 @@ class ChatHistoryService:
                     s.id, s.user_id, s.title, s.mode, s.is_temporary, s.expires_at, 
                     s.is_pinned, s.pinned_at, s.created_at, s.updated_at,
                     (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) AS message_count,
-                    (SELECT COUNT(*) FROM documents d WHERE d.session_id = s.id) AS document_count
+                    (SELECT COUNT(*) FROM documents d WHERE d.id IN (
+                        SELECT id FROM documents WHERE session_id=s.id
+                        UNION SELECT document_id FROM session_documents WHERE session_id=s.id
+                    )) AS document_count
                 FROM chat_sessions s
                 WHERE s.id = ? AND NOT EXISTS (SELECT 1 FROM session_deletions x WHERE x.session_id=s.id)
                 """,
@@ -137,7 +142,10 @@ class ChatHistoryService:
                     s.id, s.user_id, s.title, s.mode, s.is_temporary, s.expires_at, 
                     s.is_pinned, s.pinned_at, s.created_at, s.updated_at,
                     (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) AS message_count,
-                    (SELECT COUNT(*) FROM documents d WHERE d.session_id = s.id) AS document_count
+                    (SELECT COUNT(*) FROM documents d WHERE d.id IN (
+                        SELECT id FROM documents WHERE session_id=s.id
+                        UNION SELECT document_id FROM session_documents WHERE session_id=s.id
+                    )) AS document_count
                 FROM chat_sessions s
                 WHERE {where_sql}
                 ORDER BY {order_sql}
@@ -287,6 +295,27 @@ class ChatHistoryService:
 
         with get_db_connection(write=True) as conn:
             db_session = active_session(conn, session_id)
+            if role == "user":
+                for attachment in attachments_obj or []:
+                    if attachment.file_type != "document":
+                        continue
+                    document = conn.execute(
+                        "SELECT user_id,session_id FROM documents WHERE id=?",
+                        (attachment.id,),
+                    ).fetchone()
+                    if not document:
+                        raise HTTPException(404, "Document not found.")
+                    owner = document["user_id"]
+                    if document["session_id"]:
+                        source = active_session(conn, document["session_id"])
+                        owner = owner or source["user_id"]
+                    if owner != db_session["user_id"]:
+                        raise HTTPException(404, "Document not found.")
+                    conn.execute(
+                        "INSERT INTO session_documents (session_id,document_id) VALUES (?,?) "
+                        "ON CONFLICT DO NOTHING",
+                        (session_id, attachment.id),
+                    )
             if not db_session["user_id"].startswith("guest_"):
                 cursor = conn.cursor()
                 cursor.execute(
@@ -440,12 +469,30 @@ class ChatHistoryService:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT id, filename, file_type, file_size_bytes, total_chunks, storage_url, created_at
-                FROM documents
-                WHERE session_id = ?
-                ORDER BY created_at DESC
+                SELECT d.id, d.filename, d.file_type, d.file_size_bytes,
+                       d.total_chunks, d.storage_url, d.created_at
+                FROM documents d
+                JOIN chat_sessions target ON target.id = ?
+                LEFT JOIN chat_sessions source ON source.id = d.session_id
+                WHERE d.id IN (
+                    SELECT id FROM documents WHERE session_id=target.id
+                    UNION SELECT document_id FROM session_documents WHERE session_id=target.id
+                )
+                AND COALESCE(NULLIF(d.user_id,''),source.user_id) = target.user_id
+                AND (d.session_id IS NULL OR (
+                    source.id IS NOT NULL
+                    AND (source.expires_at IS NULL OR source.expires_at > ?)
+                    AND NOT EXISTS (
+                        SELECT 1 FROM session_deletions deletion
+                        WHERE deletion.session_id = source.id
+                    )
+                ))
+                ORDER BY d.created_at DESC
                 """,
-                (session_id,),
+                (
+                    session_id,
+                    datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+                ),
             )
             rows = cursor.fetchall()
             return [
@@ -475,8 +522,11 @@ class ChatHistoryService:
         return None
 
     def delete_document(self, document_id: str) -> bool:
-        with get_db_connection() as conn:
+        with get_db_connection(write=True) as conn:
             cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM session_documents WHERE document_id = ?", (document_id,)
+            )
             cursor.execute("DELETE FROM documents WHERE id = ?", (document_id,))
             return cursor.rowcount > 0
 
