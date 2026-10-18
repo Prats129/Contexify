@@ -29,6 +29,7 @@ interface ChatInputProps {
   onSend: () => void;
   onStop: () => void;
   isSending: boolean;
+  isBusy?: boolean;
   onAttachFile: (file: { uri: string; name: string; mimeType: string }) => void;
   isUploading: boolean;
   documents: DocumentMetadata[];
@@ -50,6 +51,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   onSend,
   onStop,
   isSending,
+  isBusy = false,
   onAttachFile,
   isUploading,
   documents,
@@ -75,6 +77,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       attachedMedia.length > 0 ||
       documents.length > 0) &&
     !isSending &&
+    !isBusy &&
     !isUploading;
   const insets = useSafeAreaInsets();
   const [isKeyboardOpen, setIsKeyboardOpen] = useState(false);

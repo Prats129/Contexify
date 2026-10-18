@@ -236,8 +236,12 @@ test("mobile: clear confirmation updates only the cleared chat and preserves fil
       .find((button) => button.text === "Clear")
       .onPress();
     assert.equal(calls, 1);
-    if (outcome === "switched")
-      fixture.context.activeSessionIdRef.current = "other-chat";
+    if (outcome === "switched") {
+      fixture.context.setActiveSessionId("other-chat");
+      fixture.state.messages = ["other chat"];
+      fixture.state.documents = [{ document_id: "other-document" }];
+      fixture.state.attachedMedia = [{ id: "other-image" }];
+    }
     finish();
     await pending;
     assert.equal(fixture.state.documents.length, 1);
@@ -292,6 +296,575 @@ for (const platform of ["frontend", "mobile"]) {
         await rejected;
       }
     }
+  });
+}
+
+for (const platform of ["frontend", "mobile"]) {
+  test(`${platform}: out-of-order A → B → A history cannot overwrite the latest view`, async () => {
+    const requests = [];
+    const fixture = appCallbacks(platform, {
+      getSessionHistory: (id) =>
+        new Promise((resolve, reject) =>
+          requests.push({ id, resolve, reject }),
+        ),
+    });
+    fixture.context.currentUser = profile;
+    const a1 = fixture.callbacks.selectSession("fixture-session");
+    const b = fixture.callbacks.selectSession("chat-b");
+    const a2 = fixture.callbacks.selectSession("fixture-session");
+    requests[2].resolve({
+      session: { mode: "AUTO" },
+      messages: [{ id: "fresh-a" }],
+      documents: [],
+    });
+    await a2;
+    requests[1].resolve({
+      session: { mode: "AUTO" },
+      messages: [{ id: "b" }],
+      documents: [],
+    });
+    await b;
+    requests[0].resolve({
+      session: { mode: "AUTO", is_temporary: true },
+      messages: [{ id: "stale-a" }],
+      documents: [],
+    });
+    await a1;
+    assert.equal(fixture.state.messages[0].id, "fresh-a");
+    assert.equal(fixture.state.isTemporaryChat, false);
+    assert.equal(fixture.context.activeSessionId, "fixture-session");
+  });
+
+  test(`${platform}: navigation preserves simultaneous streams and Stop targets only the visible chat`, async () => {
+    const streams = new Map();
+    const stopped = [];
+    const fixture = appCallbacks(platform, {
+      getSessionHistory: async () => ({
+        session: { mode: "AUTO" },
+        messages: [],
+        documents: [],
+      }),
+      streamChat: (id, query, mode, handlers, signal) => {
+        streams.set(id, handlers);
+        if (platform === "frontend")
+          signal.addEventListener("abort", () => stopped.push(id));
+        return platform === "mobile"
+          ? () => stopped.push(id)
+          : Promise.resolve();
+      },
+    });
+    fixture.context.currentUser = profile;
+    fixture.context.currentUserRef.current = profile;
+    fixture.context.isSendingRef.current = false;
+    fixture.state.messages = [];
+    await fixture.callbacks.handleSendMessage();
+    streams.get("fixture-session").onToken("A begins");
+    await fixture.callbacks.selectSession("chat-b");
+    assert.equal(fixture.state.messages.length, 0);
+    assert.equal(fixture.state.isSending, false);
+    fixture.context.query = "B prompt";
+    fixture.context.inputQuery = "B prompt";
+    await fixture.callbacks.handleSendMessage();
+    streams.get("chat-b").onToken("B partial");
+    streams.get("fixture-session").onToken(" and finishes");
+    assert.equal(fixture.state.streamingMessage.content, "B partial");
+    assert.deepEqual(stopped, []);
+    fixture.callbacks.handleStopGeneration();
+    assert.deepEqual(stopped, ["chat-b"]);
+    assert.equal(fixture.state.messages.at(-1).content, "B partial");
+    await fixture.callbacks.selectSession("fixture-session");
+    assert.equal(
+      fixture.state.streamingMessage.content,
+      "A begins and finishes",
+    );
+    assert.equal(fixture.state.isSending, true);
+    const a = streams.get("fixture-session");
+    await (platform === "frontend" ? a.onDone() : a.onComplete());
+    assert.equal(
+      fixture.state.messages.at(-1).content,
+      "A begins and finishes",
+    );
+    assert.equal(fixture.state.isSending, false);
+    await fixture.callbacks.selectSession("chat-b");
+    assert.equal(fixture.state.messages.at(-1).content, "B partial");
+  });
+
+  test(`${platform}: late image and document uploads stay in their original conversation`, async () => {
+    for (const image of [true, false]) {
+      let release;
+      const fixture = appCallbacks(platform, {
+        getSessionHistory: async () => ({
+          session: { mode: "AUTO" },
+          messages: [],
+          documents: [],
+        }),
+        uploadMedia: () =>
+          new Promise((resolve) => {
+            release = resolve;
+          }),
+        uploadDocument: () =>
+          new Promise((resolve) => {
+            release = resolve;
+          }),
+      });
+      fixture.context.currentUser = profile;
+      const pending =
+        platform === "frontend"
+          ? fixture.callbacks.handleFileUpload({
+              name: image ? "fixture.png" : "fixture.txt",
+              type: image ? "image/png" : "text/plain",
+            })
+          : fixture.callbacks.handleAttachFile({
+              name: image ? "fixture.png" : "fixture.txt",
+              mimeType: image ? "image/png" : "text/plain",
+              uri: "file:///fixture",
+            });
+      await until(() => release);
+      const original = fixture.workspace.active;
+      await fixture.callbacks.selectSession("chat-b");
+      fixture.context.query = "B draft";
+      fixture.context.inputQuery = "B draft";
+      release(
+        image
+          ? { id: "late-image" }
+          : platform === "frontend"
+            ? { document: { document_id: "late-doc" } }
+            : { document_id: "late-doc" },
+      );
+      await pending;
+      assert.equal(fixture.state.attachedMedia.length, 0);
+      assert.equal(fixture.state.pendingDocumentIds.length, 0);
+      assert.equal(fixture.state.isUploading, false);
+      assert.equal(fixture.state.query, "B draft");
+      assert.equal(original.state.isUploading, false);
+      assert.ok(
+        image
+          ? original.state.attachedMedia.some(
+              (item) => item.id === "late-image",
+            )
+          : original.state.pendingDocumentIds.includes("late-doc"),
+      );
+      fixture.context.setActiveSessionId("fixture-session");
+      assert.ok(
+        image
+          ? fixture.state.attachedMedia.some((item) => item.id === "late-image")
+          : fixture.state.documents.some(
+              (item) => item.document_id === "late-doc",
+            ),
+      );
+    }
+  });
+
+  test(`${platform}: delayed creation cannot redirect navigation or discard a submitted prompt`, async () => {
+    let finish;
+    let sent;
+    const fixture = appCallbacks(platform, {
+      createSession: (...args) =>
+        new Promise((resolve) => {
+          finish = () =>
+            resolve({ id: args[4], title: "Created", mode: "AUTO" });
+        }),
+      getSessionHistory: async () => ({
+        session: { mode: "AUTO" },
+        messages: [],
+        documents: [],
+      }),
+      streamChat: (...args) => {
+        sent = args;
+        return platform === "mobile" ? () => {} : Promise.resolve();
+      },
+    });
+    fixture.context.currentUser = profile;
+    fixture.context.currentUserRef.current = profile;
+    fixture.context.isSendingRef.current = false;
+    fixture.context.setActiveSessionId(null);
+    fixture.context.query = "Original prompt";
+    fixture.context.inputQuery = "Original prompt";
+    const pending = fixture.callbacks.handleSendMessage();
+    await until(() => finish);
+    const original = fixture.workspace.active;
+    await fixture.callbacks.selectSession("chat-b");
+    finish();
+    await pending;
+    assert.equal(fixture.context.activeSessionId, "chat-b");
+    assert.equal(fixture.state.messages.length, 0);
+    assert.equal(sent[0], original.sessionId);
+    assert.equal(sent[1], "Original prompt");
+    assert.equal(original.state.messages.at(-1).content, "Original prompt");
+  });
+
+  test(`${platform}: background errors retain partial text, citations and media without touching another chat`, async () => {
+    let handlers;
+    const fixture = appCallbacks(platform, {
+      getSessionHistory: async () => ({
+        session: { mode: "AUTO" },
+        messages: [],
+        documents: [],
+      }),
+      streamChat: (id, query, mode, callbacks) => {
+        handlers = callbacks;
+        return platform === "mobile" ? () => {} : Promise.resolve();
+      },
+    });
+    fixture.context.currentUser = profile;
+    fixture.context.isSendingRef.current = false;
+    await fixture.callbacks.handleSendMessage();
+    const original = fixture.workspace.active;
+    handlers.onToken("Partial answer");
+    handlers.onCitations([{ title: "Fixture" }]);
+    handlers.onMedia({ id: "generated-fixture" });
+    await fixture.callbacks.selectSession("chat-b");
+    handlers.onError("Fixture network failure");
+    assert.equal(fixture.state.messages.length, 0);
+    assert.match(
+      original.state.messages.at(-1).content,
+      /Partial answer.*\n\nResponse interrupted/s,
+    );
+    assert.equal(original.state.messages.at(-1).citations[0].title, "Fixture");
+    assert.equal(
+      original.state.messages.at(-1).attachments[0].id,
+      "generated-fixture",
+    );
+    await fixture.callbacks.selectSession("fixture-session");
+    assert.match(fixture.state.messages.at(-1).content, /Partial answer/);
+  });
+}
+
+for (const platform of ["frontend", "mobile"]) {
+  test(`${platform}: drafts and pending library documents survive navigation and a fresh chat`, async () => {
+    const fixture = appCallbacks(platform, {
+      getSessionHistory: async () => ({
+        session: { mode: "AUTO" },
+        messages: [],
+        documents: [],
+      }),
+    });
+    fixture.context.currentUser = profile;
+    fixture.context.currentUserRef.current = profile;
+    fixture.context.query = "A draft";
+    fixture.context.inputQuery = "A draft";
+    fixture.state.documents = [{ document_id: "library-document" }];
+    fixture.state.pendingDocumentIds = ["library-document"];
+    fixture.state.replyingTo = { id: "reply-a" };
+    await fixture.callbacks.selectSession("chat-b");
+    assert.equal(fixture.state.attachedMedia.length, 0);
+    fixture.context.query = "B draft";
+    fixture.context.inputQuery = "B draft";
+    if (platform === "frontend") fixture.callbacks.handleNewSession();
+    else fixture.callbacks.handleNewChat();
+    assert.equal(fixture.state.query, "");
+    await fixture.callbacks.selectSession("fixture-session");
+    assert.equal(fixture.state.inputQuery, "A draft");
+    assert.equal(fixture.state.replyingTo.id, "reply-a");
+    assert.equal(fixture.state.documents[0].document_id, "library-document");
+    assert.equal(fixture.state.attachedMedia[0].id, "previous-owner");
+    await fixture.callbacks.selectSession("chat-b");
+    assert.equal(fixture.state.query, "B draft");
+  });
+
+  test(`${platform}: failed background uploads remain visible in their original chat`, async () => {
+    let fail;
+    const fixture = appCallbacks(platform, {
+      getSessionHistory: async () => ({
+        session: { mode: "AUTO" },
+        messages: [],
+        documents: [],
+      }),
+      uploadMedia: () =>
+        new Promise((resolve, reject) => {
+          fail = reject;
+        }),
+    });
+    fixture.context.currentUser = profile;
+    const pending =
+      platform === "frontend"
+        ? fixture.callbacks.handleFileUpload({
+            name: "fixture.png",
+            type: "image/png",
+          })
+        : fixture.callbacks.handleAttachFile({
+            name: "fixture.png",
+            mimeType: "image/png",
+            uri: "file:///fixture",
+          });
+    await until(() => fail);
+    await fixture.callbacks.selectSession("chat-b");
+    fail(new Error("fixture upload failure"));
+    await pending;
+    assert.equal(fixture.state.operationError, null);
+    await fixture.callbacks.selectSession("fixture-session");
+    assert.match(fixture.state.operationError, /fixture upload failure/);
+  });
+
+  test(`${platform}: logout cancels every conversation and rejects all late callbacks`, async () => {
+    const streams = new Map();
+    const stopped = [];
+    const fixture = appCallbacks(platform, {
+      getSessionHistory: async () => ({
+        session: { mode: "AUTO" },
+        messages: [],
+        documents: [],
+      }),
+      streamChat: (id, query, mode, handlers, signal) => {
+        streams.set(id, handlers);
+        if (platform === "frontend")
+          signal.addEventListener("abort", () => stopped.push(id));
+        return platform === "mobile"
+          ? () => stopped.push(id)
+          : Promise.resolve();
+      },
+      logout: async () => {},
+    });
+    fixture.context.currentUser = profile;
+    fixture.context.currentUserRef.current = profile;
+    fixture.context.isSendingRef.current = false;
+    await fixture.callbacks.handleSendMessage();
+    await fixture.callbacks.selectSession("chat-b");
+    fixture.context.query = "B";
+    fixture.context.inputQuery = "B";
+    await fixture.callbacks.handleSendMessage();
+    await fixture.callbacks.handleLogout();
+    assert.deepEqual(stopped.sort(), ["chat-b", "fixture-session"]);
+    for (const handlers of streams.values()) {
+      handlers.onToken("private late token");
+      handlers.onMedia({ id: "private-image" });
+      if (platform === "frontend") await handlers.onDone();
+      else handlers.onComplete();
+      handlers.onError("private error");
+    }
+    assert.equal(fixture.state.messages.length, 0);
+    assert.equal(fixture.state.streamingMessage, null);
+    assert.equal(fixture.state.attachedMedia.length, 0);
+  });
+
+  test(`${platform}: deleting an inactive conversation leaves the active stream intact`, async () => {
+    const streams = new Map();
+    const stopped = [];
+    const fixture = appCallbacks(platform, {
+      deleteSession: async () => {},
+      getSessionHistory: async () => ({
+        session: { mode: "AUTO" },
+        messages: [],
+        documents: [],
+      }),
+      streamChat: (id, query, mode, handlers, signal) => {
+        streams.set(id, handlers);
+        if (platform === "frontend")
+          signal.addEventListener("abort", () => stopped.push(id));
+        return platform === "mobile"
+          ? () => stopped.push(id)
+          : Promise.resolve();
+      },
+    });
+    Object.assign(fixture.context, {
+      currentUser: profile,
+      currentUserRef: { current: profile },
+      confirm: async () => true,
+      removeSession() {},
+      sessions: [{ id: "fixture-session" }, { id: "chat-b" }],
+    });
+    fixture.context.isSendingRef.current = false;
+    await fixture.callbacks.handleSendMessage();
+    await fixture.callbacks.selectSession("chat-b");
+    fixture.context.query = "B";
+    fixture.context.inputQuery = "B";
+    await fixture.callbacks.handleSendMessage();
+    await fixture.callbacks.handleDeleteSession("fixture-session");
+    assert.deepEqual(stopped, ["fixture-session"]);
+    streams.get("fixture-session").onToken("must not resurrect");
+    streams.get("chat-b").onToken("B continues");
+    assert.equal(fixture.context.activeSessionId, "chat-b");
+    assert.equal(fixture.state.streamingMessage.content, "B continues");
+    assert.equal(fixture.context.authVersionRef.current, 0);
+  });
+
+  test(`${platform}: history loading blocks sending without discarding the typed draft`, async () => {
+    let release;
+    const fixture = appCallbacks(platform, {
+      getSessionHistory: () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+      streamChat: () => assert.fail("Must not send before history loads"),
+    });
+    fixture.context.currentUser = profile;
+    fixture.context.isSendingRef.current = false;
+    const pending = fixture.callbacks.selectSession("chat-b");
+    fixture.context.query = "Keep draft";
+    fixture.context.inputQuery = "Keep draft";
+    await fixture.callbacks.handleSendMessage();
+    assert.equal(fixture.state.messages.length, 0);
+    release({
+      session: { mode: "AUTO" },
+      messages: [{ id: "saved" }],
+      documents: [],
+    });
+    await pending;
+    assert.equal(fixture.state.inputQuery, "Keep draft");
+    assert.equal(fixture.state.messages[0].id, "saved");
+  });
+}
+
+for (const platform of ["frontend", "mobile"]) {
+  test(`${platform}: Stop during session creation restores the draft and prevents a delayed send`, async () => {
+    let finish;
+    let creations = 0;
+    const fixture = appCallbacks(platform, {
+      createSession: (...args) => {
+        creations++;
+        return new Promise((resolve) => {
+          finish = () => resolve({ id: args[4], title: "Fixture" });
+        });
+      },
+      streamChat: () =>
+        assert.fail("A stopped creation must not start streaming"),
+    });
+    fixture.context.currentUser = profile;
+    fixture.context.currentUserRef.current = profile;
+    fixture.context.isSendingRef.current = false;
+    fixture.context.setActiveSessionId(null);
+    fixture.context.query = "Recover this prompt";
+    fixture.context.inputQuery = "Recover this prompt";
+    fixture.state.attachedMedia = [{ id: "image-a", file_type: "image" }];
+    fixture.state.documents = [
+      { document_id: "doc-a", filename: "fixture.txt" },
+    ];
+    fixture.state.pendingDocumentIds = ["doc-a"];
+    const pending = fixture.callbacks.handleSendMessage();
+    await until(() => finish);
+    await fixture.callbacks.handleSendMessage();
+    assert.equal(creations, 1);
+    fixture.callbacks.handleStopGeneration();
+    finish();
+    await pending;
+    assert.equal(fixture.state.messages.length, 0);
+    assert.equal(fixture.state.isSending, false);
+    assert.equal(fixture.state.streamingMessage, null);
+    assert.equal(
+      platform === "frontend" ? fixture.state.inputQuery : fixture.state.query,
+      "Recover this prompt",
+    );
+    assert.equal(fixture.state.attachedMedia[0].id, "image-a");
+    assert.equal(fixture.state.pendingDocumentIds[0], "doc-a");
+  });
+
+  test(`${platform}: an obsolete failed history request cannot show an error over a newer success`, async () => {
+    const requests = [];
+    const fixture = appCallbacks(platform, {
+      getSessionHistory: () =>
+        new Promise((resolve, reject) => requests.push({ resolve, reject })),
+    });
+    fixture.context.currentUser = profile;
+    const first = fixture.callbacks.selectSession("fixture-session");
+    const latest = fixture.callbacks.selectSession("fixture-session");
+    requests[1].resolve({
+      session: { mode: "AUTO" },
+      messages: [{ id: "latest" }],
+      documents: [],
+    });
+    await latest;
+    requests[0].reject(new Error("obsolete fixture failure"));
+    await first;
+    assert.equal(fixture.state.messages[0].id, "latest");
+    assert.equal(fixture.state.historyError, null);
+    assert.equal(fixture.state.isLoadingHistory, false);
+  });
+}
+
+for (const platform of ["frontend", "mobile"]) {
+  test(`${platform}: React subscriptions follow the active chat and session assignment preserves input identity`, () => {
+    const fixture = appCallbacks(platform, {});
+    const store = fixture.workspace;
+    const a = store.active;
+    let notifications = 0;
+    const unsubscribe = store.subscribe(() => notifications++);
+    store.select("chat-b");
+    const before = store.getSnapshot();
+    store.patch(a, { inputQuery: "Retained in background" });
+    assert.equal(store.getSnapshot(), before);
+    assert.equal(notifications, 1);
+    store.select(a.sessionId);
+    assert.equal(store.active.state.inputQuery, "Retained in background");
+    const draft = store.select(null);
+    const viewId = draft.viewId;
+    const revision = store.getSnapshot();
+    store.adopt(draft, "assigned-session");
+    assert.equal(store.active.viewId, viewId);
+    assert.ok(store.getSnapshot() > revision);
+    unsubscribe();
+  });
+
+  test(`${platform}: concurrent uploads are all retained and busy state lasts until every upload finishes`, async () => {
+    const uploads = [];
+    const fixture = appCallbacks(platform, {
+      uploadMedia: () => new Promise((resolve) => uploads.push(resolve)),
+    });
+    const upload = (name) =>
+      platform === "frontend"
+        ? fixture.callbacks.handleFileUpload({ name, type: "image/png" })
+        : fixture.callbacks.handleAttachFile({
+            name,
+            mimeType: "image/png",
+            uri: "file:///fixture",
+          });
+    const first = upload("one.png");
+    const second = upload("two.png");
+    assert.equal(uploads.length, 2);
+    uploads[1]({ id: "two" });
+    await second;
+    assert.equal(fixture.state.isUploading, true);
+    uploads[0]({ id: "one" });
+    await first;
+    assert.equal(fixture.state.isUploading, false);
+    assert.ok(fixture.state.attachedMedia.some((item) => item.id === "one"));
+    assert.ok(fixture.state.attachedMedia.some((item) => item.id === "two"));
+  });
+}
+
+for (const platform of ["frontend", "mobile"]) {
+  test(`${platform}: clearing one chat neither blocks sending nor clears messages in another chat`, async () => {
+    let finishClear;
+    const fixture = appCallbacks(platform, {
+      clearSessionMessages: () =>
+        new Promise((resolve) => {
+          finishClear = resolve;
+        }),
+      getSessionHistory: async () => ({
+        session: { mode: "AUTO" },
+        messages: [],
+        documents: [],
+      }),
+      streamChat: () => (platform === "mobile" ? () => {} : Promise.resolve()),
+    });
+    fixture.context.currentUser = profile;
+    fixture.context.currentUserRef.current = profile;
+    fixture.context.isSendingRef.current = false;
+    fixture.context.confirm = async () => true;
+    let pending;
+    if (platform === "frontend")
+      pending = fixture.callbacks.handleClearMessages();
+    else {
+      let buttons;
+      fixture.context.Alert.alert = (title, message, actions) => {
+        buttons = actions;
+      };
+      fixture.callbacks.handleClearMessages();
+      pending = buttons.find((action) => action.text === "Clear").onPress();
+    }
+    await until(() => finishClear);
+    const original = fixture.workspace.active;
+    assert.equal(original.state.isClearingHistory, true);
+    await fixture.callbacks.selectSession("chat-b");
+    fixture.context.query = "B prompt";
+    fixture.context.inputQuery = "B prompt";
+    await fixture.callbacks.handleSendMessage();
+    assert.equal(fixture.state.isSending, true);
+    finishClear();
+    await pending;
+    assert.equal(fixture.state.messages.at(-1).content, "B prompt");
+    assert.equal(fixture.state.isSending, true);
+    assert.equal(original.state.messages.length, 0);
+    assert.equal(original.state.isClearingHistory, false);
   });
 }
 
@@ -599,6 +1172,9 @@ function appCallbacks(platform, apiService) {
           "handleFileUpload",
           "handleDetachDocument",
           "handleSendMessage",
+          "handleStopGeneration",
+          "handleNewSession",
+          "handleClearMessages",
           "handleDeleteSession",
           "selectSession",
         ]
@@ -611,6 +1187,7 @@ function appCallbacks(platform, apiService) {
           "handleAttachFile",
           "handleDetachDocument",
           "handleSendMessage",
+          "handleStopGeneration",
           "handleDeleteSession",
           "selectSession",
         ];
@@ -637,6 +1214,7 @@ function appCallbacks(platform, apiService) {
     messages: ["private"],
     streamingMessage: "private",
     clearedChats: {},
+    sessions: [],
   };
   let cancelled = 0;
   const context = {
@@ -679,6 +1257,8 @@ function appCallbacks(platform, apiService) {
     flatListRef: { current: null },
     generateGuestSessionId: () => "guest-fixture",
     updateUrlForSession() {},
+    prependSession() {},
+    updateSessionTitle() {},
     loadSessions: async () => {},
     loadUserSessions: async () => {},
     localStorage: { removeItem() {}, setItem() {} },
@@ -702,8 +1282,86 @@ function appCallbacks(platform, apiService) {
       state[key] = typeof value === "function" ? value(state[key]) : value;
     };
   }
+  const storeExports = {};
+  const storeCode = ts.transpileModule(
+    fs.readFileSync(
+      path.join(
+        __dirname,
+        "..",
+        platform,
+        "src/services/conversation_store.ts",
+      ),
+      "utf8",
+    ),
+    {
+      compilerOptions: {
+        module: ts.ModuleKind.CommonJS,
+        target: ts.ScriptTarget.ES2020,
+      },
+    },
+  ).outputText;
+  vm.runInNewContext(storeCode, { exports: storeExports });
+  const initial = () => ({
+    messages: [],
+    documents: [],
+    pendingDocumentIds: [],
+    attachedMedia: [],
+    replyingTo: null,
+    streamingMessage: null,
+    isSending: false,
+    isUploading: false,
+    isTemporaryChat: false,
+    currentMode: "AUTO",
+    inputQuery: "",
+    query: "",
+    uploadStatusText: "",
+    operationError: null,
+    historyError: null,
+    isLoadingHistory: false,
+    isClearingHistory: false,
+  });
+  const workspace = new storeExports.ConversationStore(initial);
+  workspace.select("fixture-session");
+  workspace.patch(workspace.active, {
+    ...state,
+    inputQuery: "review",
+    query: "review",
+  });
+  workspace.active.cancel = () => {
+    cancelled++;
+  };
+  context.conversationStore = workspace;
+  context.setTimeout = (callback) => callback();
+  context.setActiveSessionId = (sessionId) => {
+    workspace.select(sessionId);
+    context.activeSessionIdRef.current = sessionId;
+    context.isSendingRef.current = workspace.active.state.isSending;
+  };
+  for (const field of Object.keys(initial())) {
+    Object.defineProperty(context, field, {
+      configurable: true,
+      get: () => workspace.active.state[field],
+      set: (value) => workspace.patch(workspace.active, { [field]: value }),
+    });
+  }
+  Object.defineProperty(context, "activeSessionId", {
+    get: () => workspace.active.sessionId,
+  });
+  const setters = Object.keys(initial())
+    .map(
+      (field) =>
+        `const set${field[0].toUpperCase() + field.slice(1)} = conversationStore.setter(conversation, "${field}");`,
+    )
+    .join("\n");
+  const values = Object.keys(initial()).join(",");
   const code = ts.transpileModule(
-    `${callbacks}\nexports.callbacks = { ${names.join(",")} };`,
+    `exports.createCallbacks = () => {
+      const conversation = conversationStore.active;
+      const { ${values} } = conversation.state;
+      ${setters}
+      ${callbacks}
+      return { ${names.join(",")} };
+    };`,
     {
       compilerOptions: {
         module: ts.ModuleKind.CommonJS,
@@ -712,9 +1370,28 @@ function appCallbacks(platform, apiService) {
     },
   ).outputText;
   vm.runInNewContext(code, context);
+  const stateProxy = new Proxy(state, {
+    get: (target, field) =>
+      field in initial() ? workspace.active.state[field] : target[field],
+    set: (target, field, value) => {
+      if (field in initial())
+        workspace.patch(workspace.active, { [field]: value });
+      else target[field] = value;
+      return true;
+    },
+  });
   return {
-    callbacks: context.exports.callbacks,
-    state,
+    callbacks: new Proxy(
+      {},
+      {
+        get:
+          (_, name) =>
+          (...args) =>
+            context.exports.createCallbacks()[name](...args),
+      },
+    ),
+    state: stateProxy,
+    workspace,
     context,
     cancelled: () => cancelled,
   };
@@ -818,9 +1495,9 @@ for (const platform of ["frontend", "mobile"]) {
     const messagesBefore = fixture.state.messages;
     await fixture.callbacks.handleSendMessage();
     assert.equal(fixture.state.messages, messagesBefore);
-    assert.equal(fixture.state.inputQuery, undefined);
-    assert.equal(fixture.state.query, undefined);
-    assert.equal(fixture.state.isSending, undefined);
+    assert.equal(fixture.state.inputQuery, "review");
+    assert.equal(fixture.state.query, "review");
+    assert.equal(fixture.state.isSending, false);
   });
 
   test(`${platform}: document chips detach without deleting session knowledge`, () => {
@@ -1052,7 +1729,7 @@ for (const platform of ["frontend", "mobile"]) {
     });
     await fixture.callbacks.handleDeleteSession("fixture-session");
     assert.equal(fixture.cancelled(), 1);
-    assert.equal(fixture.context.authVersionRef.current, 1);
+    assert.equal(fixture.context.authVersionRef.current, 0);
     assert.equal(fixture.state.isSending, false);
     assert.equal(fixture.state.isUploading, false);
     assert.equal(fixture.state.messages.length, 0);

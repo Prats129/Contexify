@@ -32,6 +32,7 @@ interface ChatInputProps {
   onSubmit: (e?: React.FormEvent) => void;
   onStopGeneration?: () => void;
   isSending: boolean;
+  isBusy?: boolean;
   currentMode: ChatMode;
   onModeChange: (mode: ChatMode) => void;
   onFileUpload: (file: File) => void;
@@ -52,6 +53,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   onSubmit,
   onStopGeneration,
   isSending,
+  isBusy = false,
   currentMode,
   onModeChange,
   onFileUpload,
@@ -660,12 +662,13 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                 type="submit"
                 className="w-8 h-8 rounded-full bg-primary-theme hover:opacity-90 disabled:opacity-30 text-white flex items-center justify-center disabled:cursor-not-allowed shrink-0 disabled:shadow-none transition-all"
                 disabled={
+                  isBusy ||
                   isUploading ||
                   (!inputQuery.trim() &&
                     attachedMedia.length === 0 &&
                     documents.length === 0)
                 }
-                title="Send Question"
+                title={isBusy ? "Loading conversation…" : "Send Question"}
               >
                 <LuArrowUp size={18} />
               </button>

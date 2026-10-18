@@ -1,4 +1,11 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, {
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  useSyncExternalStore,
+} from "react";
+import { ConversationStore } from "./services/conversation_store";
 import { apiService } from "./services/api";
 import { Sidebar } from "./components/Sidebar/Sidebar";
 import { ChatWorkspace } from "./components/Chat/ChatWorkspace";
@@ -94,9 +101,93 @@ export const App: React.FC = () => {
     currentUserRef.current = currentUser;
   }, [currentUser]);
 
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [conversationStore] = useState(
+    () =>
+      new ConversationStore(() => ({
+        isTemporaryChat: false,
+        currentMode: "AUTO" as ChatMode,
+        documents: [] as DocumentMetadata[],
+        pendingDocumentIds: [] as string[],
+        attachedMedia: [] as MediaAttachment[],
+        messages: [] as Message[],
+        replyingTo: null as MessageReplyReference | null,
+        isSending: false,
+        isClearingHistory: false,
+        streamingMessage: null as StreamingMessageState | null,
+        isUploading: false,
+        isLoadingHistory: false,
+        historyError: null as string | null,
+        operationError: null as string | null,
+        inputQuery: "",
+        uploadStatusText: "",
+      })),
+  );
+  useSyncExternalStore(
+    conversationStore.subscribe,
+    conversationStore.getSnapshot,
+    conversationStore.getSnapshot,
+  );
+  const conversation = conversationStore.active;
+  const activeSessionId = conversation.sessionId;
   const activeSessionIdRef = useRef(activeSessionId);
   activeSessionIdRef.current = activeSessionId;
+  const setActiveSessionId = useCallback(
+    (sessionId: string | null) => {
+      conversationStore.select(sessionId);
+      activeSessionIdRef.current = sessionId;
+    },
+    [conversationStore],
+  );
+  const {
+    isTemporaryChat,
+    currentMode,
+    documents,
+    pendingDocumentIds,
+    attachedMedia,
+    messages,
+    replyingTo,
+    isSending,
+    isClearingHistory,
+    streamingMessage,
+    isUploading,
+    inputQuery,
+    uploadStatusText,
+    operationError,
+    isLoadingHistory,
+    historyError,
+  } = conversation.state;
+  const setIsTemporaryChat = conversationStore.setter(
+    conversation,
+    "isTemporaryChat",
+  );
+  const setCurrentMode = conversationStore.setter(conversation, "currentMode");
+  const setDocuments = conversationStore.setter(conversation, "documents");
+  const setPendingDocumentIds = conversationStore.setter(
+    conversation,
+    "pendingDocumentIds",
+  );
+  const setAttachedMedia = conversationStore.setter(
+    conversation,
+    "attachedMedia",
+  );
+  const setMessages = conversationStore.setter(conversation, "messages");
+  const setReplyingTo = conversationStore.setter(conversation, "replyingTo");
+  const setIsSending = conversationStore.setter(conversation, "isSending");
+  const setStreamingMessage = conversationStore.setter(
+    conversation,
+    "streamingMessage",
+  );
+  const setIsUploading = conversationStore.setter(conversation, "isUploading");
+  const setOperationError = conversationStore.setter(
+    conversation,
+    "operationError",
+  );
+  const setInputQuery = conversationStore.setter(conversation, "inputQuery");
+  const setUploadStatusText = conversationStore.setter(
+    conversation,
+    "uploadStatusText",
+  );
+
   const [clearedChats, setClearedChats] = useState<Record<string, string>>({});
 
   // --- Sessions Management (Pagination, Server-side Debounced Search, Optimistic Updates) ---
@@ -123,24 +214,8 @@ export const App: React.FC = () => {
     userId: currentUser?.id ?? null,
     activeSessionId,
   });
-  const [isTemporaryChat, setIsTemporaryChat] = useState<boolean>(false);
-  const [currentMode, setCurrentMode] = useState<ChatMode>("AUTO");
-  const [documents, setDocuments] = useState<DocumentMetadata[]>([]);
-  const [pendingDocumentIds, setPendingDocumentIds] = useState<string[]>([]);
-  const [attachedMedia, setAttachedMedia] = useState<MediaAttachment[]>([]);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [replyingTo, setReplyingTo] = useState<MessageReplyReference | null>(
-    null,
-  );
 
   // --- Interaction States ---
-  const [inputQuery, setInputQuery] = useState("");
-  const [isSending, setIsSending] = useState(false);
-  const [streamingMessage, setStreamingMessage] =
-    useState<StreamingMessageState | null>(null);
-  const abortControllerRef = useRef<AbortController | null>(null);
-  const [isUploading, setIsUploading] = useState(false);
-  const [uploadStatusText, setUploadStatusText] = useState("");
   const [isUserModalOpen, setIsUserModalOpen] = useState(false);
   const [userModalTab, setUserModalTab] = useState<"login" | "register">(
     "login",
@@ -167,34 +242,43 @@ export const App: React.FC = () => {
     setIsAttachmentsModalOpen(true);
   }, [currentUser]);
 
-  const handleAttachMediaFromModal = useCallback((media: MediaAttachment) => {
-    setAttachedMedia((prev) => {
-      if (
-        prev.some((m) => (m.id && m.id === media.id) || m.url === media.url)
-      ) {
-        return prev;
-      }
-      return [...prev, media];
-    });
-  }, []);
+  const handleAttachMediaFromModal = useCallback(
+    (media: MediaAttachment) => {
+      setAttachedMedia((prev) => {
+        if (
+          prev.some((m) => (m.id && m.id === media.id) || m.url === media.url)
+        ) {
+          return prev;
+        }
+        return [...prev, media];
+      });
+    },
+    [setAttachedMedia],
+  );
 
-  const handleAttachDocumentFromModal = useCallback((doc: DocumentMetadata) => {
-    setPendingDocumentIds((prev) =>
-      prev.includes(doc.document_id) ? prev : [...prev, doc.document_id],
-    );
-    setDocuments((prev) => {
-      if (prev.some((d) => d.document_id === doc.document_id)) {
-        return prev;
-      }
-      return [...prev, doc];
-    });
-  }, []);
+  const handleAttachDocumentFromModal = useCallback(
+    (doc: DocumentMetadata) => {
+      setPendingDocumentIds((prev) =>
+        prev.includes(doc.document_id) ? prev : [...prev, doc.document_id],
+      );
+      setDocuments((prev) => {
+        if (prev.some((d) => d.document_id === doc.document_id)) {
+          return prev;
+        }
+        return [...prev, doc];
+      });
+    },
+    [setPendingDocumentIds, setDocuments],
+  );
 
-  const handleAssetDeletedFromModal = useCallback((assetId: string) => {
-    setPendingDocumentIds((prev) => prev.filter((id) => id !== assetId));
-    setAttachedMedia((prev) => prev.filter((m) => m.id !== assetId));
-    setDocuments((prev) => prev.filter((d) => d.document_id !== assetId));
-  }, []);
+  const handleAssetDeletedFromModal = useCallback(
+    (assetId: string) => {
+      setPendingDocumentIds((prev) => prev.filter((id) => id !== assetId));
+      setAttachedMedia((prev) => prev.filter((m) => m.id !== assetId));
+      setDocuments((prev) => prev.filter((d) => d.document_id !== assetId));
+    },
+    [setPendingDocumentIds, setAttachedMedia, setDocuments],
+  );
 
   const handleToggleSidebar = () => {
     setIsSidebarOpen((prev) => {
@@ -206,63 +290,100 @@ export const App: React.FC = () => {
 
   const handleToggleTemporaryChat = () => {
     if (!currentUser) return;
-    setIsTemporaryChat((prev) => {
-      const next = !prev;
-      setActiveSessionId(null);
-      setMessages([]);
-      setDocuments([]);
-      setPendingDocumentIds([]);
-      setStreamingMessage(null);
-      setReplyingTo(null);
-      setInputQuery("");
-      updateUrlForSession(null);
-      localStorage.removeItem("contexify_active_session");
-      return next;
+    const next = !isTemporaryChat;
+    setActiveSessionId(null);
+    conversationStore.patch(conversationStore.active, {
+      isTemporaryChat: next,
     });
+    setIsAttachmentsModalOpen(false);
+    updateUrlForSession(null);
+    localStorage.removeItem("contexify_active_session");
   };
 
   // --- 1. Select / Switch Active Session ---
   const selectSession = useCallback(
-    async (
-      sessionId: string,
-      pushUrl: boolean = true,
-      isUnauthenticated: boolean = false,
-    ) => {
+    async (sessionId: string, pushUrl = true, isUnauthenticated = false) => {
       if (!sessionId) return;
       const authVersion = authVersionRef.current;
-      if (typeof window !== "undefined" && window.innerWidth < 768) {
-        setIsSidebarOpen(false);
-      }
-      setIsTemporaryChat(false);
       setActiveSessionId(sessionId);
-      setStreamingMessage(null);
-      setReplyingTo(null);
-
-      if (currentUser?.id && !isUnauthenticated) {
-        localStorage.setItem("contexify_active_session", sessionId);
-        if (pushUrl) {
-          updateUrlForSession(sessionId, false);
+      setIsAttachmentsModalOpen(false);
+      const entry = conversationStore.active;
+      const request = ++entry.historyRequest;
+      const before = entry.state;
+      if (typeof window !== "undefined" && window.innerWidth < 768)
+        setIsSidebarOpen(false);
+      if (pushUrl) updateUrlForSession(sessionId, isUnauthenticated);
+      if (!currentUser?.id || isUnauthenticated) return;
+      localStorage.setItem("contexify_active_session", sessionId);
+      if (entry.state.isSending || entry.preserveHistory) return;
+      conversationStore.patch(entry, {
+        isLoadingHistory: true,
+        historyError: null,
+      });
+      try {
+        const history = await apiService.getSessionHistory(sessionId);
+        if (
+          authVersion !== authVersionRef.current ||
+          !conversationStore.live(entry) ||
+          request !== entry.historyRequest
+        )
+          return;
+        conversationStore.patch(entry, {
+          isTemporaryChat: Boolean(history.session?.is_temporary),
+          ...(entry.state.currentMode === before.currentMode &&
+          history.session?.mode
+            ? { currentMode: history.session.mode }
+            : {}),
+          ...(entry.state.documents === before.documents
+            ? {
+                documents: [
+                  ...(history.documents || []),
+                  ...entry.state.documents.filter(
+                    (doc) =>
+                      entry.state.pendingDocumentIds.includes(
+                        doc.document_id,
+                      ) &&
+                      !(history.documents || []).some(
+                        (saved) => saved.document_id === doc.document_id,
+                      ),
+                  ),
+                ],
+              }
+            : {}),
+          ...(entry.state.messages === before.messages &&
+          !entry.state.isSending &&
+          !entry.preserveHistory
+            ? { messages: history.messages || [] }
+            : {}),
+        });
+      } catch (error) {
+        if (
+          authVersion === authVersionRef.current &&
+          conversationStore.live(entry) &&
+          request === entry.historyRequest
+        )
+          conversationStore.patch(entry, {
+            historyError:
+              "Could not refresh this chat. Your current messages have been kept.",
+          });
+        if (
+          authVersion === authVersionRef.current &&
+          conversationStore.active === entry &&
+          request === entry.historyRequest
+        ) {
+          await showAlert({
+            title: "History unavailable",
+            message:
+              "Could not refresh this chat. Your current messages have been kept. Please try again.",
+          });
         }
-        try {
-          const history = await apiService.getSessionHistory(sessionId);
-          if (authVersion !== authVersionRef.current) return;
-          setIsTemporaryChat(Boolean(history.session?.is_temporary));
-          if (history.session?.mode) {
-            setCurrentMode(history.session.mode);
-          }
-          setDocuments(history.documents || []);
-          setPendingDocumentIds([]);
-          setMessages(history.messages || []);
-        } catch (e) {
-          console.error("Failed to load session history:", e);
-        }
-      } else {
-        if (pushUrl) {
-          updateUrlForSession(sessionId, true);
-        }
+        console.error("Failed to load session history:", error);
+      } finally {
+        if (conversationStore.live(entry) && request === entry.historyRequest)
+          conversationStore.patch(entry, { isLoadingHistory: false });
       }
     },
-    [currentUser],
+    [currentUser, conversationStore, setActiveSessionId, showAlert],
   );
 
   // --- 2. User Initialization (Guest vs Logged In) ---
@@ -300,9 +421,6 @@ export const App: React.FC = () => {
         setIsTemporaryChat(false);
         localStorage.removeItem("contexify_user");
         localStorage.removeItem("contexify_active_session");
-        setMessages([]);
-        setDocuments([]);
-        setPendingDocumentIds([]);
         setMode("light");
 
         const { sessionId: urlSessionId, isUnauthenticated } =
@@ -335,6 +453,8 @@ export const App: React.FC = () => {
   const loadSessions = useCallback(
     async (userId: string) => {
       const authVersion = authVersionRef.current;
+      const origin = conversationStore.active;
+      const originId = origin.sessionId;
       try {
         const paginated = await apiService.listSessions(userId, {
           limit: 12,
@@ -343,6 +463,11 @@ export const App: React.FC = () => {
         const sessionList = paginated.sessions || [];
         if (authVersion !== authVersionRef.current) return;
         setSessionsDirect(sessionList);
+        if (
+          conversationStore.active !== origin ||
+          origin.sessionId !== originId
+        )
+          return;
 
         const { sessionId: urlSessionId, isUnauthenticated } =
           getUrlRouteInfo();
@@ -359,7 +484,12 @@ export const App: React.FC = () => {
           // If not directly in list, attempt to fetch history directly (e.g. valid session)
           try {
             const hist = await apiService.getSessionHistory(urlSessionId);
-            if (authVersion !== authVersionRef.current) return;
+            if (
+              authVersion !== authVersionRef.current ||
+              conversationStore.active !== origin ||
+              origin.sessionId !== originId
+            )
+              return;
             if (hist.session) {
               ensureSessionInList(hist.session);
               await selectSession(hist.session.id, false, false);
@@ -372,9 +502,6 @@ export const App: React.FC = () => {
 
         // If on root '/', start on clean new chat (no ID in URL)
         setActiveSessionId(null);
-        setMessages([]);
-        setDocuments([]);
-        setPendingDocumentIds([]);
         updateUrlForSession(null);
       } catch (e) {
         console.error("Failed to load user sessions:", e);
@@ -403,10 +530,6 @@ export const App: React.FC = () => {
       } else {
         // Navigated back to root '/'
         setActiveSessionId(null);
-        setMessages([]);
-        setDocuments([]);
-        setPendingDocumentIds([]);
-        setStreamingMessage(null);
       }
     };
 
@@ -416,17 +539,10 @@ export const App: React.FC = () => {
 
   // --- 5. Start New Chat / Conversation ---
   const handleNewSession = () => {
-    if (typeof window !== "undefined" && window.innerWidth < 768) {
+    if (typeof window !== "undefined" && window.innerWidth < 768)
       setIsSidebarOpen(false);
-    }
-    setIsTemporaryChat(false);
     setActiveSessionId(null);
-    setMessages([]);
-    setDocuments([]);
-    setPendingDocumentIds([]);
-    setStreamingMessage(null);
-    setReplyingTo(null);
-    setInputQuery("");
+    setIsAttachmentsModalOpen(false);
     updateUrlForSession(null);
     localStorage.removeItem("contexify_active_session");
   };
@@ -439,7 +555,7 @@ export const App: React.FC = () => {
         content: msg.content,
       });
     },
-    [],
+    [setReplyingTo],
   );
 
   // --- 5. Delete Session ---
@@ -461,20 +577,10 @@ export const App: React.FC = () => {
       await apiService.deleteSession(sessionId);
       removeSession(sessionId);
 
-      if (activeSessionId === sessionId) {
-        authVersionRef.current++;
-        abortControllerRef.current?.abort();
-        abortControllerRef.current = null;
-        setIsSending(false);
-        setIsUploading(false);
-        setUploadStatusText("");
-        setAttachedMedia([]);
-        setReplyingTo(null);
-        setActiveSessionId(null);
-        setMessages([]);
-        setDocuments([]);
-        setPendingDocumentIds([]);
-        setStreamingMessage(null);
+      const wasActive = activeSessionIdRef.current === sessionId;
+      conversationStore.drop(sessionId);
+      if (wasActive) {
+        activeSessionIdRef.current = null;
         updateUrlForSession(null);
         localStorage.removeItem("contexify_active_session");
       }
@@ -527,11 +633,18 @@ export const App: React.FC = () => {
   // --- 7. Document & Media Upload / Delete ---
   const handleFileUpload = async (file: File) => {
     const authVersion = authVersionRef.current;
+    if (conversationStore.active !== conversation) return;
+    conversation.uploads++;
+    setIsUploading(true);
+    setOperationError(null);
     const userToUse = currentUserRef.current || currentUser;
-    let targetSessionId = activeSessionId;
+    let targetSessionId = conversation.sessionId;
     if (!targetSessionId) {
       if (userToUse?.id) {
         const clientSessionId = generateGuestSessionId();
+        conversationStore.adopt(conversation, clientSessionId);
+        if (conversationStore.active === conversation)
+          activeSessionIdRef.current = clientSessionId;
         try {
           const newSess = await apiService.createSession(
             userToUse.id,
@@ -540,28 +653,46 @@ export const App: React.FC = () => {
             isTemporaryChat,
             clientSessionId,
           );
-          if (authVersion !== authVersionRef.current) return;
+          if (
+            authVersion !== authVersionRef.current ||
+            !conversationStore.live(conversation)
+          )
+            return;
           targetSessionId = newSess.id;
-          setActiveSessionId(newSess.id);
+          conversationStore.adopt(conversation, newSess.id);
+          if (conversationStore.active === conversation)
+            activeSessionIdRef.current = newSess.id;
           if (!isTemporaryChat) {
             prependSession(newSess);
-            localStorage.setItem("contexify_active_session", newSess.id);
+            if (conversationStore.active === conversation)
+              localStorage.setItem("contexify_active_session", newSess.id);
           }
-          updateUrlForSession(newSess.id, false);
+          if (conversationStore.active === conversation)
+            updateUrlForSession(newSess.id, false);
         } catch (err) {
-          if (authVersion !== authVersionRef.current) return;
+          if (
+            authVersion !== authVersionRef.current ||
+            !conversationStore.live(conversation)
+          )
+            return;
           console.warn(
             "Failed to create session explicitly on file upload, using clientSessionId for self-healing:",
             err,
           );
           targetSessionId = clientSessionId;
-          setActiveSessionId(targetSessionId);
-          updateUrlForSession(targetSessionId, false);
+          conversationStore.adopt(conversation, targetSessionId);
+          if (conversationStore.active === conversation)
+            activeSessionIdRef.current = targetSessionId;
+          if (conversationStore.active === conversation)
+            updateUrlForSession(targetSessionId, false);
         }
       } else {
         targetSessionId = generateGuestSessionId();
-        setActiveSessionId(targetSessionId);
-        updateUrlForSession(targetSessionId, true);
+        conversationStore.adopt(conversation, targetSessionId);
+        if (conversationStore.active === conversation)
+          activeSessionIdRef.current = targetSessionId;
+        if (conversationStore.active === conversation)
+          updateUrlForSession(targetSessionId, true);
       }
     }
 
@@ -581,16 +712,27 @@ export const App: React.FC = () => {
           currentUser?.id,
           isTemporaryChat,
         );
-        if (authVersion !== authVersionRef.current) return;
+        if (
+          authVersion !== authVersionRef.current ||
+          !conversationStore.live(conversation)
+        )
+          return;
         setAttachedMedia((prev) => [...prev, mediaRes]);
       } catch (e: unknown) {
-        if (authVersion !== authVersionRef.current) return;
+        if (
+          authVersion !== authVersionRef.current ||
+          !conversationStore.live(conversation)
+        )
+          return;
         const err = e instanceof Error ? e.message : String(e);
-        await showAlert({ title: "Image Upload Failed", message: err });
+        setOperationError(`Image upload failed: ${err}`);
+        if (conversationStore.active === conversation)
+          await showAlert({ title: "Image Upload Failed", message: err });
       } finally {
         if (authVersion === authVersionRef.current) {
-          setIsUploading(false);
-          setUploadStatusText("");
+          conversation.uploads = Math.max(0, conversation.uploads - 1);
+          setIsUploading(conversation.uploads > 0);
+          if (conversation.uploads === 0) setUploadStatusText("");
         }
       }
       return;
@@ -606,7 +748,11 @@ export const App: React.FC = () => {
         currentUser?.id,
         isTemporaryChat,
       );
-      if (authVersion !== authVersionRef.current) return;
+      if (
+        authVersion !== authVersionRef.current ||
+        !conversationStore.live(conversation)
+      )
+        return;
       setPendingDocumentIds((prev) => [...prev, res.document.document_id]);
       // Update local document state
       setDocuments((prev) => {
@@ -616,12 +762,19 @@ export const App: React.FC = () => {
         return exists ? prev : [res.document, ...prev];
       });
     } catch (e: unknown) {
-      if (authVersion !== authVersionRef.current) return;
+      if (
+        authVersion !== authVersionRef.current ||
+        !conversationStore.live(conversation)
+      )
+        return;
       const err = e instanceof Error ? e.message : String(e);
-      await showAlert({ title: "Upload Failed", message: err });
+      setOperationError(`Upload failed: ${err}`);
+      if (conversationStore.active === conversation)
+        await showAlert({ title: "Upload Failed", message: err });
     } finally {
       if (authVersion === authVersionRef.current) {
-        setIsUploading(false);
+        conversation.uploads = Math.max(0, conversation.uploads - 1);
+        setIsUploading(conversation.uploads > 0);
         setUploadStatusText("");
       }
     }
@@ -646,6 +799,9 @@ export const App: React.FC = () => {
   // --- Clear Messages in Active Conversation (Authenticated Users Only) ---
   const handleClearMessages = async () => {
     if (
+      conversation.state.isClearingHistory ||
+      conversation.state.isSending ||
+      conversation.state.isLoadingHistory ||
       !currentUser ||
       !activeSessionId ||
       (messages.length === 0 && !streamingMessage)
@@ -664,12 +820,15 @@ export const App: React.FC = () => {
     });
     if (
       !confirmed ||
+      conversation.state.isSending ||
+      conversation.state.isClearingHistory ||
       authVersion !== authVersionRef.current ||
       sessionId !== activeSessionIdRef.current
     ) {
       return;
     }
 
+    conversationStore.patch(conversation, { isClearingHistory: true });
     try {
       await apiService.clearSessionMessages(sessionId);
       if (authVersion !== authVersionRef.current) return;
@@ -677,7 +836,13 @@ export const App: React.FC = () => {
         ...previous,
         [sessionId]: new Date().toISOString(),
       }));
-      if (sessionId !== activeSessionIdRef.current) return;
+      conversation.historyRequest++;
+      conversationStore.patch(conversation, {
+        isLoadingHistory: false,
+        operationError: null,
+        historyError: null,
+      });
+      conversation.preserveHistory = false;
       setMessages([]);
       setStreamingMessage(null);
       setReplyingTo(null);
@@ -693,47 +858,64 @@ export const App: React.FC = () => {
         title: "Clear Failed",
         message: `Failed to clear messages: ${err}`,
       });
+    } finally {
+      conversationStore.patch(conversation, { isClearingHistory: false });
     }
   };
 
   // Stop generating response (like ChatGPT)
-  const handleStopGeneration = useCallback(() => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
+  const handleStopGeneration = () => {
+    conversation.cancel?.();
+    conversation.cancel = null;
+    if (conversation.preparing) {
+      conversation.preparing = false;
+      const unsent =
+        conversation.state.messages[conversation.state.messages.length - 1];
+      if (unsent?.role === "user") {
+        setInputQuery(unsent.content);
+        setReplyingTo(unsent.reply_to || null);
+        setAttachedMedia(
+          (unsent.attachments || []).filter(
+            (item) => item.file_type !== "document",
+          ),
+        );
+        setPendingDocumentIds(
+          (unsent.attachments || [])
+            .filter((item) => item.file_type === "document")
+            .map((item) => item.id || "")
+            .filter(Boolean),
+        );
+        setMessages((previous) => previous.filter((item) => item !== unsent));
+      }
     }
-
-    // Save whatever partial response was generated to message history
-    setStreamingMessage((prev) => {
-      if (prev && prev.content && prev.content.trim()) {
-        const stoppedMsg: Message = {
-          id: `asst-${Date.now()}`,
-          session_id: activeSessionId || "default",
+    const partial = conversation.state.streamingMessage;
+    if (partial && (partial.content || partial.attachments?.length)) {
+      conversation.preserveHistory = true;
+      setMessages((previous) => [
+        ...previous,
+        {
+          id: `stopped-${Date.now()}`,
+          session_id: conversation.sessionId || "",
           role: "assistant",
-          content: prev.content,
-          citations: prev.citations,
+          content: partial.content,
+          citations: partial.citations,
+          attachments: partial.attachments,
           created_at: new Date().toISOString(),
-        };
-        setMessages((prevMsgs) => [...prevMsgs, stoppedMsg]);
-      }
-      return null;
-    });
-
+        },
+      ]);
+    }
+    setStreamingMessage(null);
     setIsSending(false);
-  }, [activeSessionId]);
+  };
 
-  // Clean up stream on unmount
-  useEffect(() => {
-    return () => {
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
-      }
-    };
-  }, []);
+  useEffect(() => () => conversationStore.cancelAll(), [conversationStore]);
 
   // --- 8. Send Chat Message & SSE Stream ---
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
+    const authVersion = authVersionRef.current;
+    if (conversationStore.active !== conversation) return;
+
     if (!isAuthReady) return;
     const query =
       inputQuery.trim() ||
@@ -742,53 +924,16 @@ export const App: React.FC = () => {
       (!query &&
         attachedMedia.length === 0 &&
         pendingDocumentIds.length === 0) ||
-      isSending ||
-      isUploading
+      conversation.state.isSending ||
+      conversation.state.isClearingHistory ||
+      conversation.state.isLoadingHistory ||
+      conversation.state.isUploading
     )
       return;
 
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
+    setIsSending(true);
     const abortController = new AbortController();
-    abortControllerRef.current = abortController;
-
-    const userToUse = currentUserRef.current || currentUser;
-
-    let targetSessionId = activeSessionId;
-    if (!targetSessionId) {
-      if (userToUse?.id) {
-        const clientSessionId = generateGuestSessionId();
-        try {
-          const newSess = await apiService.createSession(
-            userToUse.id,
-            "New Conversation",
-            currentMode,
-            isTemporaryChat,
-            clientSessionId,
-          );
-          targetSessionId = newSess.id;
-          setActiveSessionId(newSess.id);
-          if (!isTemporaryChat) {
-            prependSession(newSess);
-            localStorage.setItem("contexify_active_session", newSess.id);
-          }
-          updateUrlForSession(newSess.id, false);
-        } catch (err) {
-          console.warn(
-            "Failed to create session explicitly, relying on backend self-healing with user_id:",
-            err,
-          );
-          targetSessionId = clientSessionId;
-          setActiveSessionId(targetSessionId);
-          updateUrlForSession(targetSessionId, false);
-        }
-      } else {
-        targetSessionId = generateGuestSessionId();
-        setActiveSessionId(targetSessionId);
-        updateUrlForSession(targetSessionId, true);
-      }
-    }
+    conversation.cancel = () => abortController.abort();
 
     // Capture media to send & reset input
     const mediaToSend: MediaAttachment[] = [
@@ -810,7 +955,19 @@ export const App: React.FC = () => {
     setInputQuery("");
     setAttachedMedia([]);
     setReplyingTo(null);
-    setIsSending(true);
+
+    const userToUse = currentUserRef.current || currentUser;
+
+    const needsCreation = !conversation.sessionId;
+    const targetSessionId = conversation.sessionId || generateGuestSessionId();
+    conversationStore.adopt(conversation, targetSessionId);
+    conversation.preparing = needsCreation;
+    if (conversationStore.active === conversation) {
+      activeSessionIdRef.current = targetSessionId;
+      updateUrlForSession(targetSessionId, !userToUse);
+      if (userToUse && !isTemporaryChat)
+        localStorage.setItem("contexify_active_session", targetSessionId);
+    }
 
     // Append optimistic user message with attachments
     const userMsg: Message = {
@@ -826,6 +983,7 @@ export const App: React.FC = () => {
     setMessages((prev) => [...prev, userMsg]);
 
     // Setup streaming placeholder
+    let finalized = false;
     let accumulatedText = "";
     let receivedCitations: Citation[] | null = null;
     let receivedMedia: MediaAttachment[] = [];
@@ -839,13 +997,56 @@ export const App: React.FC = () => {
       isError: false,
     });
 
+    if (needsCreation && userToUse?.id) {
+      try {
+        const created = await apiService.createSession(
+          userToUse.id,
+          "New Conversation",
+          currentMode,
+          isTemporaryChat,
+          targetSessionId,
+        );
+        if (
+          authVersion !== authVersionRef.current ||
+          !conversationStore.live(conversation) ||
+          abortController.signal.aborted
+        )
+          return;
+        if (!isTemporaryChat) prependSession(created);
+      } catch (error) {
+        if (
+          authVersion !== authVersionRef.current ||
+          !conversationStore.live(conversation) ||
+          abortController.signal.aborted
+        )
+          return;
+        console.warn(
+          "Explicit session creation failed; the chat request will ensure the same session.",
+          error,
+        );
+      }
+    }
+    conversation.preparing = false;
+    if (
+      authVersion !== authVersionRef.current ||
+      !conversationStore.live(conversation) ||
+      abortController.signal.aborted
+    )
+      return;
+
     await apiService.streamChat(
       targetSessionId,
       query,
       currentMode,
       {
         onCitations: (citations) => {
-          if (abortController.signal.aborted) return;
+          if (
+            finalized ||
+            abortController.signal.aborted ||
+            authVersion !== authVersionRef.current ||
+            !conversationStore.live(conversation)
+          )
+            return;
           receivedCitations = citations;
           setStreamingMessage((prev) =>
             prev
@@ -857,7 +1058,13 @@ export const App: React.FC = () => {
           );
         },
         onMedia: (media) => {
-          if (abortController.signal.aborted) return;
+          if (
+            finalized ||
+            abortController.signal.aborted ||
+            authVersion !== authVersionRef.current ||
+            !conversationStore.live(conversation)
+          )
+            return;
           receivedMedia = [...receivedMedia, media];
           setStreamingMessage((prev) =>
             prev
@@ -869,7 +1076,13 @@ export const App: React.FC = () => {
           );
         },
         onToken: (token) => {
-          if (abortController.signal.aborted) return;
+          if (
+            finalized ||
+            abortController.signal.aborted ||
+            authVersion !== authVersionRef.current ||
+            !conversationStore.live(conversation)
+          )
+            return;
           accumulatedText += token;
           setStreamingMessage((prev) =>
             prev
@@ -884,23 +1097,46 @@ export const App: React.FC = () => {
           );
         },
         onError: (errMsg) => {
-          if (abortController.signal.aborted) return;
-          abortControllerRef.current = null;
-          setStreamingMessage({
-            role: "assistant",
-            content: `Error: ${errMsg}`,
-            citations: null,
-            attachments: null,
-            isStreaming: false,
-            isError: true,
-          });
+          if (
+            finalized ||
+            abortController.signal.aborted ||
+            authVersion !== authVersionRef.current ||
+            !conversationStore.live(conversation)
+          )
+            return;
+          finalized = true;
+          conversation.cancel = null;
+          conversation.preserveHistory = true;
+          setMessages((previous) => [
+            ...previous,
+            {
+              id: `interrupted-${Date.now()}`,
+              session_id: targetSessionId,
+              role: "assistant",
+              content: [accumulatedText, `Response interrupted: ${errMsg}`]
+                .filter(Boolean)
+                .join("\n\n"),
+              citations: receivedCitations,
+              attachments: receivedMedia.length ? receivedMedia : null,
+              created_at: new Date().toISOString(),
+            },
+          ]);
+          setStreamingMessage(null);
           setIsSending(false);
         },
         onDone: async () => {
-          if (abortController.signal.aborted) return;
-          abortControllerRef.current = null;
+          if (
+            finalized ||
+            abortController.signal.aborted ||
+            authVersion !== authVersionRef.current ||
+            !conversationStore.live(conversation)
+          )
+            return;
+          finalized = true;
+          conversation.cancel = null;
           setIsSending(false);
 
+          conversation.preserveHistory ||= !userToUse;
           const finishedAssistantMsg: Message = {
             id: `asst-${Date.now()}`,
             session_id: targetSessionId,
@@ -919,7 +1155,11 @@ export const App: React.FC = () => {
           if (currentUser?.id && targetSessionId) {
             try {
               const hist = await apiService.getSessionHistory(targetSessionId);
-              if (hist?.session?.title) {
+              if (
+                authVersion === authVersionRef.current &&
+                conversationStore.live(conversation) &&
+                hist?.session?.title
+              ) {
                 updateSessionTitle(targetSessionId, hist.session.title);
               }
             } catch (err) {
@@ -945,8 +1185,7 @@ export const App: React.FC = () => {
   const resetConversationForAuthChange = () => {
     authVersionRef.current++;
     setClearedChats({});
-    abortControllerRef.current?.abort();
-    abortControllerRef.current = null;
+    conversationStore.reset();
     setIsSending(false);
     setIsUploading(false);
     setUploadStatusText("");
@@ -1134,6 +1373,9 @@ export const App: React.FC = () => {
       />
 
       <ChatWorkspace
+        conversationError={operationError || historyError}
+        isBusy={isLoadingHistory || isClearingHistory}
+        key={conversation.viewId}
         currentUser={currentUser}
         onOpenUserModal={handleOpenUserModal}
         currentMode={currentMode}
@@ -1156,7 +1398,11 @@ export const App: React.FC = () => {
         attachedMedia={attachedMedia}
         onDeleteMedia={handleDeleteMedia}
         onUseAsReference={handleUseAsReference}
-        onClearChat={isSending ? undefined : handleClearMessages}
+        onClearChat={
+          isSending || isClearingHistory || isLoadingHistory
+            ? undefined
+            : handleClearMessages
+        }
         chatClearedAt={
           activeSessionId ? clearedChats[activeSessionId] : undefined
         }

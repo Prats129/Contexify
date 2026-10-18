@@ -3,6 +3,7 @@ import React, {
   useEffect,
   useRef,
   useCallback,
+  useSyncExternalStore,
   useMemo,
 } from "react";
 import {
@@ -35,6 +36,7 @@ import {
   type AccentColor,
   type ThemeMode,
 } from "./src/theme/colors";
+import { ConversationStore } from "./src/services/conversation_store";
 import { apiService } from "./src/services/api";
 import type {
   User,
@@ -100,17 +102,89 @@ export default function App() {
   useEffect(() => {
     currentUserRef.current = currentUser;
   }, [currentUser]);
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [conversationStore] = useState(
+    () =>
+      new ConversationStore(() => ({
+        isTemporaryChat: false,
+        currentMode: "AUTO" as ChatMode,
+        documents: [] as DocumentMetadata[],
+        pendingDocumentIds: [] as string[],
+        attachedMedia: [] as MediaAttachment[],
+        messages: [] as Message[],
+        replyingTo: null as MessageReplyReference | null,
+        isSending: false,
+        isClearingHistory: false,
+        streamingMessage: null as StreamingMessageState | null,
+        isUploading: false,
+        isLoadingHistory: false,
+        historyError: null as string | null,
+        operationError: null as string | null,
+        query: "",
+      })),
+  );
+  useSyncExternalStore(
+    conversationStore.subscribe,
+    conversationStore.getSnapshot,
+    conversationStore.getSnapshot,
+  );
+  const conversation = conversationStore.active;
+  const activeSessionId = conversation.sessionId;
   const activeSessionIdRef = useRef(activeSessionId);
   activeSessionIdRef.current = activeSessionId;
+  const setActiveSessionId = useCallback(
+    (sessionId: string | null) => {
+      conversationStore.select(sessionId);
+      activeSessionIdRef.current = sessionId;
+    },
+    [conversationStore],
+  );
+  const {
+    isTemporaryChat,
+    currentMode,
+    documents,
+    pendingDocumentIds,
+    attachedMedia,
+    messages,
+    replyingTo,
+    isSending,
+    streamingMessage,
+    isUploading,
+    query,
+    operationError,
+    isLoadingHistory,
+    historyError,
+  } = conversation.state;
+  const setIsTemporaryChat = conversationStore.setter(
+    conversation,
+    "isTemporaryChat",
+  );
+  const setCurrentMode = conversationStore.setter(conversation, "currentMode");
+  const setDocuments = conversationStore.setter(conversation, "documents");
+  const setPendingDocumentIds = conversationStore.setter(
+    conversation,
+    "pendingDocumentIds",
+  );
+  const setAttachedMedia = conversationStore.setter(
+    conversation,
+    "attachedMedia",
+  );
+  const setMessages = conversationStore.setter(conversation, "messages");
+  const setReplyingTo = conversationStore.setter(conversation, "replyingTo");
+  const setIsSending = conversationStore.setter(conversation, "isSending");
+  const setStreamingMessage = conversationStore.setter(
+    conversation,
+    "streamingMessage",
+  );
+  const setIsUploading = conversationStore.setter(conversation, "isUploading");
+  const setOperationError = conversationStore.setter(
+    conversation,
+    "operationError",
+  );
+  const setQuery = conversationStore.setter(conversation, "query");
+
   const [clearedChats, setClearedChats] = useState<Record<string, string>>({});
-  const [clearingChatId, setClearingChatId] = useState<string | null>(null);
-  const isClearingChat =
-    clearingChatId !== null && clearingChatId === activeSessionId;
-  const clearingChatRef = useRef(false);
-  const [isTemporaryChat, setIsTemporaryChat] = useState(false);
+  const isClearingChat = conversation.state.isClearingHistory;
   const isTempActive = Boolean(currentUser && isTemporaryChat);
-  const [currentMode, setCurrentMode] = useState<ChatMode>("AUTO");
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [sessionSortOrder, setSessionSortOrder] =
     useState<SessionSortOrder>("last_created");
@@ -120,22 +194,12 @@ export default function App() {
     useState<boolean>(false);
   const [isRefreshingSessions, setIsRefreshingSessions] =
     useState<boolean>(false);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [documents, setDocuments] = useState<DocumentMetadata[]>([]);
-  const [pendingDocumentIds, setPendingDocumentIds] = useState<string[]>([]);
-  const [attachedMedia, setAttachedMedia] = useState<MediaAttachment[]>([]);
-  const [replyingTo, setReplyingTo] = useState<MessageReplyReference | null>(
-    null,
-  );
 
   // Interaction State
-  const [query, setQuery] = useState("");
-  const [isSending, setIsSending] = useState(false);
   const isSendingRef = useRef(false);
-  const [streamingMessage, setStreamingMessage] =
-    useState<StreamingMessageState | null>(null);
-  const [isUploading, setIsUploading] = useState(false);
-  const streamAbortRef = useRef<(() => void) | null>(null);
+  isSendingRef.current = isSending;
+
+  useEffect(() => () => conversationStore.cancelAll(), [conversationStore]);
 
   // Modals & Navigation
   const [drawerVisible, setDrawerVisible] = useState(false);
@@ -377,7 +441,7 @@ export default function App() {
           "contexify_mobile_user",
           JSON.stringify(user),
         );
-        await loadUserSessions(user.id, user, initialSort);
+        await loadUserSessions(user.id, initialSort);
       } else {
         currentUserRef.current = null;
         setCurrentUser(null);
@@ -407,7 +471,6 @@ export default function App() {
 
   const loadUserSessions = async (
     userId: string,
-    userOverride?: User | null,
     sortOverride?: SessionSortOrder,
   ) => {
     const activeSort = sortOverride || sessionSortOrder;
@@ -423,15 +486,12 @@ export default function App() {
       setSessions(sortMobileSessions(safeList, activeSort));
       setTotalSessions(res.total ?? safeList.length);
       setHasMoreSessions(Boolean(res.has_more));
-      // Always start in a fresh new chat on app launch
-      handleNewChat(userOverride);
     } catch (err) {
       if (authVersion !== authVersionRef.current) return;
       console.warn("Failed to load sessions:", err);
       setSessions([]);
       setTotalSessions(0);
       setHasMoreSessions(false);
-      handleNewChat(userOverride);
     }
   };
 
@@ -546,67 +606,107 @@ export default function App() {
   // --- 2. Switch Conversation ---
   const selectSession = async (sessionId: string, sessionMode?: ChatMode) => {
     const authVersion = authVersionRef.current;
-    setIsTemporaryChat(false);
     setActiveSessionId(sessionId);
-    setStreamingMessage(null);
-    setAttachedMedia([]);
-    setReplyingTo(null);
+    setCitationsVisible(false);
+    setActiveCitations([]);
+    setAttachmentsVisible(false);
     setHighlightedMessageId(null);
+    setShowScrollToBottom(false);
     isAtBottomRef.current = true;
-    if (sessionMode) setCurrentMode(sessionMode);
-
+    const entry = conversationStore.active;
+    const request = ++entry.historyRequest;
+    const before = entry.state;
+    if (sessionMode)
+      conversationStore.patch(entry, { currentMode: sessionMode });
+    if (entry.state.isSending || entry.preserveHistory) return;
+    conversationStore.patch(entry, {
+      isLoadingHistory: true,
+      historyError: null,
+    });
     try {
       const hist = await apiService.getSessionHistory(sessionId);
-      if (authVersion !== authVersionRef.current) return;
-      setIsTemporaryChat(Boolean(hist?.session?.is_temporary));
-      if (hist?.session?.mode) setCurrentMode(hist.session.mode);
-      setMessages(Array.isArray(hist?.messages) ? hist.messages : []);
-      setDocuments(Array.isArray(hist?.documents) ? hist.documents : []);
-      setPendingDocumentIds([]);
+      if (
+        authVersion !== authVersionRef.current ||
+        !conversationStore.live(entry) ||
+        request !== entry.historyRequest
+      )
+        return;
+      conversationStore.patch(entry, {
+        isTemporaryChat: Boolean(hist?.session?.is_temporary),
+        ...(entry.state.currentMode === (sessionMode || before.currentMode) &&
+        hist?.session?.mode
+          ? { currentMode: hist.session.mode }
+          : {}),
+        ...(entry.state.documents === before.documents
+          ? {
+              documents: [
+                ...(Array.isArray(hist?.documents) ? hist.documents : []),
+                ...entry.state.documents.filter(
+                  (doc) =>
+                    entry.state.pendingDocumentIds.includes(doc.document_id) &&
+                    !(hist?.documents || []).some(
+                      (saved) => saved.document_id === doc.document_id,
+                    ),
+                ),
+              ],
+            }
+          : {}),
+        ...(entry.state.messages === before.messages &&
+        !entry.state.isSending &&
+        !entry.preserveHistory
+          ? { messages: Array.isArray(hist?.messages) ? hist.messages : [] }
+          : {}),
+      });
     } catch {
-      if (authVersion !== authVersionRef.current) return;
-      setMessages([]);
-      setDocuments([]);
-      setPendingDocumentIds([]);
+      if (
+        authVersion === authVersionRef.current &&
+        conversationStore.live(entry) &&
+        request === entry.historyRequest
+      )
+        conversationStore.patch(entry, {
+          historyError:
+            "Could not refresh this chat. Your current messages have been kept.",
+        });
+      if (
+        authVersion === authVersionRef.current &&
+        conversationStore.active === entry &&
+        request === entry.historyRequest
+      ) {
+        Alert.alert(
+          "History unavailable",
+          "Could not refresh this chat. Your current messages have been kept. Please try again.",
+        );
+      }
+    } finally {
+      if (conversationStore.live(entry) && request === entry.historyRequest)
+        conversationStore.patch(entry, { isLoadingHistory: false });
     }
   };
 
   const handleToggleTemporaryChat = () => {
     if (!currentUser) return;
-    setIsTemporaryChat((prev) => !prev);
+    const next = !isTemporaryChat;
     setActiveSessionId(null);
-    setMessages([]);
-    setDocuments([]);
-    setPendingDocumentIds([]);
-    setAttachedMedia([]);
-    setReplyingTo(null);
+    conversationStore.patch(conversationStore.active, {
+      isTemporaryChat: next,
+    });
+    setCitationsVisible(false);
+    setAttachmentsVisible(false);
     setHighlightedMessageId(null);
-    setStreamingMessage(null);
-    setQuery("");
   };
 
   // --- 3. New Chat ---
   const handleNewChat = (userOverride?: User | null) => {
-    setIsTemporaryChat(false);
-    isAtBottomRef.current = true;
     const effectiveUser =
       userOverride !== undefined
         ? userOverride
         : currentUserRef.current || currentUser;
-    if (effectiveUser) {
-      // Authenticated users start with null session ID (ready for new persistent thread)
-      setActiveSessionId(null);
-    } else {
-      setActiveSessionId(generateGuestSessionId());
-    }
-    setMessages([]);
-    setDocuments([]);
-    setPendingDocumentIds([]);
-    setAttachedMedia([]);
-    setReplyingTo(null);
+    setActiveSessionId(effectiveUser ? null : generateGuestSessionId());
+    isAtBottomRef.current = true;
     setHighlightedMessageId(null);
-    setStreamingMessage(null);
-    setQuery("");
+    setCitationsVisible(false);
+    setActiveCitations([]);
+    setAttachmentsVisible(false);
   };
 
   const handleReplyMessage = useCallback(
@@ -617,7 +717,7 @@ export default function App() {
         content: msg.content,
       });
     },
-    [],
+    [setReplyingTo],
   );
 
   useEffect(() => {
@@ -626,7 +726,7 @@ export default function App() {
         clearTimeout(highlightTimerRef.current);
       }
     };
-  }, []);
+  }, [setReplyingTo]);
 
   const handleJumpToMessage = useCallback(
     (targetMessageId: string) => {
@@ -676,13 +776,10 @@ export default function App() {
       const updated = currentList.filter((s) => s.id !== sessionId);
       setSessions(updated);
       setTotalSessions((prev) => Math.max(0, prev - 1));
-      if (activeSessionId === sessionId) {
-        authVersionRef.current++;
-        streamAbortRef.current?.();
-        streamAbortRef.current = null;
+      const wasActive = activeSessionIdRef.current === sessionId;
+      conversationStore.drop(sessionId);
+      if (wasActive) {
         isSendingRef.current = false;
-        setIsSending(false);
-        setIsUploading(false);
         if (updated.length > 0) {
           selectSession(updated[0].id, updated[0].mode);
         } else {
@@ -745,7 +842,7 @@ export default function App() {
       !activeSessionId ||
       messages.length === 0 ||
       isSendingRef.current ||
-      clearingChatRef.current
+      conversation.state.isClearingHistory
     )
       return;
     const sessionId = activeSessionId;
@@ -763,11 +860,10 @@ export default function App() {
               authVersion !== authVersionRef.current ||
               sessionId !== activeSessionIdRef.current ||
               isSendingRef.current ||
-              clearingChatRef.current
+              conversation.state.isClearingHistory
             )
               return;
-            clearingChatRef.current = true;
-            setClearingChatId(sessionId);
+            conversationStore.patch(conversation, { isClearingHistory: true });
             try {
               await apiService.clearSessionMessages(sessionId);
               if (authVersion !== authVersionRef.current) return;
@@ -775,10 +871,17 @@ export default function App() {
                 ...previous,
                 [sessionId]: new Date().toISOString(),
               }));
-              if (sessionId !== activeSessionIdRef.current) return;
+              conversation.historyRequest++;
+              conversationStore.patch(conversation, {
+                isLoadingHistory: false,
+                operationError: null,
+                historyError: null,
+              });
+              conversation.preserveHistory = false;
               setMessages([]);
               setStreamingMessage(null);
               setReplyingTo(null);
+              if (sessionId !== activeSessionIdRef.current) return;
               setActiveCitations([]);
               setCitationsVisible(false);
             } catch (error: unknown) {
@@ -792,8 +895,9 @@ export default function App() {
                 );
               }
             } finally {
-              clearingChatRef.current = false;
-              setClearingChatId(null);
+              conversationStore.patch(conversation, {
+                isClearingHistory: false,
+              });
             }
           },
         },
@@ -802,15 +906,18 @@ export default function App() {
   };
 
   const handleSendMessage = async (customQuery?: string) => {
+    const authVersion = authVersionRef.current;
+    if (conversationStore.active !== conversation) return;
     const textToSend = (customQuery || query).trim();
     if (
       (!textToSend &&
         attachedMedia.length === 0 &&
         pendingDocumentIds.length === 0) ||
-      isSending ||
-      isUploading ||
+      conversation.state.isSending ||
+      conversation.state.isLoadingHistory ||
+      conversation.state.isUploading ||
       isSendingRef.current ||
-      clearingChatRef.current
+      conversation.state.isClearingHistory
     )
       return;
 
@@ -819,7 +926,10 @@ export default function App() {
     setQuery("");
     const replyToPayload = replyingTo;
     setReplyingTo(null);
-    let sessionId = activeSessionId;
+    let stoppedBeforeStreaming = false;
+    conversation.cancel = () => {
+      stoppedBeforeStreaming = true;
+    };
 
     const mediaToSend: MediaAttachment[] = [
       ...attachedMedia,
@@ -848,35 +958,12 @@ export default function App() {
 
     const userToUse = currentUserRef.current || currentUser;
 
-    // Create session in backend if user is logged in and no session is active yet
-    if (!sessionId && userToUse) {
-      const clientSessionId = generateGuestSessionId();
-      try {
-        const newSession = await apiService.createSession(
-          userToUse.id,
-          prompt.slice(0, 40),
-          currentMode,
-          isTempActive,
-          clientSessionId,
-        );
-        sessionId = newSession.id;
-        setActiveSessionId(sessionId);
-        if (!isTempActive) {
-          setSessions((prev) => [newSession, ...prev]);
-          setTotalSessions((prev) => prev + 1);
-        }
-      } catch (err) {
-        console.warn(
-          "Explicit createSession failed; relying on backend self-healing with user_id:",
-          err,
-        );
-        sessionId = clientSessionId;
-        setActiveSessionId(sessionId);
-      }
-    } else if (!sessionId) {
-      sessionId = generateGuestSessionId();
-      setActiveSessionId(sessionId);
-    }
+    const needsCreation = !conversation.sessionId;
+    const sessionId = conversation.sessionId || generateGuestSessionId();
+    conversationStore.adopt(conversation, sessionId);
+    conversation.preparing = needsCreation;
+    if (conversationStore.active === conversation)
+      activeSessionIdRef.current = sessionId;
 
     // Append User Message to UI
     const userMsg: Message = {
@@ -891,10 +978,13 @@ export default function App() {
 
     setMessages((prev) => [...prev, userMsg]);
     setStreamingMessage({ content: "", citations: [], attachments: [] });
-    isAtBottomRef.current = true;
-    setTimeout(() => {
-      flatListRef.current?.scrollToEnd({ animated: true });
-    }, 60);
+    if (conversationStore.active === conversation) {
+      isAtBottomRef.current = true;
+      setTimeout(() => {
+        if (conversationStore.active === conversation)
+          flatListRef.current?.scrollToEnd({ animated: true });
+      }, 60);
+    }
 
     // Stream SSE Response
     let streamedContent = "";
@@ -903,14 +993,60 @@ export default function App() {
     let isStreamFinalized = false;
 
     const finalizeStream = (action: () => void) => {
-      if (isStreamFinalized) return;
+      if (
+        isStreamFinalized ||
+        authVersion !== authVersionRef.current ||
+        !conversationStore.live(conversation)
+      )
+        return;
       isStreamFinalized = true;
-      isSendingRef.current = false;
+      if (conversationStore.active === conversation)
+        isSendingRef.current = false;
       setIsSending(false);
       setStreamingMessage(null);
-      streamAbortRef.current = null;
+      conversation.cancel = null;
       action();
     };
+
+    if (needsCreation && userToUse) {
+      try {
+        const created = await apiService.createSession(
+          userToUse.id,
+          prompt.slice(0, 40),
+          currentMode,
+          isTempActive,
+          sessionId,
+        );
+        if (
+          authVersion !== authVersionRef.current ||
+          !conversationStore.live(conversation) ||
+          stoppedBeforeStreaming
+        )
+          return;
+        if (!isTempActive) {
+          setSessions((previous) => [created, ...previous]);
+          setTotalSessions((previous) => previous + 1);
+        }
+      } catch (error) {
+        if (
+          authVersion !== authVersionRef.current ||
+          !conversationStore.live(conversation) ||
+          stoppedBeforeStreaming
+        )
+          return;
+        console.warn(
+          "Explicit session creation failed; the chat request will ensure the same session.",
+          error,
+        );
+      }
+    }
+    conversation.preparing = false;
+    if (
+      authVersion !== authVersionRef.current ||
+      !conversationStore.live(conversation) ||
+      stoppedBeforeStreaming
+    )
+      return;
 
     const cancel = apiService.streamChat(
       sessionId,
@@ -918,7 +1054,12 @@ export default function App() {
       currentMode,
       {
         onToken: (token) => {
-          if (isStreamFinalized) return;
+          if (
+            isStreamFinalized ||
+            authVersion !== authVersionRef.current ||
+            !conversationStore.live(conversation)
+          )
+            return;
           streamedContent += token;
           setStreamingMessage({
             content: streamedContent,
@@ -927,7 +1068,12 @@ export default function App() {
           });
         },
         onCitations: (cits) => {
-          if (isStreamFinalized) return;
+          if (
+            isStreamFinalized ||
+            authVersion !== authVersionRef.current ||
+            !conversationStore.live(conversation)
+          )
+            return;
           streamedCitations = cits;
           setStreamingMessage({
             content: streamedContent,
@@ -936,7 +1082,12 @@ export default function App() {
           });
         },
         onMedia: (media: MediaAttachment) => {
-          if (isStreamFinalized) return;
+          if (
+            isStreamFinalized ||
+            authVersion !== authVersionRef.current ||
+            !conversationStore.live(conversation)
+          )
+            return;
           streamedMedia = [...streamedMedia, media];
           setStreamingMessage({
             content: streamedContent,
@@ -946,8 +1097,12 @@ export default function App() {
         },
         onComplete: () => {
           finalizeStream(() => {
-            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+            if (conversationStore.active === conversation)
+              Haptics.notificationAsync(
+                Haptics.NotificationFeedbackType.Success,
+              );
 
+            conversation.preserveHistory ||= !userToUse;
             const aiMsg: Message = {
               id: "ai_" + Date.now(),
               session_id: sessionId!,
@@ -966,14 +1121,18 @@ export default function App() {
         },
         onError: (errMsg) => {
           finalizeStream(() => {
-            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+            if (conversationStore.active === conversation)
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
 
+            conversation.preserveHistory = true;
             const errorMsg: Message = {
               id: "err_" + Date.now(),
               session_id: sessionId!,
               role: "assistant",
-              content: `⚠️ ${errMsg}`,
-              citations: [],
+              content: [streamedContent, `Response interrupted: ${errMsg}`]
+                .filter(Boolean)
+                .join("\n\n"),
+              citations: streamedCitations,
               attachments: streamedMedia.length > 0 ? streamedMedia : undefined,
               created_at: new Date().toISOString(),
             };
@@ -987,26 +1146,53 @@ export default function App() {
       isTempActive,
     );
 
-    streamAbortRef.current = cancel;
+    if (!isStreamFinalized)
+      conversation.cancel = () => {
+        isStreamFinalized = true;
+        cancel();
+      };
   };
 
   const handleStopGeneration = () => {
+    conversation.cancel?.();
+    conversation.cancel = null;
     isSendingRef.current = false;
-    if (streamAbortRef.current) {
-      streamAbortRef.current();
-      streamAbortRef.current = null;
-    }
     setIsSending(false);
-    if (streamingMessage && streamingMessage.content) {
-      const partialMsg: Message = {
-        id: "ai_partial_" + Date.now(),
-        session_id: activeSessionId || "temp",
-        role: "assistant",
-        content: streamingMessage.content,
-        citations: streamingMessage.citations,
-        created_at: new Date().toISOString(),
-      };
-      setMessages((prev) => [...prev, partialMsg]);
+    if (conversation.preparing) {
+      conversation.preparing = false;
+      const unsent = conversation.state.messages.at(-1);
+      if (unsent?.role === "user") {
+        setQuery(unsent.content);
+        setReplyingTo(unsent.reply_to || null);
+        setAttachedMedia(
+          (unsent.attachments || []).filter(
+            (item) => item.file_type !== "document",
+          ),
+        );
+        setPendingDocumentIds(
+          (unsent.attachments || [])
+            .filter((item) => item.file_type === "document")
+            .map((item) => item.id || "")
+            .filter(Boolean),
+        );
+        setMessages((previous) => previous.filter((item) => item !== unsent));
+      }
+    }
+    const partial = conversation.state.streamingMessage;
+    if (partial && (partial.content || partial.attachments?.length)) {
+      conversation.preserveHistory = true;
+      setMessages((previous) => [
+        ...previous,
+        {
+          id: `stopped-${Date.now()}`,
+          session_id: conversation.sessionId || "",
+          role: "assistant",
+          content: partial.content,
+          citations: partial.citations,
+          attachments: partial.attachments,
+          created_at: new Date().toISOString(),
+        },
+      ]);
     }
     setStreamingMessage(null);
   };
@@ -1018,11 +1204,18 @@ export default function App() {
     mimeType: string;
   }) => {
     const authVersion = authVersionRef.current;
+    if (conversationStore.active !== conversation) return;
+    conversation.uploads++;
+    setIsUploading(true);
+    setOperationError(null);
     const userToUse = currentUserRef.current || currentUser;
-    let sessionId = activeSessionId;
+    let sessionId = conversation.sessionId;
     if (!sessionId) {
       if (userToUse) {
         const clientSessionId = generateGuestSessionId();
+        conversationStore.adopt(conversation, clientSessionId);
+        if (conversationStore.active === conversation)
+          activeSessionIdRef.current = clientSessionId;
         try {
           const newSession = await apiService.createSession(
             userToUse.id,
@@ -1031,25 +1224,39 @@ export default function App() {
             isTempActive,
             clientSessionId,
           );
-          if (authVersion !== authVersionRef.current) return;
+          if (
+            authVersion !== authVersionRef.current ||
+            !conversationStore.live(conversation)
+          )
+            return;
           sessionId = newSession.id;
-          setActiveSessionId(sessionId);
+          conversationStore.adopt(conversation, sessionId);
+          if (conversationStore.active === conversation)
+            activeSessionIdRef.current = sessionId;
           if (!isTempActive) {
             setSessions((prev) => [newSession, ...prev]);
             setTotalSessions((prev) => prev + 1);
           }
         } catch (err) {
-          if (authVersion !== authVersionRef.current) return;
+          if (
+            authVersion !== authVersionRef.current ||
+            !conversationStore.live(conversation)
+          )
+            return;
           console.warn(
             "Session creation on file attach failed; using clientSessionId for self-healing:",
             err,
           );
           sessionId = clientSessionId;
-          setActiveSessionId(sessionId);
+          conversationStore.adopt(conversation, sessionId);
+          if (conversationStore.active === conversation)
+            activeSessionIdRef.current = sessionId;
         }
       } else {
         sessionId = generateGuestSessionId();
-        setActiveSessionId(sessionId);
+        conversationStore.adopt(conversation, sessionId);
+        if (conversationStore.active === conversation)
+          activeSessionIdRef.current = sessionId;
       }
     }
 
@@ -1068,18 +1275,32 @@ export default function App() {
           currentUser?.id,
           isTempActive,
         );
-        if (authVersion !== authVersionRef.current) return;
+        if (
+          authVersion !== authVersionRef.current ||
+          !conversationStore.live(conversation)
+        )
+          return;
         setAttachedMedia((prev) => [...prev, media]);
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        if (conversationStore.active === conversation)
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         if (currentMode !== "IMAGE_GENERATION" && currentMode !== "AUTO") {
           setCurrentMode("MULTIMODAL");
         }
       } catch (err: unknown) {
-        if (authVersion !== authVersionRef.current) return;
+        if (
+          authVersion !== authVersionRef.current ||
+          !conversationStore.live(conversation)
+        )
+          return;
         const msg = err instanceof Error ? err.message : String(err);
-        Alert.alert("Image Upload Failed", msg);
+        setOperationError(`Image upload failed: ${msg}`);
+        if (conversationStore.active === conversation)
+          Alert.alert("Image Upload Failed", msg);
       } finally {
-        if (authVersion === authVersionRef.current) setIsUploading(false);
+        if (authVersion === authVersionRef.current) {
+          conversation.uploads = Math.max(0, conversation.uploads - 1);
+          setIsUploading(conversation.uploads > 0);
+        }
       }
       return;
     }
@@ -1094,20 +1315,34 @@ export default function App() {
         currentUser?.id,
         isTempActive,
       );
-      if (authVersion !== authVersionRef.current) return;
+      if (
+        authVersion !== authVersionRef.current ||
+        !conversationStore.live(conversation)
+      )
+        return;
       setDocuments((prev) => [...(Array.isArray(prev) ? prev : []), doc]);
       setPendingDocumentIds((prev) => [...prev, doc.document_id]);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      if (conversationStore.active === conversation)
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       // Auto-switch to Document RAG if uploaded and not in AUTO mode
       if (currentMode !== "DOCUMENT_RAG" && currentMode !== "AUTO") {
         setCurrentMode("DOCUMENT_RAG");
       }
     } catch (err: unknown) {
-      if (authVersion !== authVersionRef.current) return;
+      if (
+        authVersion !== authVersionRef.current ||
+        !conversationStore.live(conversation)
+      )
+        return;
       const msg = err instanceof Error ? err.message : String(err);
-      Alert.alert("Upload Failed", msg);
+      setOperationError(`Upload failed: ${msg}`);
+      if (conversationStore.active === conversation)
+        Alert.alert("Upload Failed", msg);
     } finally {
-      if (authVersion === authVersionRef.current) setIsUploading(false);
+      if (authVersion === authVersionRef.current) {
+        conversation.uploads = Math.max(0, conversation.uploads - 1);
+        setIsUploading(conversation.uploads > 0);
+      }
     }
   };
 
@@ -1136,11 +1371,14 @@ export default function App() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
   };
 
-  const handleUseAsReference = useCallback((media: MediaAttachment) => {
-    setAttachedMedia([media]);
-    setCurrentMode("IMAGE_GENERATION");
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-  }, []);
+  const handleUseAsReference = useCallback(
+    (media: MediaAttachment) => {
+      setAttachedMedia([media]);
+      setCurrentMode("IMAGE_GENERATION");
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    },
+    [setAttachedMedia, setCurrentMode],
+  );
 
   // --- 8. Citations Sheet ---
   const handleOpenCitations = useCallback((citations: Citation[]) => {
@@ -1205,8 +1443,7 @@ export default function App() {
     authVersionRef.current++;
     setClearedChats({});
     isSendingRef.current = false;
-    streamAbortRef.current?.();
-    streamAbortRef.current = null;
+    conversationStore.reset();
     setIsSending(false);
     setIsUploading(false);
     setStreamingMessage(null);
@@ -1218,7 +1455,7 @@ export default function App() {
     currentUserRef.current = user;
     setCurrentUser(user);
     await AsyncStorage.setItem("contexify_mobile_user", JSON.stringify(user));
-    await loadUserSessions(user.id, user);
+    await loadUserSessions(user.id);
   };
 
   const handleLogout = async () => {
@@ -1370,6 +1607,14 @@ export default function App() {
           <View style={styles.workspace}>
             {/* Main Messages & Conversation Viewport */}
             <View style={styles.chatViewport}>
+              {(operationError || historyError) && (
+                <Text
+                  accessibilityRole="alert"
+                  style={{ color: theme.danger, padding: 12 }}
+                >
+                  {operationError || historyError}
+                </Text>
+              )}
               {activeSessionId &&
                 (isClearingChat || clearedChats[activeSessionId]) && (
                   <View
@@ -1650,6 +1895,7 @@ export default function App() {
                 )
               ) : (
                 <FlatList
+                  key={conversation.viewId}
                   ref={flatListRef}
                   data={messages}
                   keyExtractor={keyExtractor}
@@ -1748,11 +1994,13 @@ export default function App() {
 
             {/* Bottom Chat Input Bar */}
             <ChatInput
+              key={conversation.viewId}
               query={query}
               onChangeQuery={setQuery}
               onSend={() => handleSendMessage()}
               onStop={handleStopGeneration}
               isSending={isSending}
+              isBusy={isLoadingHistory || isClearingChat}
               onAttachFile={handleAttachFile}
               isUploading={isUploading}
               documents={documents.filter((doc) =>
