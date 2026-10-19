@@ -77,28 +77,20 @@ class StorageService:
         return self._initialized and self._s3_client is not None
 
     def get_public_url(self, key: str) -> str:
-        """Construct the publicly accessible URL for an object key."""
+        """Return a stable backend locator for either storage backend.
+
+        API presenters replace these locators with ownership-checked download
+        tickets. Never expose a private R2 endpoint or assume a CDN has a local
+        fallback object. Configured remote URLs remain readable for legacy rows.
+        """
         clean_key = key.lstrip("/")
-
-        # 1. Custom Public CDN or r2.dev domain (e.g. https://pub-xxx.r2.dev or https://media.contexify.ai)
-        if settings.CLOUDFLARE_R2_PUBLIC_URL:
-            base = settings.CLOUDFLARE_R2_PUBLIC_URL.strip().rstrip("/")
-            return f"{base}/{clean_key}"
-
-        # 2. If clean_key is an avatar and no custom CDN domain is configured,
-        # route to backend endpoint so the backend proxies/serves the avatar
+        if not self._is_safe_key(clean_key):
+            raise ValueError("Invalid storage key.")
         if clean_key.startswith("avatars/"):
             filename = clean_key.split("avatars/")[-1]
             user_id = Path(filename).stem
             return f"/api/v1/user/avatar/{user_id}"
 
-        # 3. If R2 is active but no public URL is provided, build direct endpoint URL
-        if self.is_r2_active and settings.r2_endpoint_url:
-            base = settings.r2_endpoint_url.rstrip("/")
-            bucket = settings.CLOUDFLARE_R2_BUCKET_NAME
-            return f"{base}/{bucket}/{clean_key}"
-
-        # 4. Local URL fallback
         if clean_key.startswith("media/uploads/"):
             filename = clean_key.split("media/uploads/")[-1]
             return f"/api/v1/media/uploads/{filename}"
@@ -120,7 +112,7 @@ class StorageService:
     ) -> Tuple[str, str]:
         """
         Upload raw bytes to storage (Cloudflare R2 or local disk).
-        Returns: (public_url, storage_key)
+        Returns: (backend_locator, storage_key). Client URLs are signed by API presenters.
         """
         clean_key = destination_key
         if not self._is_safe_key(clean_key):

@@ -2799,25 +2799,240 @@ class SecurityTests(unittest.TestCase):
         client = Mock()
         with (
             patch.object(settings, "DATA_DIR", data),
+            patch.object(
+                settings, "CLOUDFLARE_R2_PUBLIC_URL", "https://cdn.fixture.invalid"
+            ),
+            patch.object(settings, "r2_endpoint_url", "https://r2.fixture.invalid"),
             patch.object(storage_service, "_s3_client", client),
         ):
             with patch.object(storage_service, "_initialized", False):
-                _, key = storage_service.upload_file(
+                url, key = storage_service.upload_file(
                     b"local", "documents/session/object.txt"
                 )
+                self.assertEqual(url, "/api/v1/media/documents/session/object.txt")
                 self.assertEqual((data / key).read_bytes(), b"local")
             with patch.object(storage_service, "_initialized", True):
-                _, key = storage_service.upload_file(
+                url, key = storage_service.upload_file(
                     b"cloud", "media/uploads/object.png"
                 )
+                self.assertEqual(url, "/api/v1/media/uploads/object.png")
                 self.assertEqual(key, "media/uploads/object.png")
                 self.assertEqual(client.put_object.call_args.kwargs["Key"], key)
                 self.assertFalse((data / key).exists())
                 client.put_object.side_effect = RuntimeError("fixture provider failure")
-                _, key = storage_service.upload_file(
+                url, key = storage_service.upload_file(
                     b"fallback", "media/generated/object.png"
                 )
+                self.assertEqual(url, "/api/v1/media/generated/object.png")
                 self.assertEqual((data / key).read_bytes(), b"fallback")
+
+    def test_storage_fallback_uploads_keep_authenticated_downloads_working(self):
+        from app.services.storage_service import storage_service
+
+        image_bytes = self.image_fixture()
+        objects = {}
+        client = Mock()
+        client.put_object.side_effect = lambda **kwargs: objects.update(
+            {kwargs["Key"]: kwargs["Body"]}
+        )
+        client.get_object.side_effect = lambda **kwargs: {
+            "Body": io.BytesIO(objects[kwargs["Key"]])
+        }
+        with (
+            patch.object(storage_service, "_s3_client", client),
+            patch.object(settings, "r2_endpoint_url", "https://r2.fixture.invalid"),
+        ):
+            for cdn in ("", "https://cdn.fixture.invalid"):
+                for backend in ("local", "r2", "fallback"):
+                    with (
+                        self.subTest(cdn=cdn, backend=backend),
+                        patch.object(settings, "CLOUDFLARE_R2_PUBLIC_URL", cdn),
+                        patch.object(
+                            storage_service, "_initialized", backend != "local"
+                        ),
+                        patch.object(
+                            client,
+                            "put_object",
+                            side_effect=(
+                                RuntimeError("fixture R2 failure")
+                                if backend == "fallback"
+                                else lambda **kwargs: objects.update(
+                                    {kwargs["Key"]: kwargs["Body"]}
+                                )
+                            ),
+                        ),
+                    ):
+                        response = self.request(
+                            "POST",
+                            "/media/upload",
+                            self.token,
+                            data={"session_id": "alice-session"},
+                            files={"file": ("fixture.png", image_bytes, "image/png")},
+                        )
+                        self.assertEqual(response.status_code, 201, response.text)
+                        attachment = response.json()
+                        self.assertTrue(
+                            attachment["url"].startswith("/api/v1/media/content/media/")
+                        )
+                        self.assertEqual(
+                            self.request(
+                                "GET", attachment["url"].removeprefix("/api/v1")
+                            ).content,
+                            image_bytes,
+                        )
+                        self.assertEqual(
+                            self.request(
+                                "GET",
+                                f"/media/content/media/{attachment['id']}",
+                                self.other_token,
+                            ).status_code,
+                            404,
+                        )
+                        with database.get_db_connection() as conn:
+                            row = conn.execute(
+                                "SELECT file_path,file_url FROM media_assets WHERE id=?",
+                                (attachment["id"],),
+                            ).fetchone()
+                        self.assertTrue(
+                            row["file_url"].startswith("/api/v1/media/uploads/")
+                        )
+                        self.assertEqual(
+                            (root / row["file_path"]).exists(), backend != "r2"
+                        )
+
+    def reference_generator(self):
+        # Load the real service without environment credentials or live providers.
+        with patch("os.environ", {"GEMINI_API_KEY": ""}):
+            actual = runpy.run_path(
+                str(
+                    Path(__file__).resolve().parents[1]
+                    / "app/services/image_gen_service.py"
+                )
+            )["image_gen_service"]
+        actual.client = Mock()
+        actual.client.models.generate_content.return_value = types.SimpleNamespace(
+            text="Reference-conditioned prompt"
+        )
+        actual.generate_image = AsyncMock(return_value=Mock())
+        return actual
+
+    def test_reference_analysis_uses_actual_image_bytes_and_mime_in_all_storage_modes(
+        self,
+    ):
+        from app.services.storage_service import storage_service
+
+        for backend, image_format, mime in (
+            ("local", "PNG", "image/png"),
+            ("r2", "JPEG", "image/jpeg"),
+            ("fallback", "WEBP", "image/webp"),
+        ):
+            actual = self.reference_generator()
+            client = Mock()
+            image_bytes = self.image_fixture(image_format)
+            client.get_object.return_value = {"Body": io.BytesIO(image_bytes)}
+            client.put_object.side_effect = (
+                RuntimeError("fixture R2 failure") if backend == "fallback" else None
+            )
+            with (
+                patch.object(storage_service, "_s3_client", client),
+                patch.object(storage_service, "_initialized", backend != "local"),
+                patch.object(
+                    settings, "DEFAULT_LLM_MODEL", "fixture-model", create=True
+                ),
+            ):
+                _, key = storage_service.upload_file(
+                    image_bytes, f"media/uploads/{backend}-reference.img"
+                )
+                asyncio.run(
+                    actual.generate_from_reference(
+                        "Change the background", key, "alice-session", self.alice.id
+                    )
+                )
+            contents = actual.client.models.generate_content.call_args.kwargs[
+                "contents"
+            ]
+            self.assertEqual(contents[0].inline_data.data, image_bytes)
+            self.assertEqual(contents[0].inline_data.mime_type, mime)
+            actual.generate_image.assert_awaited_once_with(
+                prompt="Reference-conditioned prompt",
+                session_id="alice-session",
+                user_id=self.alice.id,
+            )
+
+    def test_reference_analysis_failures_never_fall_back_to_unconditioned_generation(
+        self,
+    ):
+        from app.services.media_service import media_service
+
+        for failure in ("missing", "unconfigured", "provider", "empty"):
+            actual = self.reference_generator()
+            if failure == "unconfigured":
+                actual.client = None
+            elif failure == "provider":
+                actual.client.models.generate_content.side_effect = RuntimeError(
+                    "private provider detail"
+                )
+            elif failure == "empty":
+                actual.client.models.generate_content.return_value.text = "  "
+            with (
+                patch.object(
+                    media_service,
+                    "get_media_bytes",
+                    return_value=None if failure == "missing" else self.image_fixture(),
+                ),
+                patch.object(
+                    settings, "DEFAULT_LLM_MODEL", "fixture-model", create=True
+                ),
+                self.assertRaises(RuntimeError) as error,
+            ):
+                asyncio.run(
+                    actual.generate_from_reference(
+                        "Use this image", "media/uploads/reference.png"
+                    )
+                )
+            self.assertNotIn("private provider detail", str(error.exception))
+            actual.generate_image.assert_not_awaited()
+
+    def test_reference_analysis_failure_reaches_clients_as_an_error_event(self):
+        from app.api.v1.endpoints import chat
+
+        actual = self.reference_generator()
+        actual.client.models.generate_content.side_effect = RuntimeError(
+            "private provider detail"
+        )
+        (settings.UPLOAD_IMAGE_DIR / "fixture.png").write_bytes(self.image_fixture())
+        providers = {}
+        for name in ("llm_service", "image_gen_service", "web_search_service"):
+            stub = types.ModuleType("app.services." + name)
+            setattr(stub, name, actual if name == "image_gen_service" else Mock())
+            providers[stub.__name__] = stub
+        with patch.dict(sys.modules, providers):
+            orchestrator = runpy.run_path(
+                str(
+                    Path(__file__).resolve().parents[1] / "app/services/orchestrator.py"
+                )
+            )["chat_orchestrator"]
+        with (
+            patch.object(chat, "chat_orchestrator", orchestrator),
+            patch.object(settings, "DEFAULT_LLM_MODEL", "fixture-model", create=True),
+        ):
+            response = self.request(
+                "POST",
+                "/chat/stream",
+                self.token,
+                json={
+                    "session_id": "alice-session",
+                    "mode": "IMAGE_GENERATION",
+                    "message": "Draw a variation",
+                    "attachments": [{"id": "image", "file_type": "image"}],
+                },
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('"event": "error"', response.text)
+        self.assertIn("reference image could not be analyzed", response.text)
+        self.assertNotIn('"event": "media"', response.text)
+        self.assertNotIn("private provider detail", response.text)
+        actual.generate_image.assert_not_awaited()
 
     @unittest.skipUnless(sys.platform == "win32", "Windows junction regression")
     def test_storage_upload_blocks_junction_writes_outside_data_root(self):
