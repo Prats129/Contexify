@@ -1936,6 +1936,183 @@ class SecurityTests(unittest.TestCase):
             self.request("GET", "/media/assets", self.token).json()["total"], 2
         )
 
+    def test_media_owner_for_uploads_and_both_generation_paths_is_server_derived(self):
+        from app.api.v1.endpoints import chat
+        from app.services.media_service import media_service
+
+        image_bytes = self.image_fixture()
+        ids = []
+        # Web and native requests may omit the optional user_id claim.
+        for claim in ({}, {"user_id": self.alice.id}):
+            response = self.request(
+                "POST",
+                "/media/upload",
+                self.token,
+                data={"session_id": "alice-session", **claim},
+                files={"file": ("uploaded.png", image_bytes, "image/png")},
+            )
+            self.assertEqual(response.status_code, 201, response.text)
+            ids.append(response.json()["id"])
+
+        async def generate(**kwargs):
+            # The orchestrator intentionally supplies only the session ID.
+            attachment = media_service.save_generated_image(
+                image_bytes, kwargs["prompt"], session_id=kwargs["session_id"]
+            )
+            ids.append(attachment.id)
+            return attachment
+
+        providers = {}
+        for name in ("llm_service", "image_gen_service", "web_search_service"):
+            stub = types.ModuleType("app.services." + name)
+            setattr(stub, name, Mock())
+            providers[stub.__name__] = stub
+        generator = providers["app.services.image_gen_service"].image_gen_service
+        generator.generate_image = AsyncMock(side_effect=generate)
+        generator.generate_from_reference = AsyncMock(side_effect=generate)
+        with patch.dict(sys.modules, providers):
+            actual = runpy.run_path(
+                str(
+                    Path(__file__).resolve().parents[1] / "app/services/orchestrator.py"
+                )
+            )["chat_orchestrator"]
+        with patch.object(chat, "chat_orchestrator", actual):
+            for attachments in ([], [{"id": ids[0], "file_type": "image"}]):
+                response = self.request(
+                    "POST",
+                    "/chat/stream",
+                    self.token,
+                    json={
+                        "session_id": "alice-session",
+                        "mode": "IMAGE_GENERATION",
+                        "message": "Generate an image of a tree",
+                        "attachments": attachments,
+                    },
+                )
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertNotIn('"event": "error"', response.text)
+        generator.generate_image.assert_awaited_once()
+        generator.generate_from_reference.assert_awaited_once()
+        with database.get_db_connection() as conn:
+            for asset_id in ids:
+                row = conn.execute(
+                    "SELECT user_id FROM media_assets WHERE id=?", (asset_id,)
+                ).fetchone()
+                self.assertEqual(row["user_id"], self.alice.id)
+        for origin, expected in (("upload", set(ids[:2])), ("generated", set(ids[2:]))):
+            response = self.request(
+                "GET", "/media/assets", self.token, params={"origin": origin}
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            items = response.json()["items"]
+            self.assertTrue(expected.issubset({item["id"] for item in items}))
+            self.assertTrue(all(item["user_id"] == self.alice.id for item in items))
+        self.assertEqual(
+            self.request("GET", "/media/assets", self.other_token).json()["total"], 0
+        )
+
+    def test_media_owner_conflict_cannot_publish_an_asset(self):
+        from fastapi import HTTPException
+
+        from app.services.media_service import media_service
+
+        for generated in (False, True):
+            with self.assertRaises(HTTPException) as error:
+                if generated:
+                    media_service.save_generated_image(
+                        self.image_fixture(), "fixture", "alice-session", self.bob.id
+                    )
+                else:
+                    media_service.save_uploaded_media(
+                        self.image_fixture(),
+                        "fixture.png",
+                        "alice-session",
+                        self.bob.id,
+                    )
+            self.assertEqual(error.exception.status_code, 403)
+        with database.get_db_connection() as conn:
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM media_assets").fetchone()[0], 1
+            )
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM upload_resources").fetchone()[0], 0
+            )
+
+    def test_media_owner_keeps_guest_and_temporary_generations_out_of_library(self):
+        from app.services.media_service import media_service
+
+        guest = security.create_guest()
+        principal = security.resolve_principal(security.digest(guest["access_token"]))
+        security.ensure_session("guest-images", principal)
+        security.ensure_session("temporary-images", self.principal, is_temporary=True)
+        for session_id, expected_owner in (
+            ("guest-images", principal.user_id),
+            ("temporary-images", self.alice.id),
+        ):
+            attachment = media_service.save_generated_image(
+                self.image_fixture(), "fixture", session_id=session_id
+            )
+            with database.get_db_connection() as conn:
+                self.assertEqual(
+                    conn.execute(
+                        "SELECT user_id FROM media_assets WHERE id=?", (attachment.id,)
+                    ).fetchone()[0],
+                    expected_owner,
+                )
+            self.assertNotIn(
+                attachment.id,
+                {
+                    item["id"]
+                    for item in self.request("GET", "/media/assets", self.token).json()[
+                        "items"
+                    ]
+                },
+            )
+        self.assertEqual(
+            self.request("GET", "/media/assets", guest["access_token"]).json()["total"],
+            0,
+        )
+
+    def test_media_owner_legacy_fallback_handles_null_and_empty_without_reassigning(
+        self,
+    ):
+        for legacy_owner in (None, ""):
+            with database.get_db_connection() as conn:
+                conn.execute(
+                    "UPDATE media_assets SET user_id=? WHERE id='image'",
+                    (legacy_owner,),
+                )
+                conn.execute(
+                    "UPDATE documents SET user_id=? WHERE id='document'",
+                    (legacy_owner,),
+                )
+            response = self.request("GET", "/media/assets", self.token)
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["total"], 2)
+            self.assertTrue(
+                all(
+                    item["user_id"] == self.alice.id
+                    for item in response.json()["items"]
+                )
+            )
+            self.assertEqual(
+                self.request("GET", "/media/assets", self.other_token).json()["total"],
+                0,
+            )
+            with database.get_db_connection() as conn:
+                self.assertEqual(
+                    conn.execute(
+                        "SELECT user_id FROM media_assets WHERE id='image'"
+                    ).fetchone()[0],
+                    legacy_owner,
+                )
+        with database.get_db_connection() as conn:
+            conn.execute("UPDATE media_assets SET session_id=NULL WHERE id='image'")
+            conn.execute("UPDATE documents SET session_id=NULL WHERE id='document'")
+        self.assertEqual(
+            self.request("GET", "/media/assets", self.token).json()["total"], 0
+        )
+
     def test_forged_and_expired_credentials(self):
         self.assertEqual(self.request("GET", "/user/me", "forged").status_code, 401)
         with database.get_db_connection() as conn:

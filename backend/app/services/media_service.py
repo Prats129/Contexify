@@ -3,6 +3,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from fastapi import HTTPException
+
 from app.core.config import settings
 from app.core.logging import logger
 from app.db.database import get_db_connection
@@ -28,6 +30,17 @@ class MediaService:
     def is_allowed_image(self, filename: str) -> bool:
         ext = Path(filename).suffix.lower()
         return ext in ALLOWED_IMAGE_EXTENSIONS
+
+    @staticmethod
+    def _asset_owner(
+        conn: Any, session_id: Optional[str], user_id: Optional[str]
+    ) -> Optional[str]:
+        if not session_id:
+            return user_id
+        owner = active_session(conn, session_id)["user_id"]
+        if user_id and user_id != owner:
+            raise HTTPException(403, "Media owner does not match the chat owner.")
+        return owner
 
     @rollback_failed_upload
     def save_uploaded_media(
@@ -60,8 +73,7 @@ class MediaService:
         try:
             with get_db_connection(write=True) as conn:
                 cursor = conn.cursor()
-                if session_id:
-                    active_session(conn, session_id)
+                user_id = self._asset_owner(conn, session_id, user_id)
                 valid_session_id = session_id
                 cursor.execute(
                     """
@@ -131,8 +143,7 @@ class MediaService:
         try:
             with get_db_connection(write=True) as conn:
                 cursor = conn.cursor()
-                if session_id:
-                    active_session(conn, session_id)
+                user_id = self._asset_owner(conn, session_id, user_id)
                 valid_session_id = session_id
                 cursor.execute(
                     """
@@ -245,7 +256,7 @@ class MediaService:
                 SELECT 
                     m.id, 
                     m.user_id,
-                    COALESCE(m.user_id, s.user_id) AS owner_id,
+                    COALESCE(NULLIF(m.user_id,''), s.user_id) AS owner_id,
                     m.session_id, 
                     s.title AS session_title, 
                     m.filename AS name, 
@@ -264,7 +275,7 @@ class MediaService:
                 SELECT 
                     d.id, 
                     d.user_id,
-                    COALESCE(d.user_id, s.user_id) AS owner_id,
+                    COALESCE(NULLIF(d.user_id,''), s.user_id) AS owner_id,
                     d.session_id, 
                     s.title AS session_title, 
                     d.filename AS name, 
@@ -309,7 +320,7 @@ class MediaService:
                 items.append(
                     {
                         "id": row["id"],
-                        "user_id": row["user_id"],
+                        "user_id": row["owner_id"],
                         "session_id": row["session_id"],
                         "session_title": row["session_title"] or "Untitled Chat",
                         "name": row["name"],
