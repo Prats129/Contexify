@@ -1,6 +1,10 @@
 """Application errors shared by services and API boundaries."""
 
 
+class ImageGenerationError(RuntimeError):
+    """An image-generation failure with a message safe to show to the user."""
+
+
 class EmbeddingDimensionError(ValueError):
     """Embedding dimensions are incompatible with the document index."""
 

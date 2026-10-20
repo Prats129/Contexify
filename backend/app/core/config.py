@@ -7,15 +7,16 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 WORKSPACE_DIR = BASE_DIR.parent
 
+
 class Settings(BaseSettings):
     BASE_DIR: Path = BASE_DIR
     WORKSPACE_DIR: Path = WORKSPACE_DIR
     PROJECT_NAME: str = "Enterprise AI RAG & Web Search Engine"
     API_V1_STR: str = "/api/v1"
-    
+
     # Security & CORS
     CORS_ORIGINS: list[str] = ["*"]
-    
+
     # RAG Settings
     CHUNK_SIZE: int = 800
     CHUNK_OVERLAP: int = 150
@@ -28,10 +29,12 @@ class Settings(BaseSettings):
     PDF_PARSE_TIMEOUT_SECONDS: float = Field(default=30, ge=0.1, le=300)
     PDF_PARSE_MEMORY_MB: int = Field(default=256, ge=64, le=4096)
     PDF_MAX_CONCURRENT_PARSERS: int = Field(default=2, ge=1, le=16)
-    
+
     # Vector DB Storage
-    DATA_DIR: Path = Field(default_factory=lambda: Path(os.environ.get("DATA_DIR", str(BASE_DIR / "data"))))
-    
+    DATA_DIR: Path = Field(
+        default_factory=lambda: Path(os.environ.get("DATA_DIR", str(BASE_DIR / "data")))
+    )
+
     @property
     def CHROMA_PERSIST_DIR(self) -> Path:
         return self.DATA_DIR / "chroma_db"
@@ -51,32 +54,47 @@ class Settings(BaseSettings):
     @property
     def GENERATED_IMAGE_DIR(self) -> Path:
         return self.MEDIA_DIR / "generated"
-    
+
     # API Keys & Models
     GEMINI_API_KEY: str = Field(default="", env="GEMINI_API_KEY")
     DEFAULT_EMBEDDING_MODEL: str = "gemini-embedding-001"
     EMBEDDING_DIMENSION: int = 768
     DEFAULT_LLM_MODEL: str = "gemini-3.5-flash"
     FALLBACK_LLM_MODELS: list[str] = ["gemini-3-flash-preview"]
-    DEFAULT_IMAGE_MODEL: str = "imagen-3.0-generate-002"
-    FALLBACK_IMAGE_MODELS: list[str] = ["imagen-3.0-generate-001", "imagen-3.0-fast-generate-001"]
+    # Workers AI credentials are separate from R2's S3 access keys.
+    CLOUDFLARE_AI_ACCOUNT_ID: str = ""
+    CLOUDFLARE_AI_API_TOKEN: str = ""
+    IMAGE_GENERATION_TIMEOUT_SECONDS: float = Field(default=120, ge=1, le=300)
+    IMAGE_GENERATION_MAX_ATTEMPTS: int = Field(default=3, ge=1, le=3)
     GOOGLE_CLIENT_ID: str = Field(default="", env="GOOGLE_CLIENT_ID")
 
     # Database & Vector Store Execution Mode: "local" (SQLite + ChromaDB) or "cloud" (Turso + Pinecone)
     DB_MODE: str = Field(default="local", env="DB_MODE")
-    VECTOR_STORE_TYPE: str = Field(default="", env="VECTOR_STORE_TYPE")  # Optional override: "chromadb" | "pinecone"
-    DATABASE_TYPE: str = Field(default="", env="DATABASE_TYPE")          # Optional override: "sqlite" | "turso"
+    VECTOR_STORE_TYPE: str = Field(
+        default="", env="VECTOR_STORE_TYPE"
+    )  # Optional override: "chromadb" | "pinecone"
+    DATABASE_TYPE: str = Field(
+        default="", env="DATABASE_TYPE"
+    )  # Optional override: "sqlite" | "turso"
 
     # Object Storage Mode: "cloudflare" (Cloudflare R2 S3-compatible) or "local" (local disk)
     STORAGE_MODE: str = Field(default="cloudflare", env="STORAGE_MODE")
 
     # Cloudflare R2 Object Storage Configuration (S3-Compatible)
     CLOUDFLARE_R2_ACCOUNT_ID: str = Field(default="", env="CLOUDFLARE_R2_ACCOUNT_ID")
-    CLOUDFLARE_R2_ACCESS_KEY_ID: str = Field(default="", env="CLOUDFLARE_R2_ACCESS_KEY_ID")
-    CLOUDFLARE_R2_SECRET_ACCESS_KEY: str = Field(default="", env="CLOUDFLARE_R2_SECRET_ACCESS_KEY")
-    CLOUDFLARE_R2_BUCKET_NAME: str = Field(default="contexify", env="CLOUDFLARE_R2_BUCKET_NAME")
+    CLOUDFLARE_R2_ACCESS_KEY_ID: str = Field(
+        default="", env="CLOUDFLARE_R2_ACCESS_KEY_ID"
+    )
+    CLOUDFLARE_R2_SECRET_ACCESS_KEY: str = Field(
+        default="", env="CLOUDFLARE_R2_SECRET_ACCESS_KEY"
+    )
+    CLOUDFLARE_R2_BUCKET_NAME: str = Field(
+        default="contexify", env="CLOUDFLARE_R2_BUCKET_NAME"
+    )
     CLOUDFLARE_R2_PUBLIC_URL: str = Field(default="", env="CLOUDFLARE_R2_PUBLIC_URL")
-    CLOUDFLARE_R2_ENDPOINT_URL: str = Field(default="", env="CLOUDFLARE_R2_ENDPOINT_URL")
+    CLOUDFLARE_R2_ENDPOINT_URL: str = Field(
+        default="", env="CLOUDFLARE_R2_ENDPOINT_URL"
+    )
 
     @property
     def r2_endpoint_url(self) -> str:
@@ -108,7 +126,9 @@ class Settings(BaseSettings):
 
     # Brevo HTTP Email API (Port 443 - Bypasses Render & cloud host SMTP port blocking)
     BREVO_API_KEY: str = Field(default="", env="BREVO_API_KEY")
-    BREVO_FROM_EMAIL: str = Field(default="contexifyindia@gmail.com", env="BREVO_FROM_EMAIL")
+    BREVO_FROM_EMAIL: str = Field(
+        default="contexifyindia@gmail.com", env="BREVO_FROM_EMAIL"
+    )
     BREVO_FROM_NAME: str = Field(default="Contexify", env="BREVO_FROM_NAME")
 
     # SMTP Email Configuration
@@ -133,13 +153,16 @@ class Settings(BaseSettings):
     OTP_MAX_SENDS_PER_HOUR: int = Field(default=5, ge=1)
 
     # Temporary Chat Retention Settings
-    TEMPORARY_CHAT_RETENTION_DAYS: int = 3  # Temporary conversations automatically purged after 3 days
+    TEMPORARY_CHAT_RETENTION_DAYS: int = (
+        3  # Temporary conversations automatically purged after 3 days
+    )
 
     model_config = SettingsConfigDict(
         env_file=[str(BASE_DIR / ".env"), ".env"],
         env_file_encoding="utf-8",
-        extra="ignore"
+        extra="ignore",
     )
+
 
 settings = Settings()
 

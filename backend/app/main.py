@@ -17,6 +17,7 @@ from app.core.config import settings
 from app.core.logging import logger
 from app.db.database import init_db
 from app.services.chat_history_service import chat_history_service
+from app.services.image_gen_service import image_gen_service
 
 
 async def _periodic_temporary_cleanup():
@@ -50,6 +51,10 @@ async def lifespan(application: FastAPI):
         cleanup_task.cancel()
         with suppress(asyncio.CancelledError):
             await cleanup_task
+        try:
+            await image_gen_service.aclose()
+        except Exception:
+            logger.exception("Could not close the image generation client")
 
 
 app = FastAPI(

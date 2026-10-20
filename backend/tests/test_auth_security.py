@@ -5,6 +5,7 @@ No application .env, production database, mail or AI provider is used.
 """
 
 import asyncio
+import base64
 import io
 import json
 import logging
@@ -18,6 +19,8 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from email.message import Message
+from email.parser import BytesParser
+from email.policy import default as email_policy
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -68,6 +71,10 @@ settings = types.SimpleNamespace(
     PDF_MAX_CONCURRENT_PARSERS=2,
     CHROMA_PERSIST_DIR=root / "chroma_db",
     GEMINI_API_KEY="",
+    CLOUDFLARE_AI_ACCOUNT_ID="",
+    CLOUDFLARE_AI_API_TOKEN="",
+    IMAGE_GENERATION_TIMEOUT_SECONDS=120,
+    IMAGE_GENERATION_MAX_ATTEMPTS=3,
 )
 for directory in (
     settings.UPLOAD_DIR,
@@ -86,6 +93,7 @@ vectors = Mock()
 vectors.get_document_chunks.return_value = []
 module("app.repositories.vector_store", vector_store_repo=vectors)
 module("app.services.rag_service", rag_service=Mock())
+module("app.services.image_gen_service", image_gen_service=Mock(aclose=AsyncMock()))
 
 
 class Orchestrator:
@@ -1820,12 +1828,16 @@ class SecurityTests(unittest.TestCase):
                     main.chat_history_service, "purge_expired_temporary_sessions"
                 ) as purge,
                 patch.object(main, "_periodic_temporary_cleanup", cleanup),
+                patch.object(
+                    main.image_gen_service, "aclose", new_callable=AsyncMock
+                ) as close_images,
             ):
                 async with app.router.lifespan_context(app):
                     await asyncio.wait_for(started.wait(), timeout=1)
                     initialize.assert_called_once_with()
                     purge.assert_called_once_with()
                 self.assertTrue(stopped.is_set())
+                close_images.assert_awaited_once()
 
         asyncio.run(exercise())
 
@@ -2900,33 +2912,108 @@ class SecurityTests(unittest.TestCase):
                             (root / row["file_path"]).exists(), backend != "r2"
                         )
 
-    def reference_generator(self):
-        # Load the real service without environment credentials or live providers.
-        with patch("os.environ", {"GEMINI_API_KEY": ""}):
-            actual = runpy.run_path(
+    def reference_generator(self, handler=None):
+        """Load the production constructor with only an offline HTTP transport."""
+        original = httpx.AsyncClient
+
+        def client(**kwargs):
+            self.assertFalse(kwargs["follow_redirects"])
+            self.assertFalse(kwargs["trust_env"])
+            self.assertEqual(
+                kwargs["timeout"].read, settings.IMAGE_GENERATION_TIMEOUT_SECONDS
+            )
+            kwargs["transport"] = httpx.MockTransport(
+                handler
+                or (
+                    lambda request: httpx.Response(
+                        200, json=self.image_provider_payload()
+                    )
+                )
+            )
+            return original(**kwargs)
+
+        with (
+            patch.object(settings, "CLOUDFLARE_AI_ACCOUNT_ID", "a" * 32),
+            patch.object(
+                settings, "CLOUDFLARE_AI_API_TOKEN", "fixture-workers-ai-token"
+            ),
+            patch.object(httpx, "AsyncClient", side_effect=client),
+        ):
+            return runpy.run_path(
                 str(
                     Path(__file__).resolve().parents[1]
                     / "app/services/image_gen_service.py"
                 )
             )["image_gen_service"]
-        actual.client = Mock()
-        actual.client.models.generate_content.return_value = types.SimpleNamespace(
-            text="Reference-conditioned prompt"
-        )
-        actual.generate_image = AsyncMock(return_value=Mock())
-        return actual
 
-    def test_reference_analysis_uses_actual_image_bytes_and_mime_in_all_storage_modes(
-        self,
-    ):
+    async def image_provider_request(self, handler, operation=None):
+        actual = self.reference_generator(handler)
+        # Backoff is tested through request counts, without delaying the suite.
+        original_sleep = asyncio.sleep
+
+        async def fast_sleep(delay):
+            await original_sleep(0)
+
+        try:
+            with patch.object(asyncio, "sleep", side_effect=fast_sleep):
+                if operation:
+                    return await operation(actual)
+                return await actual.generate_image("  A tree  ", "alice-session")
+        finally:
+            await actual.aclose()
+
+    def image_provider_payload(self):
+        return {
+            "success": True,
+            "result": {"image": base64.b64encode(self.image_fixture()).decode()},
+            "errors": [],
+            "messages": [],
+        }
+
+    def image_multipart(self, request):
+        self.assertEqual(request.method, "POST")
+        self.assertEqual(request.url.host, "api.cloudflare.com")
+        self.assertEqual(
+            request.url.path,
+            "/client/v4/accounts/"
+            + "a" * 32
+            + "/ai/run/@cf/black-forest-labs/flux-2-klein-4b",
+        )
+        self.assertEqual(
+            request.headers["authorization"], "Bearer fixture-workers-ai-token"
+        )
+        content_type = request.headers["content-type"]
+        self.assertTrue(content_type.startswith("multipart/form-data; boundary="))
+        message = BytesParser(policy=email_policy).parsebytes(
+            b"Content-Type: " + content_type.encode() + b"\r\n\r\n" + request.content
+        )
+        return {
+            part.get_param("name", header="content-disposition"): (
+                part.get_content_type(),
+                part.get_payload(decode=True),
+            )
+            for part in message.iter_parts()
+        }
+
+    def test_reference_analysis_uses_actual_images_in_all_storage_modes(self):
+        from PIL import Image
+
+        from app.services.media_service import media_service
         from app.services.storage_service import storage_service
 
-        for backend, image_format, mime in (
-            ("local", "PNG", "image/png"),
-            ("r2", "JPEG", "image/jpeg"),
-            ("fallback", "WEBP", "image/webp"),
+        for backend, image_format in (
+            ("local", "PNG"),
+            ("r2", "JPEG"),
+            ("fallback", "WEBP"),
+            ("local", "GIF"),
+            ("local", "BMP"),
         ):
-            actual = self.reference_generator()
+            calls = []
+
+            def handler(request):
+                calls.append(self.image_multipart(request))
+                return httpx.Response(200, json=self.image_provider_payload())
+
             client = Mock()
             image_bytes = self.image_fixture(image_format)
             client.get_object.return_value = {"Body": io.BytesIO(image_bytes)}
@@ -2934,72 +3021,129 @@ class SecurityTests(unittest.TestCase):
                 RuntimeError("fixture R2 failure") if backend == "fallback" else None
             )
             with (
+                self.subTest(backend=backend),
                 patch.object(storage_service, "_s3_client", client),
                 patch.object(storage_service, "_initialized", backend != "local"),
-                patch.object(
-                    settings, "DEFAULT_LLM_MODEL", "fixture-model", create=True
-                ),
             ):
                 _, key = storage_service.upload_file(
                     image_bytes, f"media/uploads/{backend}-reference.img"
                 )
-                asyncio.run(
-                    actual.generate_from_reference(
+
+                async def edit(actual):
+                    return await actual.generate_from_reference(
                         "Change the background", key, "alice-session", self.alice.id
                     )
-                )
-            contents = actual.client.models.generate_content.call_args.kwargs[
-                "contents"
-            ]
-            self.assertEqual(contents[0].inline_data.data, image_bytes)
-            self.assertEqual(contents[0].inline_data.mime_type, mime)
-            actual.generate_image.assert_awaited_once_with(
-                prompt="Reference-conditioned prompt",
-                session_id="alice-session",
-                user_id=self.alice.id,
+
+                generated = asyncio.run(self.image_provider_request(handler, edit))
+                client.get_object.return_value = {"Body": io.BytesIO(image_bytes)}
+                self.assertEqual(media_service.get_media_bytes(key), image_bytes)
+            self.assertEqual(calls[0]["prompt"][1], b"Change the background")
+            self.assertEqual(calls[0]["input_image_0"][0], "image/png")
+            with Image.open(io.BytesIO(calls[0]["input_image_0"][1])) as sent:
+                with Image.open(io.BytesIO(image_bytes)) as original:
+                    self.assertEqual(sent.size, original.size)
+                    self.assertEqual(
+                        sent.convert("RGB").tobytes(), original.convert("RGB").tobytes()
+                    )
+            self.assertEqual(generated.prompt, "Change the background")
+
+    def test_reference_images_are_oriented_resized_and_stripped_without_changing_upload(
+        self,
+    ):
+        from PIL import Image
+
+        from app.services.media_service import media_service
+
+        output = io.BytesIO()
+        image = Image.new("RGB", (1200, 600), "red")
+        exif = Image.Exif()
+        exif[274] = 6
+        exif[315] = "fixture private metadata"
+        image.save(output, format="JPEG", exif=exif)
+        reference = output.getvalue()
+        calls = []
+
+        def handler(request):
+            calls.append(self.image_multipart(request))
+            return httpx.Response(200, json=self.image_provider_payload())
+
+        async def edit(actual):
+            return await actual.generate_from_reference(
+                "Rotate the scene", "media/uploads/reference.jpg", "alice-session"
             )
+
+        with patch.object(media_service, "get_media_bytes", return_value=reference):
+            asyncio.run(self.image_provider_request(handler, edit))
+        with Image.open(io.BytesIO(calls[0]["input_image_0"][1])) as sent:
+            self.assertEqual(sent.size, (256, 511))
+            self.assertEqual(sent.format, "PNG")
+            self.assertFalse(sent.getexif())
+            self.assertNotIn("exif", sent.info)
+        self.assertEqual(output.getvalue(), reference)
 
     def test_reference_analysis_failures_never_fall_back_to_unconditioned_generation(
         self,
     ):
         from app.services.media_service import media_service
 
-        for failure in ("missing", "unconfigured", "provider", "empty"):
-            actual = self.reference_generator()
-            if failure == "unconfigured":
-                actual.client = None
-            elif failure == "provider":
-                actual.client.models.generate_content.side_effect = RuntimeError(
-                    "private provider detail"
+        for failure in ("missing", "invalid", "unconfigured", "provider", "empty"):
+            calls = []
+
+            def handler(request):
+                calls.append(self.image_multipart(request))
+                if failure == "provider":
+                    raise RuntimeError("private provider detail")
+                payload = self.image_provider_payload()
+                if failure == "empty":
+                    payload["result"] = {}
+                return httpx.Response(200, json=payload)
+
+            async def edit(actual):
+                if failure == "unconfigured":
+                    await actual.aclose()
+                return await actual.generate_from_reference(
+                    "Use this image", "media/uploads/reference.png"
                 )
-            elif failure == "empty":
-                actual.client.models.generate_content.return_value.text = "  "
+
+            reference = (
+                None
+                if failure == "missing"
+                else b"invalid"
+                if failure == "invalid"
+                else self.image_fixture()
+            )
             with (
-                patch.object(
-                    media_service,
-                    "get_media_bytes",
-                    return_value=None if failure == "missing" else self.image_fixture(),
-                ),
-                patch.object(
-                    settings, "DEFAULT_LLM_MODEL", "fixture-model", create=True
-                ),
+                self.subTest(failure=failure),
+                patch.object(media_service, "get_media_bytes", return_value=reference),
+                patch.object(media_service, "save_generated_image") as save,
                 self.assertRaises(RuntimeError) as error,
             ):
-                asyncio.run(
-                    actual.generate_from_reference(
-                        "Use this image", "media/uploads/reference.png"
-                    )
-                )
+                asyncio.run(self.image_provider_request(handler, edit))
             self.assertNotIn("private provider detail", str(error.exception))
-            actual.generate_image.assert_not_awaited()
+            self.assertEqual(
+                len(calls),
+                0 if failure in ("missing", "invalid", "unconfigured") else 1,
+            )
+            if calls:
+                self.assertIn("input_image_0", calls[0])
+            save.assert_not_called()
 
     def test_reference_analysis_failure_reaches_clients_as_an_error_event(self):
         from app.api.v1.endpoints import chat
 
-        actual = self.reference_generator()
-        actual.client.models.generate_content.side_effect = RuntimeError(
-            "private provider detail"
-        )
+        calls = []
+
+        def handler(request):
+            calls.append(request)
+            return httpx.Response(
+                429,
+                json={
+                    "success": False,
+                    "errors": [{"code": 3036, "message": "private provider detail"}],
+                },
+            )
+
+        actual = self.reference_generator(handler)
         (settings.UPLOAD_IMAGE_DIR / "fixture.png").write_bytes(self.image_fixture())
         providers = {}
         for name in ("llm_service", "image_gen_service", "web_search_service"):
@@ -3012,27 +3156,350 @@ class SecurityTests(unittest.TestCase):
                     Path(__file__).resolve().parents[1] / "app/services/orchestrator.py"
                 )
             )["chat_orchestrator"]
-        with (
-            patch.object(chat, "chat_orchestrator", orchestrator),
-            patch.object(settings, "DEFAULT_LLM_MODEL", "fixture-model", create=True),
-        ):
-            response = self.request(
-                "POST",
-                "/chat/stream",
-                self.token,
-                json={
-                    "session_id": "alice-session",
-                    "mode": "IMAGE_GENERATION",
-                    "message": "Draw a variation",
-                    "attachments": [{"id": "image", "file_type": "image"}],
-                },
-            )
+        try:
+            with (
+                patch.object(chat, "chat_orchestrator", orchestrator),
+                patch.object(
+                    settings, "DEFAULT_LLM_MODEL", "fixture-model", create=True
+                ),
+            ):
+                response = self.request(
+                    "POST",
+                    "/chat/stream",
+                    self.token,
+                    json={
+                        "session_id": "alice-session",
+                        "mode": "IMAGE_GENERATION",
+                        "message": "Draw a variation",
+                        "attachments": [{"id": "image", "file_type": "image"}],
+                    },
+                )
+        finally:
+            asyncio.run(actual.aclose())
         self.assertEqual(response.status_code, 200)
         self.assertIn('"event": "error"', response.text)
-        self.assertIn("reference image could not be analyzed", response.text)
+        self.assertIn("free image allowance", response.text)
+        self.assertIn('"event": "done"', response.text)
         self.assertNotIn('"event": "media"', response.text)
         self.assertNotIn("private provider detail", response.text)
-        actual.generate_image.assert_not_awaited()
+        self.assertEqual(len(calls), 1)
+
+    def test_workers_ai_generates_and_edits_with_owned_downloads(self):
+        calls = []
+
+        def handler(request):
+            calls.append(self.image_multipart(request))
+            return httpx.Response(200, json=self.image_provider_payload())
+
+        generated = asyncio.run(self.image_provider_request(handler))
+        self.assertEqual(generated.prompt, "A tree")
+        self.assertEqual(set(calls[0]), {"prompt", "width", "height"})
+        self.assertEqual(calls[0]["prompt"][1], b"A tree")
+        self.assertEqual(calls[0]["width"][1], b"1024")
+        self.assertEqual(calls[0]["height"][1], b"1024")
+        reference = self.image_fixture("JPEG")
+        (settings.UPLOAD_IMAGE_DIR / "fixture.png").write_bytes(reference)
+
+        async def edit(actual):
+            return await actual.generate_from_reference(
+                "Make the sky blue", "media/uploads/fixture.png", "alice-session"
+            )
+
+        edited = asyncio.run(self.image_provider_request(handler, edit))
+        self.assertEqual(calls[1]["prompt"][1], b"Make the sky blue")
+        self.assertIn("input_image_0", calls[1])
+        library = self.request("GET", "/media/assets", self.token).json()["items"]
+        for asset in (generated, edited):
+            item = next(item for item in library if item["id"] == asset.id)
+            self.assertEqual(item["user_id"], self.alice.id)
+            self.assertEqual(
+                self.request("GET", item["url"].removeprefix("/api/v1")).content,
+                self.image_fixture(),
+            )
+
+    def test_workers_ai_retries_only_transient_failures_with_one_budget(self):
+        for status, code, attempts, message in (
+            (400, 5006, 1, "could not be processed"),
+            (400, 5007, 1, "model is unavailable"),
+            (401, 10000, 1, "provider access"),
+            (402, 0, 1, "current provider plan"),
+            (403, 5018, 1, "provider access"),
+            (403, 5035, 1, "current provider plan"),
+            (404, 3042, 1, "model is unavailable"),
+            (413, 3006, 1, "too large"),
+            (429, 3036, 1, "free image allowance"),
+            (500, 3036, 1, "free image allowance"),
+            (429, 0, 1, "rate limited"),
+            (429, 3040, 3, "rate limited"),
+            (400, 3030, 1, "blocked by the provider"),
+            (500, 3030, 1, "blocked by the provider"),
+            (200, 3030, 1, "blocked by the provider"),
+            (408, 3007, 3, "temporarily unavailable"),
+            (500, 0, 3, "temporarily unavailable"),
+            (502, 0, 3, "temporarily unavailable"),
+            (503, 0, 3, "temporarily unavailable"),
+            (504, 0, 3, "temporarily unavailable"),
+            (302, 0, 1, "temporarily unavailable"),
+        ):
+            calls = []
+
+            def handler(request):
+                calls.append(request)
+                return httpx.Response(
+                    status,
+                    json={
+                        "success": False,
+                        "errors": [
+                            {"code": code, "message": "private provider details"}
+                        ],
+                    },
+                    headers={"location": "https://untrusted.invalid/"},
+                )
+
+            with (
+                self.subTest(status=status, code=code),
+                self.assertRaises(RuntimeError) as error,
+            ):
+                asyncio.run(self.image_provider_request(handler))
+            self.assertIn(message, str(error.exception))
+            self.assertNotIn("private provider details", str(error.exception))
+            self.assertEqual(len(calls), attempts)
+
+        for transient in (503, "connect", "connect_timeout"):
+            calls = []
+
+            def recovery(request):
+                calls.append(request)
+                if len(calls) == 1:
+                    if transient == "connect":
+                        raise httpx.ConnectError(
+                            "fixture network error", request=request
+                        )
+                    if transient == "connect_timeout":
+                        raise httpx.ConnectTimeout("fixture timeout", request=request)
+                    return httpx.Response(503, json={"success": False})
+                return httpx.Response(200, json=self.image_provider_payload())
+
+            asyncio.run(self.image_provider_request(recovery))
+            self.assertEqual(len(calls), 2)
+
+        calls = []
+
+        def read_timeout(request):
+            calls.append(request)
+            raise httpx.ReadTimeout("private timeout detail", request=request)
+
+        with self.assertRaisesRegex(RuntimeError, "timed out"):
+            asyncio.run(self.image_provider_request(read_timeout))
+        self.assertEqual(
+            len(calls), 1
+        )  # Do not repeat an ambiguously completed generation.
+
+    def test_workers_ai_rejects_invalid_output_without_saving(self):
+        from app.services.media_service import media_service
+
+        for failure in (
+            "empty",
+            "text",
+            "list",
+            "result_type",
+            "image_type",
+            "base64",
+            "corrupt",
+            "svg",
+            "url",
+            "invalid_json",
+            "false_success",
+            "errors_with_image",
+            "oversize_image",
+        ):
+            calls = []
+
+            def handler(request):
+                calls.append(request)
+                payload = self.image_provider_payload()
+                if failure == "empty":
+                    payload["result"] = {}
+                elif failure == "text":
+                    payload["result"] = {"text": "No image"}
+                elif failure == "list":
+                    payload = []
+                elif failure == "result_type":
+                    payload["result"] = "image"
+                elif failure == "image_type":
+                    payload["result"]["image"] = [1, 2]
+                elif failure == "base64":
+                    payload["result"]["image"] = "!!!invalid"
+                elif failure in ("corrupt", "svg"):
+                    payload["result"]["image"] = base64.b64encode(
+                        b"not an image" if failure == "corrupt" else b"<svg></svg>"
+                    ).decode()
+                elif failure == "url":
+                    payload["result"]["image"] = "https://untrusted.invalid/image.png"
+                elif failure == "invalid_json":
+                    return httpx.Response(200, content=b"{broken")
+                elif failure == "false_success":
+                    payload["success"] = False
+                elif failure == "errors_with_image":
+                    payload["errors"] = [{"code": 3030}]
+                elif failure == "oversize_image":
+                    payload["result"]["image"] = "A" * 160
+                return httpx.Response(200, json=payload)
+
+            async def generate(actual):
+                if failure == "oversize_image":
+                    with patch.dict(
+                        actual._image_bytes.__globals__, {"MAX_FILE_SIZE_BYTES": 16}
+                    ):
+                        return await actual.generate_image("A tree", "alice-session")
+                return await actual.generate_image("A tree", "alice-session")
+
+            with (
+                self.subTest(failure=failure),
+                patch.object(media_service, "save_generated_image") as save,
+                self.assertRaises(RuntimeError),
+            ):
+                asyncio.run(self.image_provider_request(handler, generate))
+            save.assert_not_called()
+            self.assertEqual(len(calls), 1)
+
+    def test_workers_ai_bounds_response_body_even_without_content_length(self):
+        from app.services.media_service import media_service
+
+        for declare_length in (False, True):
+            closed = []
+
+            class LargeBody(httpx.AsyncByteStream):
+                async def __aiter__(self):
+                    yield b"x" * 60
+                    yield b"x" * 60
+                    raise AssertionError("Oversized body must stop reading")
+
+                async def aclose(self):
+                    closed.append(True)
+
+            def handler(request):
+                return httpx.Response(
+                    200,
+                    stream=LargeBody(),
+                    headers={"Content-Length": "120"} if declare_length else {},
+                )
+
+            async def generate(actual):
+                with patch.dict(
+                    actual._read_payload.__globals__, {"MAX_RESPONSE_BYTES": 100}
+                ):
+                    return await actual.generate_image("A tree", "alice-session")
+
+            with patch.object(media_service, "save_generated_image") as save:
+                with self.assertRaisesRegex(RuntimeError, "too large"):
+                    asyncio.run(self.image_provider_request(handler, generate))
+                save.assert_not_called()
+            self.assertEqual(closed, [True])
+
+    def test_workers_ai_configuration_validation_and_storage_failure(self):
+        from app.services.media_service import media_service
+
+        for failure in ("blank", "unconfigured", "aspect_ratio"):
+            calls = []
+
+            def handler(request):
+                calls.append(request)
+                return httpx.Response(200, json=self.image_provider_payload())
+
+            async def generate(actual):
+                if failure == "unconfigured":
+                    await actual.aclose()
+                return await actual.generate_image(
+                    " " if failure == "blank" else "A tree",
+                    aspect_ratio="bad" if failure == "aspect_ratio" else "1:1",
+                )
+
+            with self.subTest(failure=failure), self.assertRaises(RuntimeError):
+                asyncio.run(self.image_provider_request(handler, generate))
+            self.assertEqual(calls, [])
+
+        for account, token in (
+            ("", ""),
+            ("../bad", "token"),
+            ("a" * 32, ""),
+            ("a" * 32, "bad\r\nheader"),
+        ):
+            with (
+                self.subTest(account=account),
+                patch.object(settings, "CLOUDFLARE_AI_ACCOUNT_ID", account),
+                patch.object(settings, "CLOUDFLARE_AI_API_TOKEN", token),
+                patch.object(httpx, "AsyncClient") as client,
+            ):
+                actual = runpy.run_path(
+                    str(
+                        Path(__file__).resolve().parents[1]
+                        / "app/services/image_gen_service.py"
+                    )
+                )["image_gen_service"]
+                self.assertIsNone(actual.client)
+                client.assert_not_called()
+                with self.assertRaisesRegex(RuntimeError, "not configured"):
+                    asyncio.run(actual.generate_image("A tree"))
+
+        calls = []
+
+        def handler(request):
+            calls.append(request)
+            return httpx.Response(200, json=self.image_provider_payload())
+
+        with patch.object(
+            media_service,
+            "save_generated_image",
+            side_effect=RuntimeError("private storage detail"),
+        ) as save:
+            with self.assertRaisesRegex(RuntimeError, "could not be saved") as error:
+                asyncio.run(self.image_provider_request(handler))
+        self.assertNotIn("private storage detail", str(error.exception))
+        save.assert_called_once()
+        self.assertEqual(len(calls), 1)
+
+    def test_workers_ai_deadline_and_cancellation_stop_the_provider_request(self):
+        from app.services.media_service import media_service
+
+        async def exercise(cancel):
+            entered, stopped = asyncio.Event(), asyncio.Event()
+
+            async def slow(request):
+                entered.set()
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    stopped.set()
+
+            async def generate(actual):
+                task = asyncio.create_task(
+                    actual.generate_image("A tree", "alice-session")
+                )
+                await entered.wait()
+                if cancel:
+                    task.cancel()
+                    with self.assertRaises(asyncio.CancelledError):
+                        await task
+                else:
+                    with self.assertRaisesRegex(RuntimeError, "timed out"):
+                        await task
+                self.assertTrue(stopped.is_set())
+
+            await self.image_provider_request(slow, generate)
+
+        with patch.object(media_service, "save_generated_image") as save:
+            with patch.object(settings, "IMAGE_GENERATION_TIMEOUT_SECONDS", 0.05):
+                asyncio.run(exercise(False))
+            asyncio.run(exercise(True))
+            save.assert_not_called()
+        actual = self.reference_generator()
+        client = actual.client
+        client.aclose = AsyncMock()
+        asyncio.run(actual.aclose())
+        asyncio.run(actual.aclose())
+        client.aclose.assert_awaited_once()
+        self.assertIsNone(actual.client)
 
     @unittest.skipUnless(sys.platform == "win32", "Windows junction regression")
     def test_storage_upload_blocks_junction_writes_outside_data_root(self):
