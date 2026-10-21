@@ -201,7 +201,9 @@ export default function App() {
   const sessionSortRef = useRef<SessionSortOrder>("last_created");
   const sessionsRequestRef = useRef(0);
   const sessionsAbortRef = useRef<AbortController | null>(null);
-  const sessionsSearchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sessionsSearchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
   // Offset counts server rows, independently of optimistic/local list changes.
   const sessionsPageRef = useRef({ offset: 0, hasMore: false, ready: false });
 
@@ -503,7 +505,8 @@ export default function App() {
     const authVersion = authVersionRef.current;
     if (
       append &&
-      (!sessionsPageRef.current.ready || !sessionsPageRef.current.hasMore ||
+      (!sessionsPageRef.current.ready ||
+        !sessionsPageRef.current.hasMore ||
         sessionsAbortRef.current)
     )
       return;
@@ -591,7 +594,9 @@ export default function App() {
 
   const handleToggleSortOrder = async () => {
     const nextOrder: SessionSortOrder =
-      sessionSortRef.current === "first_created" ? "last_created" : "first_created";
+      sessionSortRef.current === "first_created"
+        ? "last_created"
+        : "first_created";
     sessionSortRef.current = nextOrder;
     setSessionSortOrder(nextOrder);
     // Sorting still works if the device cannot persist this preference.
@@ -1610,12 +1615,8 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      {/* Android uses native resize (app.json); only iOS needs JS keyboard avoidance. */}
-      <KeyboardAvoidingView
-        enabled={Platform.OS === "ios"}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-        style={styles.safeArea}
-      >
+      {/* Padding covers keyboard overlap left by native resize, including on Android. */}
+      <KeyboardAvoidingView behavior="padding" style={styles.safeArea}>
         <SafeAreaView
           style={[styles.safeArea, { backgroundColor: theme.bgApp }]}
           edges={["top", "left", "right"]}
@@ -1720,7 +1721,9 @@ export default function App() {
                   onPress={() => void selectSession(activeSessionId)}
                   style={{ paddingHorizontal: 12, paddingBottom: 12 }}
                 >
-                  <Text style={{ color: theme.primary }}>Retry loading chat</Text>
+                  <Text style={{ color: theme.primary }}>
+                    Retry loading chat
+                  </Text>
                 </TouchableOpacity>
               )}
               {activeSessionId &&

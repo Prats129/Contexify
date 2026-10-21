@@ -80,7 +80,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     !isBusy &&
     !isUploading;
   const insets = useSafeAreaInsets();
-  const [isKeyboardOpen, setIsKeyboardOpen] = useState(false);
+  const [isKeyboardOpen, setIsKeyboardOpen] = useState(() =>
+    Keyboard.isVisible(),
+  );
   const [isExpanded, setIsExpanded] = useState(false);
 
   const handleContentSizeChange = (e: {
