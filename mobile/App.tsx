@@ -195,6 +195,26 @@ export default function App() {
   const [isRefreshingSessions, setIsRefreshingSessions] =
     useState<boolean>(false);
 
+  const [sessionSearchQuery, setSessionSearchQuery] = useState("");
+  const [sessionsError, setSessionsError] = useState<string | null>(null);
+  const sessionSearchRef = useRef("");
+  const sessionSortRef = useRef<SessionSortOrder>("last_created");
+  const sessionsRequestRef = useRef(0);
+  const sessionsAbortRef = useRef<AbortController | null>(null);
+  const sessionsSearchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Offset counts server rows, independently of optimistic/local list changes.
+  const sessionsPageRef = useRef({ offset: 0, hasMore: false, ready: false });
+
+  useEffect(
+    () => () => {
+      sessionsRequestRef.current++;
+      sessionsAbortRef.current?.abort();
+      if (sessionsSearchTimerRef.current)
+        clearTimeout(sessionsSearchTimerRef.current);
+    },
+    [],
+  );
+
   // Interaction State
   const isSendingRef = useRef(false);
   isSendingRef.current = isSending;
@@ -431,6 +451,7 @@ export default function App() {
         setSessionSortOrder(savedSort);
       }
 
+      sessionSortRef.current = initialSort;
       if (savedUserStr && (await apiService.hasUserSession())) {
         const cached: User = JSON.parse(savedUserStr);
         const user = await apiService.getCurrentUser(cached.id);
@@ -472,96 +493,113 @@ export default function App() {
   const loadUserSessions = async (
     userId: string,
     sortOverride?: SessionSortOrder,
+    append = false,
   ) => {
-    const activeSort = sortOverride || sessionSortOrder;
+    if (sessionsSearchTimerRef.current)
+      clearTimeout(sessionsSearchTimerRef.current);
+    const activeSort = sortOverride ?? sessionSortRef.current;
+    sessionSortRef.current = activeSort;
+    const search = sessionSearchRef.current;
     const authVersion = authVersionRef.current;
+    if (
+      append &&
+      (!sessionsPageRef.current.ready || !sessionsPageRef.current.hasMore ||
+        sessionsAbortRef.current)
+    )
+      return;
+    sessionsAbortRef.current?.abort();
+    const controller = new AbortController();
+    sessionsAbortRef.current = controller;
+    const request = ++sessionsRequestRef.current;
+    const offset = append ? sessionsPageRef.current.offset : 0;
+    if (!append) sessionsPageRef.current.ready = false;
+    setSessionsError(null);
+    setIsLoadingMoreSessions(append);
+    setIsRefreshingSessions(!append);
+    const isCurrent = () =>
+      request === sessionsRequestRef.current &&
+      authVersion === authVersionRef.current;
     try {
       const res = await apiService.getUserSessions(userId, {
         limit: SESSIONS_PAGE_SIZE,
-        offset: 0,
+        offset,
         sort_by: activeSort,
+        search,
+        signal: controller.signal,
       });
-      const safeList = Array.isArray(res.sessions) ? res.sessions : [];
-      if (authVersion !== authVersionRef.current) return;
-      setSessions(sortMobileSessions(safeList, activeSort));
-      setTotalSessions(res.total ?? safeList.length);
-      setHasMoreSessions(Boolean(res.has_more));
-    } catch (err) {
-      if (authVersion !== authVersionRef.current) return;
-      console.warn("Failed to load sessions:", err);
-      setSessions([]);
-      setTotalSessions(0);
-      setHasMoreSessions(false);
+      if (!isCurrent()) return;
+      const incoming = res.sessions;
+      setSessions((previous) => {
+        const combined = append ? [...previous, ...incoming] : incoming;
+        return sortMobileSessions(
+          Array.from(
+            new Map(combined.map((session) => [session.id, session])).values(),
+          ),
+          activeSort,
+        );
+      });
+      setTotalSessions(res.total);
+      setHasMoreSessions(res.has_more);
+      sessionsPageRef.current = {
+        offset: offset + incoming.length,
+        hasMore: res.has_more,
+        ready: true,
+      };
+    } catch {
+      if (!isCurrent() || controller.signal.aborted) return;
+      setSessionsError(
+        "Could not load conversations. Your existing chats have been kept. Please retry.",
+      );
+    } finally {
+      if (isCurrent()) {
+        sessionsAbortRef.current = null;
+        setIsLoadingMoreSessions(false);
+        setIsRefreshingSessions(false);
+      }
     }
   };
 
   const handleLoadMoreSessions = async () => {
-    if (!currentUser || isLoadingMoreSessions || !hasMoreSessions) return;
-    setIsLoadingMoreSessions(true);
-    try {
-      const res = await apiService.getUserSessions(currentUser.id, {
-        limit: SESSIONS_PAGE_SIZE,
-        offset: sessions.length,
-        sort_by: sessionSortOrder,
-      });
-      const newSessions = Array.isArray(res.sessions) ? res.sessions : [];
-      setSessions((prev) => {
-        const existingIds = new Set(prev.map((s) => s.id));
-        const filtered = newSessions.filter((s) => !existingIds.has(s.id));
-        return sortMobileSessions([...prev, ...filtered], sessionSortOrder);
-      });
-      setTotalSessions(res.total ?? sessions.length + newSessions.length);
-      setHasMoreSessions(Boolean(res.has_more));
-    } catch (err) {
-      console.warn("Failed to load more sessions:", err);
-    } finally {
-      setIsLoadingMoreSessions(false);
-    }
+    if (!currentUser || sessionsError) return;
+    await loadUserSessions(currentUser.id, undefined, true);
   };
 
   const handleRefreshSessions = async () => {
-    if (!currentUser || isRefreshingSessions) return;
-    setIsRefreshingSessions(true);
-    try {
-      const res = await apiService.getUserSessions(currentUser.id, {
-        limit: SESSIONS_PAGE_SIZE,
-        offset: 0,
-        sort_by: sessionSortOrder,
-      });
-      const safeList = Array.isArray(res.sessions) ? res.sessions : [];
-      setSessions(sortMobileSessions(safeList, sessionSortOrder));
-      setTotalSessions(res.total ?? safeList.length);
-      setHasMoreSessions(Boolean(res.has_more));
-    } catch (err) {
-      console.warn("Failed to refresh sessions:", err);
-    } finally {
-      setIsRefreshingSessions(false);
-    }
+    if (currentUser) await loadUserSessions(currentUser.id);
+  };
+
+  const handleSearchSessions = (value: string) => {
+    setSessionSearchQuery(value);
+    const search = value.trim();
+    if (sessionSearchRef.current === search) return;
+    sessionSearchRef.current = search;
+    sessionsRequestRef.current++;
+    sessionsAbortRef.current?.abort();
+    sessionsAbortRef.current = null;
+    sessionsPageRef.current.ready = false;
+    if (sessionsSearchTimerRef.current)
+      clearTimeout(sessionsSearchTimerRef.current);
+    setSessionsError(null);
+    setIsLoadingMoreSessions(false);
+    setIsRefreshingSessions(Boolean(currentUserRef.current));
+    const authVersion = authVersionRef.current;
+    sessionsSearchTimerRef.current = setTimeout(() => {
+      if (currentUserRef.current && authVersion === authVersionRef.current)
+        void loadUserSessions(currentUserRef.current.id);
+    }, 300);
   };
 
   const handleToggleSortOrder = async () => {
     const nextOrder: SessionSortOrder =
-      sessionSortOrder === "first_created" ? "last_created" : "first_created";
+      sessionSortRef.current === "first_created" ? "last_created" : "first_created";
+    sessionSortRef.current = nextOrder;
     setSessionSortOrder(nextOrder);
-    await AsyncStorage.setItem("contexify_mobile_sort_order", nextOrder);
-    if (currentUser) {
-      setIsRefreshingSessions(true);
-      try {
-        const res = await apiService.getUserSessions(currentUser.id, {
-          limit: SESSIONS_PAGE_SIZE,
-          offset: 0,
-          sort_by: nextOrder,
-        });
-        const safeList = Array.isArray(res.sessions) ? res.sessions : [];
-        setSessions(sortMobileSessions(safeList, nextOrder));
-        setTotalSessions(res.total ?? safeList.length);
-        setHasMoreSessions(Boolean(res.has_more));
-      } finally {
-        setIsRefreshingSessions(false);
-      }
-    } else {
-      setSessions((prev) => sortMobileSessions(prev, nextOrder));
-    }
+    // Sorting still works if the device cannot persist this preference.
+    void AsyncStorage.setItem("contexify_mobile_sort_order", nextOrder).catch(
+      () => undefined,
+    );
+    if (currentUser) await loadUserSessions(currentUser.id, nextOrder);
+    else setSessions((previous) => sortMobileSessions(previous, nextOrder));
   };
 
   const handleTogglePinSession = async (sessionId: string) => {
@@ -1490,6 +1528,20 @@ export default function App() {
   // --- 10. Auth Success / Logout ---
   const cancelStreamForAuthChange = () => {
     authVersionRef.current++;
+    sessionsRequestRef.current++;
+    sessionsAbortRef.current?.abort();
+    sessionsAbortRef.current = null;
+    if (sessionsSearchTimerRef.current)
+      clearTimeout(sessionsSearchTimerRef.current);
+    sessionSearchRef.current = "";
+    sessionsPageRef.current = { offset: 0, hasMore: false, ready: false };
+    setSessionSearchQuery("");
+    setSessionsError(null);
+    setIsLoadingMoreSessions(false);
+    setIsRefreshingSessions(false);
+    setSessions([]);
+    setTotalSessions(0);
+    setHasMoreSessions(false);
     setClearedChats({});
     isSendingRef.current = false;
     conversationStore.reset();
@@ -1515,9 +1567,6 @@ export default function App() {
     setCurrentUser(null);
     setIsTemporaryChat(false);
     await AsyncStorage.removeItem("contexify_mobile_user");
-    setSessions([]);
-    setTotalSessions(0);
-    setHasMoreSessions(false);
   };
 
   useEffect(
@@ -1663,6 +1712,16 @@ export default function App() {
                 >
                   {operationError || historyError}
                 </Text>
+              )}
+              {historyError && activeSessionId && (
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  disabled={isLoadingHistory}
+                  onPress={() => void selectSession(activeSessionId)}
+                  style={{ paddingHorizontal: 12, paddingBottom: 12 }}
+                >
+                  <Text style={{ color: theme.primary }}>Retry loading chat</Text>
+                </TouchableOpacity>
               )}
               {activeSessionId &&
                 (isClearingChat || clearedChats[activeSessionId]) && (
@@ -2078,6 +2137,9 @@ export default function App() {
             onClose={() => setDrawerVisible(false)}
             currentUser={currentUser}
             sessions={sessions}
+            searchQuery={sessionSearchQuery}
+            onSearchQueryChange={handleSearchSessions}
+            sessionsError={sessionsError}
             totalSessions={totalSessions}
             hasMoreSessions={hasMoreSessions}
             isLoadingMoreSessions={isLoadingMoreSessions}

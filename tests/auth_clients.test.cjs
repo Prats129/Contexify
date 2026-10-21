@@ -1136,6 +1136,15 @@ function client(platform, handleRequest, environment = {}) {
   const storage = new Map();
   const requests = [];
   const uploads = [];
+  const asyncStorage = {
+    getItem: async (key) => storage.get(key) ?? null,
+    setItem: async (key, value) => {
+      storage.set(key, value);
+    },
+    removeItem: async (key) => {
+      storage.delete(key);
+    },
+  };
   class XHR {
     constructor() {
       this.headers = {};
@@ -1160,13 +1169,14 @@ function client(platform, handleRequest, environment = {}) {
     exports,
     Headers,
     URLSearchParams,
+    URL,
     AbortController,
     DOMException,
     TextDecoder,
     console,
     setTimeout,
     clearTimeout,
-    process: { env: {} },
+    process: { env: environment },
     XMLHttpRequest: XHR,
     FormData: class {
       values = new Map();
@@ -1185,15 +1195,7 @@ function client(platform, handleRequest, environment = {}) {
     require: (name) => {
       if (name === "@react-native-async-storage/async-storage")
         return {
-          default: {
-            getItem: async (key) => storage.get(key) ?? null,
-            setItem: async (key, value) => {
-              storage.set(key, value);
-            },
-            removeItem: async (key) => {
-              storage.delete(key);
-            },
-          },
+          default: asyncStorage,
         };
       if (name === "react-native")
         return { Platform: { select: () => "http://fixture.invalid" } };
@@ -1220,6 +1222,10 @@ function client(platform, handleRequest, environment = {}) {
   return {
     api: exports.apiService,
     setApiBaseUrl: exports.setApiBaseUrl,
+    getApiBaseUrl: exports.getApiBaseUrl,
+    resetApiBaseUrl: exports.resetApiBaseUrl,
+    asyncStorage,
+    context,
     storage,
     requests,
     uploads,
@@ -1244,6 +1250,251 @@ const credentials = (token) => ({
   expires_at: Date.now() / 1000 + 3600,
 });
 const tick = () => new Promise((resolve) => setImmediate(resolve));
+
+test("mobile: stalled login times out even if native fetch ignores abort, without accepting a late login", async () => {
+  let release;
+  let timeout;
+  let signal;
+  let retry = false;
+  const fixture = client("mobile", (_, options) => {
+    signal = options.signal;
+    if (retry) return response(credentials("retry-token"));
+    return new Promise((resolve) => {
+      release = resolve;
+    });
+  });
+  fixture.context.setTimeout = (callback, delay) => {
+    assert.equal(delay, 30000);
+    timeout = callback;
+    return 1;
+  };
+  fixture.context.clearTimeout = () => {};
+  const pending = fixture.api.login("fixture", "password");
+  const rejected = assert.rejects(
+    pending,
+    /server did not respond within 30 seconds/,
+  );
+  await until(() => release);
+  timeout();
+  await rejected;
+  assert.equal(signal.aborted, true);
+  release(response(credentials("late-token")));
+  await tick();
+  assert.equal(fixture.storage.has("contexify_auth_session"), false);
+  assert.equal(fixture.requests.length, 1);
+  retry = true;
+  await fixture.api.login("fixture", "password");
+  assert.equal(
+    JSON.parse(fixture.storage.get("contexify_auth_session")).access_token,
+    "retry-token",
+  );
+});
+
+test("mobile: authentication failures settle and clean up the request deadline", async () => {
+  const failure = new TypeError("Network request failed");
+  let cleared = 0;
+  const fixture = client("mobile", () => {
+    throw failure;
+  });
+  fixture.context.setTimeout = () => 1;
+  fixture.context.clearTimeout = () => {
+    cleared++;
+  };
+  await assert.rejects(
+    fixture.api.login("fixture", "password"),
+    /Network request failed/,
+  );
+  assert.equal(cleared, 1);
+  assert.equal(fixture.requests.length, 1);
+});
+
+test("mobile: history failures reject while genuine empty history succeeds", async () => {
+  for (const result of [
+    response({}, 503),
+    response({}, 404),
+    response({}),
+    new Error("offline"),
+  ]) {
+    const fixture = client("mobile", (url) => {
+      if (url.endsWith("/user/login")) return response(credentials("signed"));
+      if (result instanceof Error) throw result;
+      return result;
+    });
+    await fixture.api.login("fixture", "password");
+    await assert.rejects(fixture.api.getUserSessions("u1"));
+    await assert.rejects(fixture.api.getSessionHistory("chat-a"));
+  }
+  const fixture = client("mobile", (url) => {
+    if (url.endsWith("/user/login")) return response(credentials("signed"));
+    if (url.includes("/session/list"))
+      return response({ sessions: [], total: 0, has_more: false });
+    return response({ session: { id: "chat-a" }, messages: [], documents: [] });
+  });
+  await fixture.api.login("fixture", "password");
+  assert.equal((await fixture.api.getUserSessions("u1")).sessions.length, 0);
+  assert.equal(
+    (await fixture.api.getSessionHistory("chat-a")).messages.length,
+    0,
+  );
+});
+
+test("mobile: search, pagination and cancellation reach the backend", async () => {
+  const fixture = client("mobile", (url, options) => {
+    if (url.endsWith("/user/login")) return response(credentials("signed"));
+    if (options.signal?.aborted)
+      throw new DOMException("Aborted", "AbortError");
+    return response({ sessions: [], total: 0, has_more: false });
+  });
+  await fixture.api.login("fixture", "password");
+  const controller = new AbortController();
+  await fixture.api.getUserSessions("u1", {
+    search: " older & rare ",
+    limit: 15,
+    offset: 30,
+    sort_by: "first_created",
+    signal: controller.signal,
+  });
+  const request = fixture.requests.at(-1);
+  const query = new URL(request.url).searchParams;
+  assert.equal(query.get("search"), "older & rare");
+  assert.equal(query.get("offset"), "30");
+  assert.equal(query.get("sort_by"), "first_created");
+  assert.equal(request.options.signal, controller.signal);
+  controller.abort();
+  await assert.rejects(
+    fixture.api.getUserSessions("u1", { signal: controller.signal }),
+    { name: "AbortError" },
+  );
+});
+
+test("mobile: reset restores the environment URL and failed saves keep the active server", async () => {
+  const fixture = client(
+    "mobile",
+    () => {
+      throw new Error("Unexpected network request");
+    },
+    {
+      EXPO_PUBLIC_API_URL: "https://environment.invalid/api/v1/",
+    },
+  );
+  assert.equal(await fixture.getApiBaseUrl(), "https://environment.invalid");
+  await fixture.setApiBaseUrl(" 'http://local.invalid:8001/api/v1/' ");
+  assert.equal(await fixture.getApiBaseUrl(), "http://local.invalid:8001");
+  await fixture.resetApiBaseUrl();
+  assert.equal(await fixture.getApiBaseUrl(), "https://environment.invalid");
+  assert.equal(fixture.storage.has("contexify_server_url"), false);
+  fixture.asyncStorage.setItem = async () => {
+    throw new Error("Storage unavailable");
+  };
+  await assert.rejects(
+    fixture.setApiBaseUrl("http://other.invalid"),
+    /Storage unavailable/,
+  );
+  assert.equal(await fixture.getApiBaseUrl(), "https://environment.invalid");
+  fixture.asyncStorage.removeItem = async () => {
+    throw new Error("Storage unavailable");
+  };
+  await assert.rejects(fixture.resetApiBaseUrl(), /Storage unavailable/);
+  assert.equal(await fixture.getApiBaseUrl(), "https://environment.invalid");
+  const fallback = client("mobile", () => {});
+  await fallback.setApiBaseUrl("http://override.invalid");
+  await fallback.resetApiBaseUrl();
+  assert.equal(await fallback.getApiBaseUrl(), "http://fixture.invalid");
+});
+
+test("mobile: a stale preference read cannot undo a newly saved URL", async () => {
+  const fixture = client("mobile", () => {});
+  let release;
+  fixture.asyncStorage.getItem = () =>
+    new Promise((resolve) => {
+      release = resolve;
+    });
+  const pending = fixture.getApiBaseUrl();
+  await fixture.setApiBaseUrl("http://new.invalid");
+  release("http://old.invalid");
+  assert.equal(await pending, "http://new.invalid");
+});
+
+test("mobile: health tests use the entered URL without credentials or changing saved settings", async () => {
+  const fixture = client("mobile", (url) =>
+    response(
+      url.endsWith("/user/login")
+        ? credentials("signed")
+        : { status: "online" },
+    ),
+  );
+  await fixture.api.login("fixture", "password");
+  const credentialsBefore = fixture.storage.get("contexify_auth_session");
+  assert.equal(
+    await fixture.api.pingHealth("https://typed.invalid/api/v1/"),
+    true,
+  );
+  assert.equal(
+    fixture.requests.at(-1).url,
+    "https://typed.invalid/api/v1/health",
+  );
+  assert.equal(
+    new Headers(fixture.requests.at(-1).options.headers).has("Authorization"),
+    false,
+  );
+  assert.equal(await fixture.getApiBaseUrl(), "http://fixture.invalid");
+  assert.equal(
+    fixture.storage.get("contexify_auth_session"),
+    credentialsBefore,
+  );
+  for (const invalid of [
+    "",
+    "localhost:8001",
+    "ftp://host.invalid",
+    "https://user:secret@host.invalid",
+    "https://host.invalid?token=secret",
+    "https://host.invalid/#fragment",
+  ]) {
+    await assert.rejects(fixture.setApiBaseUrl(invalid), /valid http/);
+    await assert.rejects(fixture.api.pingHealth(invalid), /valid http/);
+  }
+  assert.equal(fixture.requests.length, 2);
+});
+
+test("mobile: health checks reject unhealthy responses and time out or cancel", async () => {
+  for (const result of [
+    response({ status: "online" }, 503),
+    response({}),
+    new Error("Offline"),
+  ]) {
+    const fixture = client("mobile", () => {
+      if (result instanceof Error) throw result;
+      return result;
+    });
+    assert.equal(await fixture.api.pingHealth("http://typed.invalid"), false);
+  }
+  for (const cancelled of [false, true]) {
+    const fixture = client(
+      "mobile",
+      (_, { signal }) =>
+        new Promise((resolve, reject) => {
+          const abort = () => reject(new DOMException("Aborted", "AbortError"));
+          if (signal.aborted) abort();
+          else signal.addEventListener("abort", abort);
+        }),
+    );
+    let timeout;
+    fixture.context.setTimeout = (callback, delay) => {
+      assert.equal(delay, 8000);
+      timeout = callback;
+      return 1;
+    };
+    fixture.context.clearTimeout = () => {};
+    const controller = new AbortController();
+    const pending = fixture.api.pingHealth(
+      "http://typed.invalid",
+      controller.signal,
+    );
+    if (cancelled) controller.abort();
+    else timeout();
+    assert.equal(await pending, false);
+  }
+});
 async function until(condition) {
   for (let attempt = 0; attempt < 30; attempt++) {
     if (condition()) return;
@@ -1372,9 +1623,10 @@ test("mobile: switching servers during guest bootstrap never sends a token to an
   const next = fixture.api.getAssets();
   // Attach the rejection handler before resolving the shared guest bootstrap.
   const rejected = assert.rejects(next, /server changed/);
+  const previousRejected = assert.rejects(previous, /server changed/);
   await tick();
   release(response(credentials("previous-server-token")));
-  await previous;
+  await previousRejected;
   await rejected;
   assert.equal(
     fixture.requests.some((request) =>
@@ -1446,6 +1698,12 @@ function appCallbacks(platform, apiService) {
           "selectSession",
         ]
       : [
+          "sortMobileSessions",
+          "loadUserSessions",
+          "handleLoadMoreSessions",
+          "handleRefreshSessions",
+          "handleSearchSessions",
+          "handleToggleSortOrder",
           "cancelStreamForAuthChange",
           "handleClearMessages",
           "handleNewChat",
@@ -1503,6 +1761,15 @@ function appCallbacks(platform, apiService) {
     AbortController,
     currentUser: null,
     currentUserRef: { current: null },
+    SESSIONS_PAGE_SIZE: 15,
+    sessionSortRef: { current: "last_created" },
+    sessionSearchRef: { current: "" },
+    sessionsRequestRef: { current: 0 },
+    sessionsAbortRef: { current: null },
+    sessionsSearchTimerRef: { current: null },
+    sessionsPageRef: { current: { offset: 0, hasMore: false, ready: false } },
+    sessionsError: null,
+    clearTimeout,
     activeSessionId: "fixture-session",
     activeSessionIdRef: { current: "fixture-session" },
     messages: state.messages,
@@ -1665,6 +1932,318 @@ function appCallbacks(platform, apiService) {
     cancelled: () => cancelled,
   };
 }
+
+test("mobile: list failures preserve cached chats and retry replaces them with confirmed results", async () => {
+  let fail = true;
+  const fixture = appCallbacks("mobile", {
+    getUserSessions: async () => {
+      if (fail) throw new Error("offline");
+      return { sessions: [], total: 0, has_more: false };
+    },
+  });
+  fixture.state.sessions = [{ id: "cached" }];
+  await fixture.callbacks.loadUserSessions("u1");
+  assert.equal(fixture.state.sessions[0].id, "cached");
+  assert.match(fixture.state.sessionsError, /retry/);
+  assert.equal(fixture.state.isRefreshingSessions, false);
+  fail = false;
+  await fixture.callbacks.loadUserSessions("u1");
+  assert.equal(fixture.state.sessions.length, 0);
+  assert.equal(fixture.state.sessionsError, null);
+});
+
+test("mobile: rapid searches debounce, cancel old requests and discard stale responses", async () => {
+  const pending = [];
+  const fixture = appCallbacks("mobile", {
+    getUserSessions: (_, params) =>
+      new Promise((resolve) => pending.push({ params, resolve })),
+  });
+  fixture.context.currentUserRef.current = profile;
+  let nextTimer = 0;
+  const timers = new Map();
+  fixture.context.setTimeout = (callback, delay) => {
+    assert.equal(delay, 300);
+    timers.set(++nextTimer, callback);
+    return nextTimer;
+  };
+  fixture.context.clearTimeout = (timer) => timers.delete(timer);
+  const initial = fixture.callbacks.loadUserSessions("u1");
+  fixture.callbacks.handleSearchSessions("older");
+  fixture.callbacks.handleSearchSessions("rare");
+  assert.equal(timers.size, 1);
+  assert.equal(pending[0].params.signal.aborted, true);
+  Array.from(timers.values())[0]();
+  assert.equal(pending[1].params.search, "rare");
+  assert.equal(pending[1].params.offset, 0);
+  pending[1].resolve({
+    sessions: [{ id: "match", created_at: "2026-01-01" }],
+    total: 1,
+    has_more: false,
+  });
+  await until(() => fixture.state.sessions?.[0]?.id === "match");
+  pending[0].resolve({
+    sessions: [{ id: "stale" }],
+    total: 99,
+    has_more: true,
+  });
+  await initial;
+  assert.equal(fixture.state.sessions[0].id, "match");
+  assert.equal(fixture.state.totalSessions, 1);
+  assert.equal(fixture.state.isRefreshingSessions, false);
+});
+
+test("mobile: search pagination uses server offsets and ignores duplicate load-more requests", async () => {
+  const requests = [];
+  let release;
+  const fixture = appCallbacks("mobile", {
+    getUserSessions: async (_, params) => {
+      requests.push(params);
+      if (requests.length === 1)
+        return { sessions: [{ id: "match-a" }], total: 2, has_more: true };
+      return new Promise((resolve) => {
+        release = resolve;
+      });
+    },
+  });
+  fixture.context.currentUser = profile;
+  fixture.context.sessionSearchRef.current = "older";
+  await fixture.callbacks.loadUserSessions("u1", "first_created");
+  fixture.state.sessions.push({ id: "local-draft" });
+  const pending = fixture.callbacks.handleLoadMoreSessions();
+  await fixture.callbacks.handleLoadMoreSessions();
+  assert.equal(requests.length, 2);
+  assert.equal(requests[1].offset, 1);
+  assert.equal(requests[1].search, "older");
+  assert.equal(requests[1].sort_by, "first_created");
+  release({
+    sessions: [{ id: "match-a" }, { id: "match-b" }],
+    total: 2,
+    has_more: false,
+  });
+  await pending;
+  assert.equal(fixture.state.sessions.length, 3);
+  assert.equal(
+    new Set(fixture.state.sessions.map((session) => session.id)).size,
+    3,
+  );
+  assert.equal(fixture.state.isLoadingMoreSessions, false);
+});
+
+test("mobile: logout cancels pending list requests and prevents private history from reappearing", async () => {
+  let release;
+  let signal;
+  const fixture = appCallbacks("mobile", {
+    getUserSessions: (_, params) => {
+      signal = params.signal;
+      return new Promise((resolve) => {
+        release = resolve;
+      });
+    },
+    logout: async () => {},
+  });
+  const pending = fixture.callbacks.loadUserSessions("u1");
+  await fixture.callbacks.handleLogout();
+  assert.equal(signal.aborted, true);
+  release({ sessions: [{ id: "previous-owner" }], total: 1, has_more: false });
+  await pending;
+  assert.equal(fixture.state.sessions.length, 0);
+  assert.equal(fixture.state.sessionsError, null);
+  assert.equal(fixture.state.isRefreshingSessions, false);
+});
+
+test("mobile: sorting failures retain loaded chats and an older request cannot overwrite the new sort", async () => {
+  let release;
+  let fail = false;
+  const fixture = appCallbacks("mobile", {
+    getUserSessions: (_, params) => {
+      if (fail) throw new Error("offline");
+      if (params.sort_by === "last_created")
+        return new Promise((resolve) => {
+          release = resolve;
+        });
+      return {
+        sessions: [{ id: "sorted", created_at: "2026-01-01" }],
+        total: 1,
+        has_more: false,
+      };
+    },
+  });
+  fixture.context.currentUser = profile;
+  fixture.context.AsyncStorage.setItem = async () => {
+    throw new Error("Storage unavailable");
+  };
+  const initial = fixture.callbacks.loadUserSessions("u1");
+  await fixture.callbacks.handleToggleSortOrder();
+  assert.equal(fixture.context.sessionSortRef.current, "first_created");
+  release({ sessions: [{ id: "stale" }], total: 1, has_more: false });
+  await initial;
+  assert.equal(fixture.state.sessions[0].id, "sorted");
+  fail = true;
+  await fixture.callbacks.handleToggleSortOrder();
+  assert.match(fixture.state.sessionsError, /retry/);
+  assert.equal(fixture.state.sessions[0].id, "sorted");
+  assert.equal(fixture.state.isRefreshingSessions, false);
+});
+
+test("mobile: pagination failures retain every loaded chat and allow a fresh retry", async () => {
+  let fail = false;
+  const fixture = appCallbacks("mobile", {
+    getUserSessions: async () => {
+      if (fail) throw new Error("offline");
+      return { sessions: [{ id: "saved" }], total: 20, has_more: true };
+    },
+  });
+  fixture.context.currentUser = profile;
+  await fixture.callbacks.loadUserSessions("u1");
+  fail = true;
+  await fixture.callbacks.handleLoadMoreSessions();
+  assert.equal(fixture.state.sessions[0].id, "saved");
+  assert.match(fixture.state.sessionsError, /retry/);
+  assert.equal(fixture.state.isLoadingMoreSessions, false);
+  fail = false;
+  await fixture.callbacks.handleRefreshSessions();
+  assert.equal(fixture.state.sessionsError, null);
+  assert.equal(fixture.state.sessions[0].id, "saved");
+});
+
+test("mobile: a failed history request preserves messages and a successful retry clears the error", async () => {
+  let fail = true;
+  const fixture = appCallbacks("mobile", {
+    getSessionHistory: async () => {
+      if (fail) throw new Error("offline");
+      return {
+        session: { id: "fixture-session" },
+        messages: [{ id: "saved" }],
+        documents: [],
+      };
+    },
+  });
+  fixture.context.Alert.alert = () => {};
+  await fixture.callbacks.selectSession("fixture-session");
+  assert.equal(fixture.state.messages[0], "private");
+  assert.match(fixture.state.historyError, /kept/);
+  fail = false;
+  await fixture.callbacks.selectSession("fixture-session");
+  assert.equal(fixture.state.historyError, null);
+  assert.equal(fixture.state.messages[0].id, "saved");
+});
+
+function serverConfigCallbacks(apiService) {
+  const source = fs.readFileSync(
+    path.join(__dirname, "../mobile/src/components/ServerConfigModal.tsx"),
+    "utf8",
+  );
+  const parsed = ts.createSourceFile(
+    "ServerConfigModal.tsx",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX,
+  );
+  const names = [
+    "invalidatePing",
+    "changeInput",
+    "handleTestPing",
+    "handleSave",
+    "handleReset",
+  ];
+  const declarations = [];
+  function visit(node) {
+    if (
+      ts.isVariableDeclaration(node) &&
+      names.includes(node.name.getText(parsed))
+    )
+      declarations.push(`const ${node.getText(parsed)};`);
+    ts.forEachChild(node, visit);
+  }
+  visit(parsed);
+  assert.equal(declarations.length, names.length);
+  const state = {};
+  const context = {
+    exports: {},
+    apiService,
+    Error,
+    inputUrl: "http://typed.invalid",
+    onClose: () => {
+      state.closed = true;
+    },
+    pingRequestRef: { current: 0 },
+    pingAbortRef: { current: null },
+    savingRef: { current: false },
+    AbortController,
+    Haptics: {
+      impactAsync() {},
+      notificationAsync() {},
+      ImpactFeedbackStyle: { Light: 1 },
+      NotificationFeedbackType: { Success: 1, Error: 2 },
+    },
+  };
+  for (const key of ["inputUrl", "pingStatus", "error", "isSaving"])
+    context[`set${key[0].toUpperCase()}${key.slice(1)}`] = (value) => {
+      context[key] = state[key] = value;
+    };
+  vm.runInNewContext(
+    ts.transpileModule(
+      `${declarations.join("\n")}\nexports.callbacks = {${names.join(",")}};`,
+      { compilerOptions: { target: ts.ScriptTarget.ES2020 } },
+    ).outputText,
+    context,
+  );
+  return { callbacks: context.exports.callbacks, context, state };
+}
+
+test("mobile: connection modal tests the input and ignores results after editing or closing", async () => {
+  let release;
+  let signal;
+  const fixture = serverConfigCallbacks({
+    pingHealth: (url, requestSignal) => {
+      assert.equal(url, "http://typed.invalid");
+      signal = requestSignal;
+      return new Promise((resolve) => {
+        release = resolve;
+      });
+    },
+  });
+  const pending = fixture.callbacks.handleTestPing();
+  fixture.callbacks.changeInput("http://new.invalid");
+  assert.equal(signal.aborted, true);
+  release(true);
+  await pending;
+  assert.equal(fixture.state.pingStatus, "idle");
+  assert.equal(fixture.state.inputUrl, "http://new.invalid");
+  fixture.context.inputUrl = "http://typed.invalid";
+  const next = fixture.callbacks.handleTestPing();
+  fixture.callbacks.invalidatePing();
+  release(true);
+  await next;
+  assert.equal(fixture.state.pingStatus, "testing");
+});
+
+test("mobile: connection modal shows save/reset failures and blocks duplicate saves", async () => {
+  const fixture = serverConfigCallbacks({});
+  let saves = 0;
+  let release;
+  fixture.context.setApiBaseUrl = () => {
+    saves++;
+    return new Promise((_, reject) => {
+      release = reject;
+    });
+  };
+  const pending = fixture.callbacks.handleSave();
+  await fixture.callbacks.handleSave();
+  assert.equal(saves, 1);
+  release(new Error("Storage unavailable"));
+  await pending;
+  assert.equal(fixture.state.error, "Storage unavailable");
+  assert.equal(fixture.state.closed, undefined);
+  assert.equal(fixture.state.isSaving, false);
+  fixture.context.resetApiBaseUrl = async () => {
+    throw new Error("Storage unavailable");
+  };
+  await fixture.callbacks.handleReset();
+  assert.match(fixture.state.error, /restore the default/);
+  assert.equal(fixture.state.isSaving, false);
+});
 
 for (const platform of ["frontend", "mobile"]) {
   test(`${platform}: a successful response from an earlier login is discarded`, async () => {

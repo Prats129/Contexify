@@ -27,53 +27,62 @@ const DEFAULT_HOST: string =
   }) || "http://localhost:8001";
 
 let cachedBaseUrl: string | null = null;
+let baseUrlRevision = 0;
 
-export const getApiBaseUrl = async (): Promise<string> => {
-  if (cachedBaseUrl) return cachedBaseUrl;
-  try {
-    const saved = await AsyncStorage.getItem("contexify_server_url");
-    if (saved && saved.trim()) {
-      const clean = saved
-        .trim()
-        .replace(/^["']|["']$/g, "")
-        .replace(/\/+$/, "");
-      cachedBaseUrl = clean;
-      return clean;
-    }
-  } catch {}
-
-  const envUrl = process.env.EXPO_PUBLIC_API_URL;
-  if (envUrl && envUrl.trim()) {
-    const clean = envUrl
-      .trim()
-      .replace(/^["']|["']$/g, "")
-      .replace(/\/+$/, "");
-    cachedBaseUrl = clean;
-    return clean;
-  }
-
-  cachedBaseUrl = DEFAULT_HOST;
-  return DEFAULT_HOST;
-};
-
-export const setApiBaseUrl = async (newUrl: string) => {
-  const clean = newUrl
+const normalizeApiBaseUrl = (value: string): string => {
+  const clean = value
     .trim()
     .replace(/^["']|["']$/g, "")
     .replace(/\/+$/, "");
-  cachedBaseUrl = clean;
+  try {
+    const url = new URL(clean);
+    if (
+      !["http:", "https:"].includes(url.protocol) ||
+      !url.hostname ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash
+    )
+      throw new Error("Invalid server URL");
+    return `${url.origin}${url.pathname}`
+      .replace(/\/+$/, "")
+      .replace(/\/api\/v1$/, "");
+  } catch {
+    throw new Error(
+      "Enter a valid http:// or https:// server URL without credentials, query parameters, or fragments.",
+    );
+  }
+};
+
+export const getApiBaseUrl = async (): Promise<string> => {
+  if (cachedBaseUrl) return cachedBaseUrl;
+  const revision = baseUrlRevision;
+  let saved: string | null = null;
+  try {
+    saved = await AsyncStorage.getItem("contexify_server_url");
+  } catch {}
+  if (revision !== baseUrlRevision) return getApiBaseUrl();
+  const selected =
+    saved?.trim() || process.env.EXPO_PUBLIC_API_URL?.trim() || DEFAULT_HOST;
+  cachedBaseUrl = normalizeApiBaseUrl(selected);
+  return cachedBaseUrl;
+};
+
+export const setApiBaseUrl = async (newUrl: string) => {
+  const clean = normalizeApiBaseUrl(newUrl);
   await AsyncStorage.setItem("contexify_server_url", clean);
+  baseUrlRevision++;
+  cachedBaseUrl = clean;
 };
 
 export const resetApiBaseUrl = async () => {
-  cachedBaseUrl = DEFAULT_HOST;
   await AsyncStorage.removeItem("contexify_server_url");
+  baseUrlRevision++;
+  cachedBaseUrl = null;
 };
 
-const getCleanHost = async (): Promise<string> => {
-  const base = await getApiBaseUrl();
-  return base.replace(/\/api\/v1\/?$/, "").replace(/\/+$/, "");
-};
+const getCleanHost = getApiBaseUrl;
 
 const getEndpoint = async (path: string): Promise<string> => {
   const host = await getCleanHost();
@@ -280,19 +289,58 @@ const expireSession = async (authorization: string): Promise<void> => {
   }
 };
 
+// Bound authentication requests even when the native transport ignores abort.
+// Do not retry sign-in/OTP requests automatically: they may have reached the server.
+const fetchAuthResponse = async (
+  url: string,
+  options: RequestInit = {},
+): Promise<Response> => {
+  if (options.signal?.aborted)
+    throw new DOMException("Request cancelled", "AbortError");
+  const controller = new AbortController();
+  let rejectRequest!: (reason: Error) => void;
+  const interrupted = new Promise<never>((_, reject) => {
+    rejectRequest = reject;
+  });
+  const abort = () => {
+    rejectRequest(new DOMException("Request cancelled", "AbortError"));
+    controller.abort();
+  };
+  options.signal?.addEventListener("abort", abort);
+  const timeout = setTimeout(() => {
+    rejectRequest(
+      new Error(
+        "The server did not respond within 30 seconds. Check your connection and backend server address, then try again.",
+      ),
+    );
+    controller.abort();
+  }, 30000);
+  try {
+    return await Promise.race([
+      fetch(url, { ...options, signal: controller.signal }),
+      interrupted,
+    ]);
+  } finally {
+    clearTimeout(timeout);
+    options.signal?.removeEventListener("abort", abort);
+  }
+};
+
 const authenticatedFetch = async (
   url: string,
   options: RequestInit = {},
 ): Promise<Response> => {
   const path = url.split("/api/v1")[1]?.split("?")[0] || "";
-  if (path === "/health" || publicAuthPaths.has(path))
-    return fetch(url, options);
+  if (publicAuthPaths.has(path)) return fetchAuthResponse(url, options);
+  if (path === "/health") return fetch(url, options);
   const headers = new Headers(options.headers);
   const authorization = await authHeaders(url);
   headers.set("Authorization", authorization.Authorization);
   const response = await fetch(url, { ...options, headers });
   if (response.status === 401) await expireSession(authorization.Authorization);
   const current = await readAuth();
+  if (url.split("/api/v1")[0] !== (await getCleanHost()))
+    throw new Error("The server changed. Please retry.");
   if (
     !current ||
     authorization.Authorization !== `Bearer ${current.access_token}`
@@ -356,13 +404,25 @@ export const apiService = {
     }
   },
   // --- Health Check ---
-  async pingHealth(): Promise<boolean> {
+  async pingHealth(baseUrl?: string, signal?: AbortSignal): Promise<boolean> {
+    const host = normalizeApiBaseUrl(baseUrl ?? (await getApiBaseUrl()));
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    signal?.addEventListener("abort", abort);
+    if (signal?.aborted) controller.abort();
+    const timeout = setTimeout(abort, 8000);
     try {
-      const url = await getEndpoint("/health");
-      const res = await authenticatedFetch(url, { method: "GET" });
-      return res.ok;
+      // Health checks never send account credentials to the entered server.
+      const res = await fetch(`${host}/api/v1/health`, {
+        method: "GET",
+        signal: controller.signal,
+      });
+      return res.ok && (await res.json())?.status === "online";
     } catch {
       return false;
+    } finally {
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", abort);
     }
   },
 
@@ -587,62 +647,7 @@ export const apiService = {
     userId: string,
     params?: SessionListParams,
   ): Promise<PaginatedChatSessions> {
-    try {
-      if (!userId || userId.startsWith("guest")) {
-        return {
-          sessions: [],
-          total: 0,
-          has_more: false,
-          limit: params?.limit ?? null,
-          offset: params?.offset ?? 0,
-        };
-      }
-      const query = new URLSearchParams({ user_id: userId, paginate: "true" });
-      if (params?.limit !== undefined) {
-        query.set("limit", String(params.limit));
-      }
-      if (params?.offset !== undefined) {
-        query.set("offset", String(params.offset));
-      }
-      if (params?.search && params.search.trim()) {
-        query.set("search", params.search.trim());
-      }
-      if (params?.sort_by) {
-        query.set("sort_by", params.sort_by);
-      }
-
-      const url = await getEndpoint(`/session/list?${query.toString()}`);
-      const res = await authenticatedFetch(url, { signal: params?.signal });
-      if (!res.ok) {
-        return {
-          sessions: [],
-          total: 0,
-          has_more: false,
-          limit: params?.limit ?? null,
-          offset: params?.offset ?? 0,
-        };
-      }
-      const data = await res.json();
-      if (Array.isArray(data)) {
-        return {
-          sessions: data,
-          total: data.length,
-          has_more: false,
-          limit: params?.limit ?? null,
-          offset: params?.offset ?? 0,
-        };
-      }
-      return {
-        sessions: Array.isArray(data?.sessions) ? data.sessions : [],
-        total:
-          typeof data?.total === "number"
-            ? data.total
-            : (data?.sessions?.length ?? 0),
-        has_more: Boolean(data?.has_more),
-        limit: data?.limit ?? params?.limit ?? null,
-        offset: data?.offset ?? params?.offset ?? 0,
-      };
-    } catch {
+    if (!userId || userId.startsWith("guest")) {
       return {
         sessions: [],
         total: 0,
@@ -651,38 +656,78 @@ export const apiService = {
         offset: params?.offset ?? 0,
       };
     }
+    const query = new URLSearchParams({ user_id: userId, paginate: "true" });
+    if (params?.limit !== undefined) {
+      query.set("limit", String(params.limit));
+    }
+    if (params?.offset !== undefined) {
+      query.set("offset", String(params.offset));
+    }
+    if (params?.search && params.search.trim()) {
+      query.set("search", params.search.trim());
+    }
+    if (params?.sort_by) {
+      query.set("sort_by", params.sort_by);
+    }
+
+    const url = await getEndpoint(`/session/list?${query.toString()}`);
+    const res = await authenticatedFetch(url, { signal: params?.signal });
+    if (!res.ok)
+      throw new Error("Could not load conversations. Please try again.");
+    const data = await res.json();
+    if (Array.isArray(data)) {
+      return {
+        sessions: data,
+        total: data.length,
+        has_more: false,
+        limit: params?.limit ?? null,
+        offset: params?.offset ?? 0,
+      };
+    }
+    if (!Array.isArray(data?.sessions))
+      throw new Error(
+        "The server returned invalid conversation history. Please try again.",
+      );
+    return {
+      sessions: data.sessions,
+      total:
+        typeof data?.total === "number" ? data.total : data.sessions.length,
+      has_more: Boolean(data?.has_more),
+      limit: data?.limit ?? params?.limit ?? null,
+      offset: data?.offset ?? params?.offset ?? 0,
+    };
   },
 
   async getSessionHistory(sessionId: string): Promise<SessionHistoryResponse> {
-    try {
-      const url = await getEndpoint(
-        `/session/${encodeURIComponent(sessionId)}/history`,
+    const url = await getEndpoint(
+      `/session/${encodeURIComponent(sessionId)}/history`,
+    );
+    const res = await authenticatedFetch(url);
+    if (!res.ok) throw new Error("Could not load this chat. Please try again.");
+    const data = await res.json();
+    if (
+      !data?.session ||
+      !Array.isArray(data.messages) ||
+      !Array.isArray(data.documents)
+    )
+      throw new Error(
+        "The server returned invalid chat history. Please try again.",
       );
-      const res = await authenticatedFetch(url);
-      if (!res.ok) {
-        return { session: null as any, messages: [], documents: [] };
+    const host = url.split("/api/v1/")[0];
+    const messages = data.messages.map((m: any) => {
+      if (m.attachments && Array.isArray(m.attachments)) {
+        m.attachments = m.attachments.map((att: any) => ({
+          ...att,
+          url: att.url?.startsWith("/") ? `${host}${att.url}` : att.url,
+        }));
       }
-      const data = await res.json();
-      const host = await getCleanHost();
-      const messages = (Array.isArray(data?.messages) ? data.messages : []).map(
-        (m: any) => {
-          if (m.attachments && Array.isArray(m.attachments)) {
-            m.attachments = m.attachments.map((att: any) => ({
-              ...att,
-              url: att.url?.startsWith("/") ? `${host}${att.url}` : att.url,
-            }));
-          }
-          return m;
-        },
-      );
-      return {
-        session: data?.session || null,
-        messages,
-        documents: Array.isArray(data?.documents) ? data.documents : [],
-      };
-    } catch {
-      return { session: null as any, messages: [], documents: [] };
-    }
+      return m;
+    });
+    return {
+      session: data.session,
+      messages,
+      documents: data.documents,
+    };
   },
 
   async uploadMedia(
@@ -892,19 +937,6 @@ export const apiService = {
   },
 
   // --- Documents ---
-  async getSessionDocuments(sessionId: string): Promise<DocumentMetadata[]> {
-    try {
-      const url = await getEndpoint(
-        `/document/session/${encodeURIComponent(sessionId)}`,
-      );
-      const res = await authenticatedFetch(url);
-      if (!res.ok) return [];
-      return res.json();
-    } catch {
-      return [];
-    }
-  },
-
   async uploadDocument(
     sessionId: string,
     fileUri: string,

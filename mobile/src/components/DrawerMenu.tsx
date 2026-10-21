@@ -38,6 +38,9 @@ interface DrawerMenuProps {
   currentUser: User | null;
   sessions?: ChatSession[];
   totalSessions?: number;
+  searchQuery?: string;
+  onSearchQueryChange?: (value: string) => void;
+  sessionsError?: string | null;
   hasMoreSessions?: boolean;
   isLoadingMoreSessions?: boolean;
   onLoadMoreSessions?: () => void;
@@ -69,6 +72,9 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
   currentUser,
   sessions = [],
   totalSessions,
+  searchQuery = "",
+  onSearchQueryChange,
+  sessionsError,
   hasMoreSessions = false,
   isLoadingMoreSessions = false,
   onLoadMoreSessions,
@@ -106,7 +112,7 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
   const [avatarLoadError, setAvatarLoadError] = useState(false);
 
   // --- Collapsible Search State ---
-  const [searchQuery, setSearchQuery] = useState("");
+  const setSearchQuery = (value: string) => onSearchQueryChange?.(value);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const searchTextInputRef = useRef<TextInput | null>(null);
 
@@ -199,11 +205,10 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
     }
   }, [currentUser?.avatar_url, visible]);
 
-  // --- Search and Filter Logic ---
-  const filteredSessions = sessionList.filter((s) => {
-    if (!searchQuery.trim()) return true;
-    return s.title.toLowerCase().includes(searchQuery.trim().toLowerCase());
-  });
+  // The backend searches all chats; also filter optimistic local title changes.
+  const filteredSessions = sessionList.filter((session) =>
+    session.title.toLowerCase().includes(searchQuery.trim().toLowerCase()),
+  );
 
   const handleToggleSearch = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -332,7 +337,13 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
       layoutMeasurement.height + contentOffset.y >=
         contentSize.height - paddingToBottom
     ) {
-      if (hasMoreSessions && !isLoadingMoreSessions && onLoadMoreSessions) {
+      if (
+        hasMoreSessions &&
+        !isLoadingMoreSessions &&
+        !isRefreshingSessions &&
+        !sessionsError &&
+        onLoadMoreSessions
+      ) {
         onLoadMoreSessions();
       }
     }
@@ -570,7 +581,34 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
                 ) : undefined
               }
             >
-              {sessionList.length === 0 ? (
+              {sessionsError && (
+                <View style={{ padding: 16, gap: 8 }}>
+                  <Text
+                    accessibilityRole="alert"
+                    style={{ color: theme.danger }}
+                  >
+                    {sessionsError}
+                  </Text>
+                  <TouchableOpacity
+                    accessibilityRole="button"
+                    onPress={onRefreshSessions}
+                  >
+                    <Text style={{ color: theme.primary }}>Retry</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+              {isRefreshingSessions && (
+                <View style={styles.scrollLoadingContainer}>
+                  <ActivityIndicator size="small" color={theme.primary} />
+                  <Text style={{ color: theme.textMuted }}>
+                    Loading conversations...
+                  </Text>
+                </View>
+              )}
+              {filteredSessions.length === 0 &&
+              (sessionsError ||
+                isRefreshingSessions) ? null : filteredSessions.length === 0 &&
+                !searchQuery.trim() ? (
                 <Text style={[styles.emptyText, { color: theme.textMuted }]}>
                   {currentUser
                     ? "No conversations yet."
@@ -757,9 +795,26 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
                 </View>
               )}
 
+              {hasMoreSessions &&
+                !isLoadingMoreSessions &&
+                !isRefreshingSessions &&
+                !sessionsError && (
+                  <TouchableOpacity
+                    accessibilityRole="button"
+                    onPress={onLoadMoreSessions}
+                    style={styles.scrollLoadingContainer}
+                  >
+                    <Text style={{ color: theme.primary }}>
+                      Load more conversations
+                    </Text>
+                  </TouchableOpacity>
+                )}
+
               {/* End of conversations marker */}
               {isChatsExpanded &&
                 !hasMoreSessions &&
+                !isRefreshingSessions &&
+                !sessionsError &&
                 sessionList.length >= 6 &&
                 !searchQuery.trim() && (
                   <View style={styles.endOfListContainer}>
