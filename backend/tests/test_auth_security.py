@@ -130,6 +130,306 @@ from app.services.user_service import hash_password, user_service
 
 
 class SecurityTests(unittest.TestCase):
+    def reply_orchestrator(self, fail=False):
+        """Real routing/persistence with providers replaced by deterministic fixtures."""
+        from app.services.media_service import media_service
+
+        async def answer(*args, **kwargs):
+            yield "Fixture "
+            if fail:
+                raise RuntimeError("fixture interrupted provider")
+            yield "answer"
+
+        async def generate(*args, **kwargs):
+            if fail:
+                raise RuntimeError("fixture generation failure")
+            return media_service.save_generated_image(
+                self.image_fixture(), "Fixture image", session_id=kwargs["session_id"]
+            )
+
+        providers = {}
+        for name in (
+            "llm_service",
+            "image_gen_service",
+            "web_search_service",
+            "rag_service",
+        ):
+            stub = types.ModuleType("app.services." + name)
+            service = Mock()
+            setattr(stub, name, service)
+            providers[stub.__name__] = stub
+        llm = providers["app.services.llm_service"].llm_service
+        for name in (
+            "stream_conversational_answer",
+            "stream_rag_answer",
+            "stream_web_search_answer",
+            "stream_multimodal_answer",
+        ):
+            setattr(llm, name, answer)
+        providers[
+            "app.services.image_gen_service"
+        ].image_gen_service.generate_image = generate
+        providers[
+            "app.services.web_search_service"
+        ].web_search_service.search.return_value = [
+            {
+                "title": "Fixture source",
+                "url": "https://example.invalid/fixture",
+                "snippet": "Fixture evidence",
+            }
+        ]
+        providers[
+            "app.services.rag_service"
+        ].rag_service.retrieve_context_for_query.return_value = [
+            {
+                "text": "Fixture document",
+                "metadata": {
+                    "document_id": "document",
+                    "filename": "fixture.txt",
+                    "chunk_index": 0,
+                },
+            }
+        ]
+        with patch.dict(sys.modules, providers):
+            return runpy.run_path(
+                str(
+                    Path(__file__).resolve().parents[1] / "app/services/orchestrator.py"
+                )
+            )["chat_orchestrator"]
+
+    def test_stream_message_ids_match_reloaded_sql_and_cache_in_every_route(self):
+        from app.api.v1.endpoints import chat
+        from app.repositories.session_store import session_store_repo
+
+        cases = [
+            ("AUTO", "hello", []),
+            ("DOCUMENT_RAG", "summarize the uploaded document", []),
+            ("WEB_SEARCH", "latest weather forecast", []),
+            ("MULTIMODAL", "read this image", [{"id": "image", "file_type": "image"}]),
+            ("IMAGE_GENERATION", "draw a tree", []),
+        ]
+        for failed in (False, True):
+            for index, (mode, prompt, attachments) in enumerate(cases):
+                session_id = f"reply-{failed}-{index}"
+                # The document fixture belongs to alice-session; include it explicitly.
+                if mode == "DOCUMENT_RAG":
+                    attachments = [{"id": "document", "file_type": "document"}]
+                with (
+                    self.subTest(mode=mode, failed=failed),
+                    patch.object(
+                        chat, "chat_orchestrator", self.reply_orchestrator(failed)
+                    ),
+                ):
+                    response = self.request(
+                        "POST",
+                        "/chat/stream",
+                        self.token,
+                        json={
+                            "session_id": session_id,
+                            "mode": mode,
+                            "message": prompt,
+                            "attachments": attachments,
+                        },
+                    )
+                self.assertEqual(response.status_code, 200, response.text)
+                events = [
+                    json.loads(frame[6:])
+                    for frame in response.text.strip().split("\n\n")
+                ]
+                acknowledgements = [
+                    event["message"] for event in events if event["event"] == "message"
+                ]
+                self.assertEqual(
+                    [saved["role"] for saved in acknowledgements], ["user", "assistant"]
+                )
+                self.assertEqual(len({saved["id"] for saved in acknowledgements}), 2)
+                history = self.request(
+                    "GET", f"/session/{session_id}/history", self.token
+                ).json()["messages"]
+                self.assertEqual(
+                    [saved["id"] for saved in acknowledgements],
+                    [message["id"] for message in history],
+                )
+                self.assertEqual(
+                    [saved["created_at"] for saved in acknowledgements],
+                    [message["created_at"] for message in history],
+                )
+                self.assertTrue(
+                    all(saved["session_id"] == session_id for saved in acknowledgements)
+                )
+                cached = session_store_repo.get_or_create_session(session_id).messages
+                self.assertEqual(
+                    [message["id"] for message in cached],
+                    [message["id"] for message in history],
+                )
+                if failed:
+                    self.assertLess(
+                        next(
+                            i
+                            for i, event in enumerate(events)
+                            if event["event"] == "message"
+                            and event["message"]["role"] == "assistant"
+                        ),
+                        next(
+                            i
+                            for i, event in enumerate(events)
+                            if event["event"] == "error"
+                        ),
+                    )
+                # A reply made before navigation must still target exactly this row
+                # after the conversation is fetched again.
+                target = history[1]
+                with patch.object(chat, "chat_orchestrator", self.reply_orchestrator()):
+                    reply = self.request(
+                        "POST",
+                        "/chat/stream",
+                        self.token,
+                        json={
+                            "session_id": session_id,
+                            "mode": "AUTO",
+                            "message": "hello",
+                            "reply_to": {
+                                "id": target["id"],
+                                "role": "assistant",
+                                "content": target["content"],
+                            },
+                        },
+                    )
+                self.assertEqual(reply.status_code, 200)
+                reloaded = self.request(
+                    "GET", f"/session/{session_id}/history", self.token
+                ).json()["messages"]
+                self.assertEqual(len(reloaded), 4)
+                self.assertEqual(reloaded[2]["reply_to"]["id"], reloaded[1]["id"])
+
+    def test_simple_messages_and_guest_memory_receive_real_ids_only_after_save(self):
+        from app.repositories.session_store import session_store_repo
+        from app.schemas.chat import ChatRequest
+        from app.services.chat_history_service import chat_history_service
+
+        actual = self.reply_orchestrator()
+
+        async def collect(iterator):
+            return [json.loads(frame[6:]) async for frame in iterator]
+
+        events = asyncio.run(
+            collect(
+                actual._emit_simple_message("No matching documents", "alice-session")
+            )
+        )
+        saved = chat_history_service.get_session_messages("alice-session")[0]
+        self.assertEqual(events[0]["message"]["id"], saved.id)
+        self.assertEqual(events[-1]["event"], "done")
+        with patch.object(
+            chat_history_service,
+            "save_message",
+            side_effect=RuntimeError("fixture SQL failure"),
+        ):
+            observed = []
+
+            async def failed_save():
+                async for frame in actual._emit_simple_message(
+                    "Must not acknowledge", "alice-session"
+                ):
+                    observed.append(frame)
+
+            with self.assertRaises(RuntimeError):
+                asyncio.run(failed_save())
+            self.assertEqual(observed, [])
+
+        guest = security.resolve_principal(
+            security.digest(security.create_guest()["access_token"])
+        )
+        security.ensure_session("guest-reply-fixture", guest)
+        events = asyncio.run(
+            collect(
+                actual.route_and_stream(
+                    ChatRequest(session_id="guest-reply-fixture", message="hello"),
+                    guest,
+                )
+            )
+        )
+        ids = [
+            event["message"]["id"] for event in events if event["event"] == "message"
+        ]
+        self.assertEqual(len(ids), 2)
+        self.assertEqual(
+            [
+                message["id"]
+                for message in session_store_repo.get_history_messages(
+                    "guest-reply-fixture"
+                )
+            ],
+            ids,
+        )
+        with database.get_db_connection() as conn:
+            self.assertEqual(
+                conn.execute(
+                    "SELECT COUNT(*) FROM messages WHERE session_id=?",
+                    ("guest-reply-fixture",),
+                ).fetchone()[0],
+                0,
+            )
+
+    def test_stopping_after_user_ack_keeps_its_id_without_inventing_an_assistant(self):
+        from app.schemas.chat import ChatRequest
+        from app.services.chat_history_service import chat_history_service
+
+        actual = self.reply_orchestrator()
+        principal = security.resolve_principal(security.digest(self.token))
+
+        async def cancel():
+            iterator = actual.route_and_stream(
+                ChatRequest(session_id="alice-session", message="hello"), principal
+            )
+            first = json.loads((await anext(iterator))[6:])
+            await iterator.aclose()
+            return first
+
+        first = asyncio.run(cancel())
+        self.assertEqual(first["message"]["role"], "user")
+        history = chat_history_service.get_session_messages("alice-session")
+        self.assertEqual(len(history), 1)
+        self.assertEqual(history[0].id, first["message"]["id"])
+
+    def test_legacy_reply_previews_survive_without_guessing_and_dom_ids_normalize(self):
+        from app.services.chat_history_service import chat_history_service as service
+
+        target = service.save_message("alice-session", "assistant", "Repeated answer")
+        service.save_message("alice-session", "assistant", "Repeated answer")
+        cases = [
+            ("msg-asst-123", "Repeated answer", "msg-asst-123"),
+            ("usr_456", "User preview", "usr_456"),
+            ("stopped-789", "Repeated answer", "stopped-789"),
+            (
+                "11111111-1111-4111-8111-111111111111",
+                "Missing target preview",
+                "11111111-1111-4111-8111-111111111111",
+            ),
+            ("msg-" + target.id, target.content, target.id),
+            (target.id, target.content, target.id),
+        ]
+        expected_replies = []
+        for identifier, content, expected in cases:
+            saved = service.save_message(
+                "alice-session",
+                "user",
+                "Reply fixture",
+                reply_to={
+                    "id": identifier,
+                    "role": "assistant",
+                    "content": content,
+                },
+            )
+            expected_replies.append((saved.id, expected, content))
+        history = service.get_session_messages("alice-session")
+        by_id = {message.id: message for message in history}
+        for identifier, expected, content in expected_replies:
+            reply = by_id[identifier].reply_to
+            assert reply is not None
+            self.assertEqual(reply.id, expected)
+            self.assertEqual(reply.content, content)
+
     def test_clear_messages_cannot_revive_signed_in_history_from_another_worker(self):
         from app.repositories.session_store import (
             SessionStoreRepository,

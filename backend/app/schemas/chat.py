@@ -2,7 +2,7 @@ import uuid
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class ChatMode(str, Enum):
@@ -72,6 +72,20 @@ class MessageReplyReference(BaseModel):
     sender_name: Optional[str] = Field(
         default=None, description="Optional display name of the original sender"
     )
+
+    @field_validator("id")
+    @classmethod
+    def normalize_dom_id(cls, value: str) -> str:
+        # Older web replies used the DOM element's ID. Only unwrap a real UUID;
+        # unknown timestamp references keep their preview without guessing a target.
+        if value.startswith("msg-"):
+            raw_id = value[4:]
+            try:
+                if str(uuid.UUID(raw_id)) == raw_id:
+                    return raw_id
+            except ValueError:
+                pass
+        return value
 
 
 class ChatRequest(BaseModel):
@@ -151,11 +165,19 @@ class Citation(BaseModel):
     similarity_score: float
 
 
+class MessageAcknowledgement(BaseModel):
+    id: str
+    session_id: str
+    role: Literal["user", "assistant"]
+    created_at: str
+
+
 class StreamChunkResponse(BaseModel):
-    event: Literal["token", "citations", "media", "error", "done"]
+    event: Literal["token", "citations", "media", "message", "error", "done"]
     data: str
     citations: Optional[List[Citation]] = None
     media: Optional[MediaAttachment] = None
+    message: Optional[MessageAcknowledgement] = None
 
 
 class SessionState(BaseModel):

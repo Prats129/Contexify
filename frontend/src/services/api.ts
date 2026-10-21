@@ -889,7 +889,18 @@ export const apiService = {
             try {
               const parsed = JSON.parse(jsonStr);
 
-              if (parsed.event === "citations" && onCitations) {
+              if (parsed.event === "message") {
+                const saved = parsed.message;
+                if (
+                  saved &&
+                  typeof saved.id === "string" &&
+                  saved.id &&
+                  saved.session_id === sessionId &&
+                  (saved.role === "user" || saved.role === "assistant") &&
+                  typeof saved.created_at === "string"
+                )
+                  handlers.onMessage?.(saved);
+              } else if (parsed.event === "citations" && onCitations) {
                 onCitations(parsed.citations);
               } else if (parsed.event === "media" && onMedia) {
                 const mediaItem: MediaAttachment = {

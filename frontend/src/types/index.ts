@@ -220,7 +220,15 @@ export interface SessionHistoryResponse {
   documents: DocumentMetadata[];
 }
 
+export interface MessageAcknowledgement {
+  id: string;
+  session_id: string;
+  role: "user" | "assistant";
+  created_at: string;
+}
+
 export interface StreamHandlers {
+  onMessage?: (message: MessageAcknowledgement) => void;
   onCitations?: (citations: Citation[]) => void;
   onMedia?: (media: MediaAttachment) => void;
   onToken?: (token: string) => void;
@@ -229,6 +237,8 @@ export interface StreamHandlers {
 }
 
 export interface StreamingMessageState {
+  id?: string;
+  created_at?: string;
   role: "assistant";
   content: string;
   citations?: Citation[] | null;

@@ -1,14 +1,19 @@
-export type ChatMode = 'AUTO' | 'DOCUMENT_RAG' | 'WEB_SEARCH' | 'MULTIMODAL' | 'IMAGE_GENERATION';
+export type ChatMode =
+  | "AUTO"
+  | "DOCUMENT_RAG"
+  | "WEB_SEARCH"
+  | "MULTIMODAL"
+  | "IMAGE_GENERATION";
 
 export interface MediaAttachment {
   id?: string;
   media_id?: string;
   url: string;
-  file_type: 'image' | 'document';
+  file_type: "image" | "document";
   file_name?: string;
   mime_type?: string;
   file_size_bytes?: number;
-  media_type?: 'upload' | 'generated';
+  media_type?: "upload" | "generated";
   prompt?: string;
 }
 
@@ -45,7 +50,7 @@ export interface ChatSession {
   updated_at: string;
 }
 
-export type SessionSortOrder = 'last_created' | 'first_created';
+export type SessionSortOrder = "last_created" | "first_created";
 
 export interface PaginatedChatSessions {
   sessions: ChatSession[];
@@ -75,7 +80,7 @@ export interface Citation {
 
 export interface MessageReplyReference {
   id: string;
-  role: 'user' | 'assistant';
+  role: "user" | "assistant";
   content: string;
   sender_name?: string;
 }
@@ -83,7 +88,7 @@ export interface MessageReplyReference {
 export interface Message {
   id: string;
   session_id?: string;
-  role: 'user' | 'assistant';
+  role: "user" | "assistant";
   content: string;
   citations?: Citation[] | null;
   attachments?: MediaAttachment[] | null;
@@ -92,12 +97,22 @@ export interface Message {
 }
 
 export interface StreamingMessageState {
+  id?: string;
+  created_at?: string;
   content: string;
   citations: Citation[];
   attachments?: MediaAttachment[];
 }
 
+export interface MessageAcknowledgement {
+  id: string;
+  session_id: string;
+  role: "user" | "assistant";
+  created_at: string;
+}
+
 export interface StreamHandlers {
+  onMessage?: (message: MessageAcknowledgement) => void;
   onToken: (token: string) => void;
   onCitations: (citations: Citation[]) => void;
   onMedia?: (media: MediaAttachment) => void;
@@ -129,10 +144,10 @@ export interface AssetItem {
   session_title?: string | null;
   name: string;
   url: string;
-  file_type: 'image' | 'document';
+  file_type: "image" | "document";
   mime_type?: string | null;
   size_bytes: number;
-  origin: 'upload' | 'generated';
+  origin: "upload" | "generated";
   prompt?: string;
   created_at: string;
 }
@@ -148,8 +163,8 @@ export interface PaginatedAssetsResponse {
 export interface AssetQueryParams {
   userId?: string | null;
   sessionId?: string | null;
-  origin?: 'upload' | 'generated' | 'all';
-  fileType?: 'image' | 'document' | 'all';
+  origin?: "upload" | "generated" | "all";
+  fileType?: "image" | "document" | "all";
   search?: string;
   limit?: number;
   offset?: number;

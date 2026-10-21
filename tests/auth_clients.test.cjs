@@ -6,6 +6,270 @@ const path = require("node:path");
 const vm = require("node:vm");
 const ts = require("../frontend/node_modules/typescript");
 
+test("frontend: reply clicks use the message ID rather than the DOM element ID", () => {
+  const filename = path.join(
+    __dirname,
+    "../frontend/src/components/Chat/MessageList.tsx",
+  );
+  const source = fs.readFileSync(filename, "utf8");
+  const parsed = ts.createSourceFile(
+    filename,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX,
+  );
+  let expression;
+  function visit(node) {
+    if (ts.isJsxAttribute(node) && node.name.getText(parsed) === "onReply") {
+      expression = node.initializer.expression.getText(parsed);
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(parsed);
+  assert.ok(expression);
+  const message = {
+    id: "11111111-1111-4111-8111-111111111111",
+    role: "assistant",
+    content: "Saved answer",
+  };
+  let reference;
+  const reply = vm.runInNewContext(`(${expression})`, {
+    msg: message,
+    onReply: (value) => {
+      reference = value;
+    },
+  });
+  reply({ ...message, id: `msg-${message.id}` });
+  assert.equal(reference.id, message.id);
+  assert.equal(reference.content, message.content);
+});
+
+for (const platform of ["frontend", "mobile"]) {
+  test(`${platform}: acknowledgements reconcile user, assistant and draft reply IDs without duplicating messages`, async () => {
+    const requests = [];
+    const fixture = appCallbacks(platform, {
+      streamChat(...args) {
+        requests.push(args);
+        return () => {};
+      },
+    });
+    Object.assign(fixture.state, {
+      messages: [],
+      documents: [],
+      attachedMedia: [],
+      pendingDocumentIds: [],
+    });
+    fixture.context.isSendingRef.current = false;
+    await fixture.callbacks.handleSendMessage();
+    const handlers = requests[0][3];
+    const optimistic = fixture.state.messages[0];
+    fixture.callbacks.handleReplyMessage(optimistic);
+    const userAck = {
+      id: "11111111-1111-4111-8111-111111111111",
+      session_id: "fixture-session",
+      role: "user",
+      created_at: "2026-10-20T12:00:00",
+    };
+    handlers.onMessage(userAck);
+    const userRevision = fixture.workspace.getSnapshot();
+    handlers.onMessage(userAck);
+    assert.equal(fixture.workspace.getSnapshot(), userRevision);
+    assert.equal(fixture.state.messages.length, 1);
+    assert.equal(fixture.state.messages[0].id, userAck.id);
+    assert.equal(fixture.state.messages[0].created_at, userAck.created_at);
+    assert.equal(fixture.state.replyingTo.id, userAck.id);
+    handlers.onMessage({ ...userAck, id: "wrong", session_id: "another-chat" });
+    assert.equal(fixture.state.messages[0].id, userAck.id);
+
+    const assistantAck = {
+      ...userAck,
+      id: "22222222-2222-4222-8222-222222222222",
+      role: "assistant",
+    };
+    // Simple responses acknowledge before their first token.
+    handlers.onMessage(assistantAck);
+    const assistantRevision = fixture.workspace.getSnapshot();
+    handlers.onMessage(assistantAck);
+    assert.equal(fixture.workspace.getSnapshot(), assistantRevision);
+    handlers.onToken("Saved answer");
+    assert.equal(fixture.state.streamingMessage.id, assistantAck.id);
+    await (handlers.onDone || handlers.onComplete)();
+    assert.equal(fixture.state.messages.length, 2);
+    assert.equal(fixture.state.messages[1].id, assistantAck.id);
+    assert.equal(fixture.state.messages[1].created_at, assistantAck.created_at);
+    assert.equal(fixture.state.messages[1].content, "Saved answer");
+    fixture.callbacks.handleReplyMessage(fixture.state.messages[1]);
+    // Exercise a round trip through the same JSON shape used by history reload.
+    fixture.state.messages = JSON.parse(JSON.stringify(fixture.state.messages));
+    fixture.state.query = fixture.state.inputQuery = "Follow up";
+    await fixture.callbacks.handleSendMessage();
+    const reference = requests[1][platform === "frontend" ? 7 : 6];
+    assert.equal(reference.id, fixture.state.messages[1].id);
+    assert.equal(reference.content, "Saved answer");
+  });
+
+  test(`${platform}: saved error responses and stopped acknowledged messages keep permanent IDs`, async () => {
+    for (const terminal of ["error", "stop"]) {
+      let handlers;
+      const fixture = appCallbacks(platform, {
+        streamChat(...args) {
+          handlers = args[3];
+          return () => {};
+        },
+      });
+      Object.assign(fixture.state, {
+        messages: [],
+        documents: [],
+        attachedMedia: [],
+        pendingDocumentIds: [],
+      });
+      fixture.context.isSendingRef.current = false;
+      await fixture.callbacks.handleSendMessage();
+      handlers.onToken("Partial answer");
+      const saved = {
+        id: "33333333-3333-4333-8333-333333333333",
+        session_id: "fixture-session",
+        role: "assistant",
+        created_at: "2026-10-20T12:00:00",
+      };
+      handlers.onMessage(saved);
+      if (terminal === "error") handlers.onError("Fixture provider failed");
+      else fixture.callbacks.handleStopGeneration();
+      const stopped = fixture.state.messages.at(-1);
+      assert.equal(stopped.id, saved.id);
+      assert.equal(stopped.created_at, saved.created_at);
+      assert.ok(stopped.content.includes("Partial answer"));
+      handlers.onMessage({ ...saved, id: "late" });
+      handlers.onToken(" late output");
+      assert.equal(fixture.state.messages.length, 2);
+      assert.equal(fixture.state.messages.at(-1).id, saved.id);
+    }
+  });
+
+  test(`${platform}: background acknowledgements stay with their conversation and disappear after logout`, async () => {
+    let handlers;
+    const fixture = appCallbacks(platform, {
+      streamChat(...args) {
+        handlers = args[3];
+        return () => {};
+      },
+      logout: async () => {},
+    });
+    Object.assign(fixture.state, {
+      messages: [],
+      documents: [],
+      attachedMedia: [],
+      pendingDocumentIds: [],
+    });
+    fixture.context.isSendingRef.current = false;
+    await fixture.callbacks.handleSendMessage();
+    const original = fixture.workspace.active;
+    fixture.callbacks.handleReplyMessage(original.state.messages[0]);
+    fixture.context.setActiveSessionId("another-chat");
+    const saved = {
+      id: "44444444-4444-4444-8444-444444444444",
+      session_id: "fixture-session",
+      role: "user",
+      created_at: "2026-10-20T12:00:00",
+    };
+    handlers.onMessage(saved);
+    assert.equal(original.state.messages[0].id, saved.id);
+    assert.equal(original.state.replyingTo.id, saved.id);
+    assert.equal(fixture.state.messages.length, 0);
+    assert.equal(fixture.state.replyingTo, null);
+    await fixture.callbacks.handleLogout();
+    handlers.onMessage({ ...saved, id: "after-logout" });
+    assert.equal(fixture.state.messages.length, 0);
+  });
+
+  test(`${platform}: streaming message acknowledgements survive every frame split and reject unrelated metadata`, async () => {
+    let chunks = [];
+    const fixture = client(platform, (url) => {
+      if (!url.endsWith("/chat/stream"))
+        return response(credentials("ack-token"));
+      let index = 0;
+      return {
+        ...response({}),
+        body: {
+          getReader: () => ({
+            read: async () =>
+              index < chunks.length
+                ? { value: chunks[index++], done: false }
+                : { done: true },
+            cancel: async () => {},
+          }),
+        },
+      };
+    });
+    await fixture.api.login("fixture", "password");
+    const saved = {
+      id: "55555555-5555-4555-8555-555555555555",
+      session_id: "fixture-session",
+      role: "user",
+      created_at: "2026-10-20T12:00:00",
+    };
+    const wire = [
+      {
+        event: "message",
+        data: "",
+        message: { ...saved, session_id: "wrong" },
+      },
+      { event: "message", data: "", message: { ...saved, role: "system" } },
+      { event: "message", data: "", message: saved },
+      { event: "token", data: "Answer 🌍" },
+      {
+        event: "message",
+        data: "",
+        message: { ...saved, role: "assistant", id: "assistant-id" },
+      },
+      { event: "done", data: "[DONE]" },
+    ]
+      .map((event) => "data: " + JSON.stringify(event) + "\n\n")
+      .join("");
+    const wireBytes = new TextEncoder().encode(wire);
+    const length = platform === "frontend" ? wireBytes.length : wire.length;
+    for (let split = 0; split <= length; split++) {
+      const events = [];
+      const handlers = {
+        onMessage: (message) =>
+          events.push(["message", message.role, message.id]),
+        onToken: (token) => events.push(["token", token]),
+        onCitations() {},
+        onDone: () => events.push(["done"]),
+        onComplete: () => events.push(["done"]),
+        onError: (error) => {
+          throw new Error(error);
+        },
+      };
+      if (platform === "frontend") {
+        chunks = [wireBytes.slice(0, split), wireBytes.slice(split)];
+        await fixture.api.streamChat(
+          "fixture-session",
+          "hello",
+          "AUTO",
+          handlers,
+        );
+      } else {
+        fixture.api.streamChat("fixture-session", "hello", "AUTO", handlers);
+        const xhr = fixture.uploads.at(-1);
+        await until(() => xhr.sent);
+        xhr.responseText = wire.slice(0, split);
+        xhr.onprogress();
+        xhr.responseText = wire;
+        xhr.onprogress();
+        xhr.onload();
+      }
+      assert.deepEqual(events, [
+        ["message", "user", saved.id],
+        ["token", "Answer 🌍"],
+        ["message", "assistant", "assistant-id"],
+        ["done"],
+      ]);
+    }
+  });
+}
+
 async function mobileStreamFixture() {
   const fixture = client("mobile", () => response(credentials("stream-token")));
   await fixture.api.login("fixture", "password");
@@ -898,6 +1162,7 @@ function client(platform, handleRequest, environment = {}) {
     URLSearchParams,
     AbortController,
     DOMException,
+    TextDecoder,
     console,
     setTimeout,
     clearTimeout,
@@ -1173,6 +1438,7 @@ function appCallbacks(platform, apiService) {
           "handleDetachDocument",
           "handleAttachDocumentFromModal",
           "handleSendMessage",
+          "handleReplyMessage",
           "handleStopGeneration",
           "handleNewSession",
           "handleClearMessages",
@@ -1189,6 +1455,7 @@ function appCallbacks(platform, apiService) {
           "handleDetachDocument",
           "handleAttachDocumentFromModal",
           "handleSendMessage",
+          "handleReplyMessage",
           "handleStopGeneration",
           "handleDeleteSession",
           "selectSession",

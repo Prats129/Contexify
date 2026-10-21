@@ -1,11 +1,17 @@
 import json
 import re
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import Any, AsyncGenerator, Dict, List, Literal, Optional
 
 from app.core.errors import ImageGenerationError
 from app.core.logging import logger
 from app.repositories.session_store import session_store_repo
-from app.schemas.chat import ChatMode, ChatRequest, Citation, MediaAttachment
+from app.schemas.chat import (
+    ChatMode,
+    ChatRequest,
+    Citation,
+    MediaAttachment,
+    MessageAcknowledgement,
+)
 from app.services.chat_history_service import chat_history_service
 from app.services.image_gen_service import image_gen_service
 from app.services.llm_service import llm_service
@@ -248,14 +254,46 @@ class ChatOrchestrator:
 
         return False
 
+    @staticmethod
+    def _persist_message(
+        session_id: str,
+        role: Literal["user", "assistant"],
+        content: str,
+        citations: Optional[List[Dict[str, Any]]] = None,
+        attachments: Optional[List[Any]] = None,
+        reply_to: Optional[Any] = None,
+    ) -> str:
+        saved = chat_history_service.save_message(
+            session_id,
+            role,
+            content,
+            citations=citations,
+            attachments=attachments,
+            reply_to=reply_to,
+        )
+        session_store_repo.record_message(
+            session_id,
+            role,
+            content,
+            attachments=attachments,
+            reply_to=reply_to,
+            message_id=saved.id,
+        )
+        acknowledgement = MessageAcknowledgement(
+            id=saved.id,
+            session_id=saved.session_id,
+            role=role,
+            created_at=saved.created_at,
+        )
+        return f"data: {json.dumps({'event': 'message', 'data': '', 'message': acknowledgement.model_dump()})}\n\n"
+
     async def _emit_simple_message(
         self, message: str, session_id: str
     ) -> AsyncGenerator[str, None]:
         """Emit a simple assistant text response and persist to history."""
-        chat_history_service.save_message(
+        yield self._persist_message(
             session_id=session_id, role="assistant", content=message
         )
-        session_store_repo.record_message(session_id, "assistant", message)
         yield f"data: {json.dumps({'event': 'token', 'data': message})}\n\n"
         yield f"data: {json.dumps({'event': 'done', 'data': '[DONE]'})}\n\n"
 
@@ -267,6 +305,7 @@ class ChatOrchestrator:
         reply_to: Optional[Any] = None,
     ) -> AsyncGenerator[str, None]:
         """Direct conversational response with full multi-turn chat memory and reply reference."""
+        stream_error = None
         full_answer = ""
         try:
             async for token in llm_service.stream_conversational_answer(
@@ -277,13 +316,14 @@ class ChatOrchestrator:
         except Exception as e:
             logger.exception(f"Error during Conversational LLM streaming: {e}")
             err_str = f"Error generating response: {str(e)}"
-            yield f"data: {json.dumps({'event': 'error', 'data': err_str})}\n\n"
+            stream_error = err_str
             full_answer = err_str
 
-        chat_history_service.save_message(
+        yield self._persist_message(
             session_id=session_id, role="assistant", content=full_answer
         )
-        session_store_repo.record_message(session_id, "assistant", full_answer)
+        if stream_error is not None:
+            yield f"data: {json.dumps({'event': 'error', 'data': stream_error})}\n\n"
         yield f"data: {json.dumps({'event': 'done', 'data': '[DONE]'})}\n\n"
 
     async def route_and_stream(
@@ -306,17 +346,10 @@ class ChatOrchestrator:
         chat_history = session_store_repo.get_history_messages(session_id)
 
         # 1. Persist User Prompt to database & in-memory store with attachments and reply reference
-        chat_history_service.save_message(
+        yield self._persist_message(
             session_id=session_id,
             role="user",
             content=request.message or "",
-            attachments=request.attachments,
-            reply_to=request.reply_to,
-        )
-        session_store_repo.record_message(
-            session_id,
-            "user",
-            request.message or "",
             attachments=request.attachments,
             reply_to=request.reply_to,
         )
@@ -569,6 +602,7 @@ class ChatOrchestrator:
         yield f"data: {json.dumps({'event': 'citations', 'data': '', 'citations': citations_data})}\n\n"
 
         # 3. Stream answer token by token with chat history & accumulate
+        stream_error = None
         full_answer = ""
         try:
             async for token in llm_service.stream_rag_answer(
@@ -579,17 +613,18 @@ class ChatOrchestrator:
         except Exception as e:
             logger.exception(f"Error during LLM streaming: {e}")
             err_str = f"Error generating answer: {str(e)}"
-            yield f"data: {json.dumps({'event': 'error', 'data': err_str})}\n\n"
+            stream_error = err_str
             full_answer = err_str
 
         # 4. Persist completed assistant message with citations to SQLite & in-memory
-        chat_history_service.save_message(
+        yield self._persist_message(
             session_id=session_id,
             role="assistant",
             content=full_answer,
             citations=citations_data,
         )
-        session_store_repo.record_message(session_id, "assistant", full_answer)
+        if stream_error is not None:
+            yield f"data: {json.dumps({'event': 'error', 'data': stream_error})}\n\n"
 
         yield f"data: {json.dumps({'event': 'done', 'data': '[DONE]'})}\n\n"
 
@@ -600,6 +635,7 @@ class ChatOrchestrator:
         chat_history: Optional[List[Dict[str, Any]]] = None,
         reply_to: Optional[Any] = None,
     ) -> AsyncGenerator[str, None]:
+        stream_error = None
         full_answer = ""
         citations_data = []
 
@@ -643,17 +679,18 @@ class ChatOrchestrator:
         except Exception as e:
             logger.exception(f"Error during Web Search LLM streaming: {e}")
             err_str = f"Error generating web search answer: {str(e)}"
-            yield f"data: {json.dumps({'event': 'error', 'data': err_str})}\n\n"
+            stream_error = err_str
             full_answer = err_str
 
         # Persist completed assistant message with citations to SQLite & in-memory
-        chat_history_service.save_message(
+        yield self._persist_message(
             session_id=session_id,
             role="assistant",
             content=full_answer,
             citations=citations_data,
         )
-        session_store_repo.record_message(session_id, "assistant", full_answer)
+        if stream_error is not None:
+            yield f"data: {json.dumps({'event': 'error', 'data': stream_error})}\n\n"
 
         yield f"data: {json.dumps({'event': 'done', 'data': '[DONE]'})}\n\n"
 
@@ -693,13 +730,7 @@ class ChatOrchestrator:
             yield f"data: {json.dumps({'event': 'token', 'data': done_caption})}\n\n"
 
             # Save assistant message with generated attachment
-            chat_history_service.save_message(
-                session_id=session_id,
-                role="assistant",
-                content=done_caption,
-                attachments=[generated_media],
-            )
-            session_store_repo.record_message(
+            yield self._persist_message(
                 session_id=session_id,
                 role="assistant",
                 content=done_caption,
@@ -714,11 +745,10 @@ class ChatOrchestrator:
                 else "Image generation could not be completed. Please try again."
             )
             err_msg = f"⚠️ Sorry, could not generate image: {detail}"
-            yield f"data: {json.dumps({'event': 'error', 'data': err_msg})}\n\n"
-            chat_history_service.save_message(
+            yield self._persist_message(
                 session_id=session_id, role="assistant", content=err_msg
             )
-            session_store_repo.record_message(session_id, "assistant", err_msg)
+            yield f"data: {json.dumps({'event': 'error', 'data': err_msg})}\n\n"
 
         yield f"data: {json.dumps({'event': 'done', 'data': '[DONE]'})}\n\n"
 
@@ -728,6 +758,7 @@ class ChatOrchestrator:
         session_id: str,
         chat_history: Optional[List[Dict[str, Any]]] = None,
     ) -> AsyncGenerator[str, None]:
+        stream_error = None
         full_answer = ""
         try:
             async for token in llm_service.stream_multimodal_answer(
@@ -741,14 +772,15 @@ class ChatOrchestrator:
         except Exception as e:
             logger.exception(f"Multimodal vision execution error: {e}")
             err_msg = f"⚠️ Error analyzing image/document: {str(e)}"
-            yield f"data: {json.dumps({'event': 'error', 'data': err_msg})}\n\n"
+            stream_error = err_msg
             full_answer = err_msg
 
         # Persist assistant response
-        chat_history_service.save_message(
+        yield self._persist_message(
             session_id=session_id, role="assistant", content=full_answer
         )
-        session_store_repo.record_message(session_id, "assistant", full_answer)
+        if stream_error is not None:
+            yield f"data: {json.dumps({'event': 'error', 'data': stream_error})}\n\n"
         yield f"data: {json.dumps({'event': 'done', 'data': '[DONE]'})}\n\n"
 
 

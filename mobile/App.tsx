@@ -976,6 +976,9 @@ export default function App() {
       created_at: new Date().toISOString(),
     };
 
+    let userMessageId = userMsg.id;
+    let assistantMessageId = `asst-${Date.now()}`;
+    let assistantCreatedAt = new Date().toISOString();
     setMessages((prev) => [...prev, userMsg]);
     setStreamingMessage({ content: "", citations: [], attachments: [] });
     if (conversationStore.active === conversation) {
@@ -1053,6 +1056,49 @@ export default function App() {
       prompt,
       currentMode,
       {
+        onMessage: (saved) => {
+          if (
+            isStreamFinalized ||
+            authVersion !== authVersionRef.current ||
+            !conversationStore.live(conversation) ||
+            saved.session_id !== sessionId
+          )
+            return;
+          const previousId =
+            saved.role === "user" ? userMessageId : assistantMessageId;
+          if (saved.id === previousId) return;
+          if (saved.role === "user") userMessageId = saved.id;
+          else {
+            assistantMessageId = saved.id;
+            assistantCreatedAt = saved.created_at;
+            setStreamingMessage((previous) =>
+              previous
+                ? { ...previous, id: saved.id, created_at: saved.created_at }
+                : previous,
+            );
+          }
+          setMessages((previous) =>
+            previous.map((message) => {
+              if (message.id === previousId)
+                return {
+                  ...message,
+                  id: saved.id,
+                  created_at: saved.created_at,
+                };
+              if (message.reply_to?.id === previousId)
+                return {
+                  ...message,
+                  reply_to: { ...message.reply_to, id: saved.id },
+                };
+              return message;
+            }),
+          );
+          setReplyingTo((previous) =>
+            previous?.id === previousId
+              ? { ...previous, id: saved.id }
+              : previous,
+          );
+        },
         onToken: (token) => {
           if (
             isStreamFinalized ||
@@ -1061,11 +1107,12 @@ export default function App() {
           )
             return;
           streamedContent += token;
-          setStreamingMessage({
+          setStreamingMessage((previous) => ({
+            ...previous,
             content: streamedContent,
             citations: streamedCitations,
             attachments: streamedMedia,
-          });
+          }));
         },
         onCitations: (cits) => {
           if (
@@ -1075,11 +1122,12 @@ export default function App() {
           )
             return;
           streamedCitations = cits;
-          setStreamingMessage({
+          setStreamingMessage((previous) => ({
+            ...previous,
             content: streamedContent,
             citations: streamedCitations,
             attachments: streamedMedia,
-          });
+          }));
         },
         onMedia: (media: MediaAttachment) => {
           if (
@@ -1089,11 +1137,12 @@ export default function App() {
           )
             return;
           streamedMedia = [...streamedMedia, media];
-          setStreamingMessage({
+          setStreamingMessage((previous) => ({
+            ...previous,
             content: streamedContent,
             citations: streamedCitations,
             attachments: streamedMedia,
-          });
+          }));
         },
         onComplete: () => {
           finalizeStream(() => {
@@ -1104,7 +1153,7 @@ export default function App() {
 
             conversation.preserveHistory ||= !userToUse;
             const aiMsg: Message = {
-              id: "ai_" + Date.now(),
+              id: assistantMessageId,
               session_id: sessionId!,
               role: "assistant",
               content:
@@ -1114,7 +1163,7 @@ export default function App() {
                   : "No response generated."),
               citations: streamedCitations,
               attachments: streamedMedia.length > 0 ? streamedMedia : undefined,
-              created_at: new Date().toISOString(),
+              created_at: assistantCreatedAt,
             };
             setMessages((prev) => [...prev, aiMsg]);
           });
@@ -1126,7 +1175,7 @@ export default function App() {
 
             conversation.preserveHistory = true;
             const errorMsg: Message = {
-              id: "err_" + Date.now(),
+              id: assistantMessageId,
               session_id: sessionId!,
               role: "assistant",
               content: [streamedContent, `Response interrupted: ${errMsg}`]
@@ -1134,7 +1183,7 @@ export default function App() {
                 .join("\n\n"),
               citations: streamedCitations,
               attachments: streamedMedia.length > 0 ? streamedMedia : undefined,
-              created_at: new Date().toISOString(),
+              created_at: assistantCreatedAt,
             };
             setMessages((prev) => [...prev, errorMsg]);
           });
@@ -1184,13 +1233,13 @@ export default function App() {
       setMessages((previous) => [
         ...previous,
         {
-          id: `stopped-${Date.now()}`,
+          id: partial.id || `stopped-${Date.now()}`,
           session_id: conversation.sessionId || "",
           role: "assistant",
           content: partial.content,
           citations: partial.citations,
           attachments: partial.attachments,
-          created_at: new Date().toISOString(),
+          created_at: partial.created_at || new Date().toISOString(),
         },
       ]);
     }

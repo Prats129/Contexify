@@ -75,7 +75,7 @@ export const MessageList: React.FC<MessageListProps> = ({
     externalHighlightedId !== undefined
       ? externalHighlightedId
       : internalHighlightedId;
-  const highlightTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Extract all user prompt items for the timeline navigation
   const userPrompts = useMemo(() => {
@@ -381,7 +381,16 @@ export const MessageList: React.FC<MessageListProps> = ({
                     : undefined
                 }
                 onUseAsReference={onUseAsReference}
-                onReply={onReply}
+                onReply={
+                  onReply
+                    ? () =>
+                        onReply({
+                          id: msg.id,
+                          role: msg.role,
+                          content: msg.content,
+                        })
+                    : undefined
+                }
                 onJumpToMessage={scrollToTargetMessage}
               />
             );

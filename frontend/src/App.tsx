@@ -897,13 +897,13 @@ export const App: React.FC = () => {
       setMessages((previous) => [
         ...previous,
         {
-          id: `stopped-${Date.now()}`,
+          id: partial.id || `stopped-${Date.now()}`,
           session_id: conversation.sessionId || "",
           role: "assistant",
           content: partial.content,
           citations: partial.citations,
           attachments: partial.attachments,
-          created_at: new Date().toISOString(),
+          created_at: partial.created_at || new Date().toISOString(),
         },
       ]);
     }
@@ -983,6 +983,9 @@ export const App: React.FC = () => {
       attachments: mediaToSend.length > 0 ? mediaToSend : null,
       created_at: new Date().toISOString(),
     };
+    let userMessageId = userMsg.id;
+    let assistantMessageId = `asst-${Date.now()}`;
+    let assistantCreatedAt = new Date().toISOString();
     setMessages((prev) => [...prev, userMsg]);
 
     // Setup streaming placeholder
@@ -1042,6 +1045,50 @@ export const App: React.FC = () => {
       query,
       currentMode,
       {
+        onMessage: (saved) => {
+          if (
+            finalized ||
+            abortController.signal.aborted ||
+            authVersion !== authVersionRef.current ||
+            !conversationStore.live(conversation) ||
+            saved.session_id !== targetSessionId
+          )
+            return;
+          const previousId =
+            saved.role === "user" ? userMessageId : assistantMessageId;
+          if (saved.id === previousId) return;
+          if (saved.role === "user") userMessageId = saved.id;
+          else {
+            assistantMessageId = saved.id;
+            assistantCreatedAt = saved.created_at;
+            setStreamingMessage((previous) =>
+              previous
+                ? { ...previous, id: saved.id, created_at: saved.created_at }
+                : previous,
+            );
+          }
+          setMessages((previous) =>
+            previous.map((message) => {
+              if (message.id === previousId)
+                return {
+                  ...message,
+                  id: saved.id,
+                  created_at: saved.created_at,
+                };
+              if (message.reply_to?.id === previousId)
+                return {
+                  ...message,
+                  reply_to: { ...message.reply_to, id: saved.id },
+                };
+              return message;
+            }),
+          );
+          setReplyingTo((previous) =>
+            previous?.id === previousId
+              ? { ...previous, id: saved.id }
+              : previous,
+          );
+        },
         onCitations: (citations) => {
           if (
             finalized ||
@@ -1113,7 +1160,7 @@ export const App: React.FC = () => {
           setMessages((previous) => [
             ...previous,
             {
-              id: `interrupted-${Date.now()}`,
+              id: assistantMessageId,
               session_id: targetSessionId,
               role: "assistant",
               content: [accumulatedText, `Response interrupted: ${errMsg}`]
@@ -1121,7 +1168,7 @@ export const App: React.FC = () => {
                 .join("\n\n"),
               citations: receivedCitations,
               attachments: receivedMedia.length ? receivedMedia : null,
-              created_at: new Date().toISOString(),
+              created_at: assistantCreatedAt,
             },
           ]);
           setStreamingMessage(null);
@@ -1141,13 +1188,13 @@ export const App: React.FC = () => {
 
           conversation.preserveHistory ||= !userToUse;
           const finishedAssistantMsg: Message = {
-            id: `asst-${Date.now()}`,
+            id: assistantMessageId,
             session_id: targetSessionId,
             role: "assistant",
             content: accumulatedText,
             citations: receivedCitations,
             attachments: receivedMedia.length > 0 ? receivedMedia : null,
-            created_at: new Date().toISOString(),
+            created_at: assistantCreatedAt,
           };
 
           // Append to state

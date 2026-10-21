@@ -1005,7 +1005,18 @@ export const apiService = {
 
           try {
             const data = JSON.parse(payload);
-            if (data.event === "citations" && data.citations) {
+            if (data.event === "message") {
+              const saved = data.message;
+              if (
+                saved &&
+                typeof saved.id === "string" &&
+                saved.id &&
+                saved.session_id === sessionId &&
+                (saved.role === "user" || saved.role === "assistant") &&
+                typeof saved.created_at === "string"
+              )
+                handlers.onMessage?.(saved);
+            } else if (data.event === "citations" && data.citations) {
               handlers.onCitations(data.citations);
             } else if (
               data.event === "media" &&
