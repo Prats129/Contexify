@@ -134,15 +134,16 @@ def evict_session(
 ) -> None:
     from app.repositories.session_store import session_store_repo
 
-    session_store_repo._sessions.pop(session_id, None)
-    for document_id in document_ids:
-        session_store_repo._documents.pop(document_id, None)
-    # Other active chats may have referenced temporary documents.
-    if remove_references:
-        for session in list(session_store_repo._sessions.values()):
-            session.document_ids[:] = [
-                key for key in session.document_ids if key not in document_ids
-            ]
+    with session_store_repo._cache_lock:
+        session_store_repo._sessions.pop(session_id, None)
+        for document_id in document_ids:
+            session_store_repo._documents.pop(document_id, None)
+        # Other active chats may have referenced temporary documents.
+        if remove_references:
+            for session in list(session_store_repo._sessions.values()):
+                session.document_ids[:] = [
+                    key for key in session.document_ids if key not in document_ids
+                ]
 
 
 def _is_temporary_session(session: Any) -> bool:
@@ -342,7 +343,8 @@ def prune_local_cache() -> None:
         ("chat_sessions", session_store_repo._sessions),
         ("documents", session_store_repo._documents),
     ):
-        cached_ids = list(cache)
+        with session_store_repo._cache_lock:
+            cached_ids = list(cache)
         for offset in range(0, len(cached_ids), 400):
             batch = cached_ids[offset : offset + 400]
             placeholders = ",".join("?" for _ in batch)
@@ -364,6 +366,7 @@ def prune_local_cache() -> None:
                     row["id"]
                     for row in conn.execute(query, (*batch, utc_now())).fetchall()
                 }
-            for key in batch:
-                if key not in live_ids:
-                    cache.pop(key, None)
+            with session_store_repo._cache_lock:
+                for key in batch:
+                    if key not in live_ids:
+                        cache.pop(key, None)

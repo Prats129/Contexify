@@ -197,6 +197,222 @@ class SecurityTests(unittest.TestCase):
                 )
             )["chat_orchestrator"]
 
+    def test_slow_search_retrieval_and_auth_leave_other_requests_responsive(self):
+        import threading
+
+        from app.api.v1.endpoints import chat, user
+
+        for operation in ("search", "retrieval", "authorization", "login"):
+            with self.subTest(operation=operation):
+                actual = self.reply_orchestrator()
+                services = actual._route_and_stream.__func__.__globals__
+                if operation == "search":
+                    target, name = services["web_search_service"], "search"
+                elif operation == "retrieval":
+                    target, name = services["rag_service"], "retrieve_context_for_query"
+                elif operation == "authorization":
+                    target, name = chat, "ensure_session"
+                else:
+                    target, name = user.user_service, "authenticate_user"
+                original = getattr(target, name)
+                started, release = threading.Event(), threading.Event()
+                worker_ids = []
+
+                def slow(*args, **kwargs):
+                    worker_ids.append(threading.get_ident())
+                    started.set()
+                    if not release.wait(5):
+                        raise AssertionError("Blocking request stalled the event loop")
+                    return original(*args, **kwargs)
+
+                async def exercise():
+                    loop_thread = threading.get_ident()
+                    async with httpx.AsyncClient(
+                        transport=httpx.ASGITransport(app=app),
+                        base_url="http://fixture.invalid",
+                        headers={"Authorization": "Bearer " + self.token},
+                    ) as client:
+                        payload = {
+                            "session_id": "alice-session",
+                            "message": "summarize the document"
+                            if operation == "retrieval"
+                            else "latest news",
+                            "mode": "DOCUMENT_RAG"
+                            if operation == "retrieval"
+                            else "WEB_SEARCH",
+                        }
+                        if operation == "retrieval":
+                            payload["attachments"] = [
+                                {"id": "document", "file_type": "document"}
+                            ]
+                        if operation == "login":
+                            payload = {
+                                "username_or_email": "alice",
+                                "password": "Durable!482Strong",
+                            }
+                        request = asyncio.create_task(
+                            client.post(
+                                "/api/v1/user/login"
+                                if operation == "login"
+                                else "/api/v1/chat/stream",
+                                json=payload,
+                            )
+                        )
+                        try:
+                            self.assertTrue(await asyncio.to_thread(started.wait, 3))
+                            for url in (
+                                "/api/v1/health",
+                                "/api/v1/session/alice-session/history",
+                            ):
+                                response = await asyncio.wait_for(client.get(url), 1)
+                                self.assertEqual(
+                                    response.status_code, 200, response.text
+                                )
+                            self.assertFalse(request.done())
+                            self.assertNotIn(loop_thread, worker_ids)
+                        finally:
+                            release.set()
+                            response = await request
+                        self.assertEqual(response.status_code, 200, response.text)
+                        if operation != "login":
+                            events = [
+                                json.loads(frame[6:])
+                                for frame in response.text.strip().split("\n\n")
+                            ]
+                            self.assertEqual(events[-1]["event"], "done")
+                            self.assertTrue(
+                                any(event["event"] == "token" for event in events)
+                            )
+
+                with (
+                    patch.object(chat, "chat_orchestrator", actual),
+                    patch.object(target, name, side_effect=slow),
+                ):
+                    asyncio.run(exercise())
+
+    def test_cancellation_during_assistant_save_does_not_duplicate_the_answer(self):
+        import threading
+
+        from app.schemas.chat import ChatRequest
+        from app.services.chat_history_service import chat_history_service
+
+        actual = self.reply_orchestrator()
+        original = actual._persist_message
+        saved, release = threading.Event(), threading.Event()
+
+        def slow_save(*args, **kwargs):
+            result = original(*args, **kwargs)
+            role = kwargs.get("role", args[1] if len(args) > 1 else None)
+            if role == "assistant":
+                saved.set()
+                if not release.wait(5):
+                    raise AssertionError("Assistant save was not released")
+            return result
+
+        async def exercise():
+            async def consume():
+                async for _ in actual.route_and_stream(
+                    ChatRequest(session_id="alice-session", message="hello"),
+                    self.principal,
+                ):
+                    pass
+
+            task = asyncio.create_task(consume())
+            try:
+                self.assertTrue(await asyncio.to_thread(saved.wait, 3))
+                task.cancel()
+                await asyncio.sleep(0.02)
+                self.assertFalse(task.done())
+            finally:
+                release.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+
+        with patch.object(actual, "_persist_message", side_effect=slow_save):
+            asyncio.run(exercise())
+        messages = chat_history_service.get_session_messages("alice-session")
+        self.assertEqual([message.role for message in messages], ["user", "assistant"])
+        self.assertEqual(messages[1].content, "Fixture answer")
+
+    def test_parallel_streams_keep_cancellation_and_saved_replies_separate(self):
+        from app.schemas.chat import ChatRequest
+        from app.services.chat_history_service import chat_history_service
+
+        actual = self.reply_orchestrator()
+        llm = actual._route_and_stream.__func__.__globals__["llm_service"]
+        for session_id in ("parallel-held", "parallel-complete"):
+            security.ensure_session(session_id, self.principal)
+
+        async def exercise():
+            waiting = asyncio.Event()
+
+            async def answer(query, *args, **kwargs):
+                yield query
+                if query == "held":
+                    waiting.set()
+                    await asyncio.Event().wait()
+                yield " finished"
+
+            async def consume(session_id, message):
+                async for _ in actual.route_and_stream(
+                    ChatRequest(session_id=session_id, message=message), self.principal
+                ):
+                    pass
+
+            with patch.object(llm, "stream_conversational_answer", answer):
+                held = asyncio.create_task(consume("parallel-held", "held"))
+                try:
+                    await asyncio.wait_for(waiting.wait(), 3)
+                    await asyncio.wait_for(consume("parallel-complete", "complete"), 3)
+                finally:
+                    held.cancel()
+                    with self.assertRaises(asyncio.CancelledError):
+                        await held
+
+        asyncio.run(exercise())
+        held = chat_history_service.get_session_messages("parallel-held")
+        complete = chat_history_service.get_session_messages("parallel-complete")
+        self.assertEqual(len(held), 2)
+        self.assertEqual(len(complete), 2)
+        self.assertEqual(held[1].content, "held\n\nResponse stopped.")
+        self.assertEqual(complete[1].content, "complete finished")
+
+    def test_concurrent_workers_share_one_session_cache_without_losing_messages(self):
+        import sqlite3
+        import threading
+
+        from app.repositories.session_store import session_store_repo
+
+        # Keep the disposable file open while SDK clients connect concurrently.
+        # A remote Turso server owns that lifecycle in production.
+        keeper = sqlite3.connect(database.DB_FILE)
+        keeper.execute("SELECT COUNT(*) FROM chat_sessions").fetchall()
+        self.addCleanup(keeper.close)
+        barrier = threading.Barrier(8)
+
+        def load(_):
+            barrier.wait(timeout=5)
+            return session_store_repo.get_or_create_session("alice-session")
+
+        with ThreadPoolExecutor(max_workers=8) as workers:
+            sessions = list(workers.map(load, range(8)))
+            self.assertTrue(all(session is sessions[0] for session in sessions))
+            list(
+                workers.map(
+                    lambda index: session_store_repo.record_message(
+                        "alice-session",
+                        "user",
+                        f"message {index}",
+                        message_id=str(index),
+                    ),
+                    range(16),
+                )
+            )
+        self.assertEqual(
+            sorted(message["id"] for message in sessions[0].messages),
+            sorted(map(str, range(16))),
+        )
+
     def test_stream_message_ids_match_reloaded_sql_and_cache_in_every_route(self):
         from app.api.v1.endpoints import chat
         from app.repositories.session_store import session_store_repo
@@ -870,10 +1086,16 @@ class SecurityTests(unittest.TestCase):
                 try:
                     self.assertTrue(await asyncio.to_thread(started.wait, 5))
                     task.cancel()
-                    with self.assertRaises(asyncio.CancelledError):
-                        await task
+                    await asyncio.sleep(0.02)
+                    # Started work keeps its input until indexing and rollback finish.
+                    self.assertFalse(task.done())
+                    self.assertTrue(list(settings.UPLOAD_DIR.glob("*.txt")))
                     self.assertEqual(purge_failed_uploads(), 0)
                     self.assertEqual(len(objects), len(original_keys) + 1)
+                    release.set()
+                    with self.assertRaises(asyncio.CancelledError):
+                        await task
+                    self.assertFalse(list(settings.UPLOAD_DIR.glob("*.txt")))
                 finally:
                     release.set()
                     if not task.done():
@@ -5526,6 +5748,162 @@ class SecurityTests(unittest.TestCase):
                 conn.execute("SELECT delivery_status FROM email_otps").fetchone()[0],
                 "failed",
             )
+
+
+class BlockingWorkerTests(unittest.TestCase):
+    def test_model_clients_configure_finite_request_timeouts(self):
+        from google import genai
+
+        for name in ("embedding_service", "llm_service"):
+            with (
+                self.subTest(service=name),
+                patch.object(settings, "GEMINI_API_KEY", "fixture-key"),
+                patch.object(
+                    settings, "DEFAULT_LLM_MODEL", "fixture-model", create=True
+                ),
+                patch.object(genai, "Client") as client,
+            ):
+                runpy.run_path(
+                    str(Path(__file__).resolve().parents[1] / f"app/services/{name}.py")
+                )
+                client.assert_called_once_with(
+                    api_key="fixture-key", http_options={"timeout": 60_000}
+                )
+
+    def test_embedding_batch_keeps_sdk_arguments_and_rejects_incomplete_results(self):
+        from google import genai
+
+        from app.core.concurrency import run_blocking
+
+        with (
+            patch.object(settings, "GEMINI_API_KEY", "fixture-key"),
+            patch.object(
+                settings, "DEFAULT_EMBEDDING_MODEL", "fixture-model", create=True
+            ),
+            patch.object(settings, "EMBEDDING_DIMENSION", 3, create=True),
+            patch.object(genai, "Client") as client,
+        ):
+            service = runpy.run_path(
+                str(
+                    Path(__file__).resolve().parents[1]
+                    / "app/services/embedding_service.py"
+                )
+            )["embedding_service"]
+            embed = client.return_value.models.embed_content
+            vectors = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+            embed.return_value = types.SimpleNamespace(
+                embeddings=[types.SimpleNamespace(values=v) for v in vectors]
+            )
+            self.assertEqual(
+                asyncio.run(run_blocking(service.embed_batch, ["one", "two"])), vectors
+            )
+            self.assertEqual(embed.call_args.kwargs["contents"], ["one", "two"])
+            self.assertEqual(embed.call_args.kwargs["config"].output_dimensionality, 3)
+            for payload in (None, [], [types.SimpleNamespace(values=None)] * 2):
+                with self.subTest(payload=payload):
+                    embed.return_value = types.SimpleNamespace(embeddings=payload)
+                    result = asyncio.run(
+                        run_blocking(service.embed_batch, ["one", "two"])
+                    )
+                    self.assertEqual(len(result), 2)
+                    self.assertTrue(all(len(vector) == 3 for vector in result))
+
+    def test_worker_limit_context_and_queued_cancellation(self):
+        import threading
+        from contextvars import ContextVar
+
+        from anyio import to_thread
+
+        from app.core.concurrency import run_blocking
+
+        marker = ContextVar("worker_fixture", default="missing")
+        release, started = threading.Event(), threading.Event()
+        active = 0
+        maximum = 0
+        lock = threading.Lock()
+
+        def operation():
+            nonlocal active, maximum
+            with lock:
+                active += 1
+                maximum = max(maximum, active)
+                if active == 2:
+                    started.set()
+            try:
+                if not release.wait(5):
+                    raise AssertionError("Workers were not released")
+                return marker.get()
+            finally:
+                with lock:
+                    active -= 1
+
+        async def exercise():
+            limiter = to_thread.current_default_thread_limiter()
+            previous = limiter.total_tokens
+            limiter.total_tokens = 2
+            marker.set("propagated")
+            tasks = [asyncio.create_task(run_blocking(operation)) for _ in range(4)]
+            never_called = Mock()
+            queued = asyncio.create_task(run_blocking(never_called))
+            try:
+                self.assertTrue(await asyncio.to_thread(started.wait, 3))
+                self.assertEqual(limiter.borrowed_tokens, 2)
+                queued.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await queued
+                never_called.assert_not_called()
+                self.assertEqual(maximum, 2)
+            finally:
+                release.set()
+                results = await asyncio.gather(*tasks)
+                limiter.total_tokens = previous
+            self.assertEqual(results, ["propagated"] * 4)
+            self.assertEqual(maximum, 2)
+            never_called.assert_not_called()
+            with self.assertRaisesRegex(ValueError, "fixture"):
+                await run_blocking(Mock(side_effect=ValueError("fixture")))
+
+        asyncio.run(exercise())
+
+    def test_cancelled_scope_waits_for_started_worker(self):
+        import threading
+
+        from anyio import CancelScope, create_task_group
+
+        from app.core.concurrency import run_blocking
+
+        started, release = threading.Event(), threading.Event()
+        finished, returned = threading.Event(), threading.Event()
+        scopes = []
+
+        def operation():
+            started.set()
+            if not release.wait(5):
+                raise AssertionError("Worker was not released")
+            finished.set()
+
+        async def exercise():
+            async def request():
+                with CancelScope() as scope:
+                    scopes.append(scope)
+                    try:
+                        await run_blocking(operation)
+                    finally:
+                        self.assertTrue(finished.is_set())
+                        returned.set()
+
+            async with create_task_group() as group:
+                group.start_soon(request)
+                try:
+                    self.assertTrue(await asyncio.to_thread(started.wait, 3))
+                    scopes[0].cancel()
+                    await asyncio.sleep(0.02)
+                    self.assertFalse(returned.is_set())
+                finally:
+                    release.set()
+            self.assertTrue(returned.is_set())
+
+        asyncio.run(exercise())
 
 
 class TextStreamingTests(unittest.TestCase):

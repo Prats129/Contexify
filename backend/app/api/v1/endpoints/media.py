@@ -1,4 +1,3 @@
-import asyncio
 import uuid
 from pathlib import Path
 from typing import List, Optional
@@ -16,6 +15,7 @@ from fastapi import (
 from fastapi.responses import Response
 from fastapi.security import HTTPAuthorizationCredentials
 
+from app.core.concurrency import run_blocking
 from app.core.logging import logger
 from app.core.security import (
     Principal,
@@ -45,7 +45,7 @@ router = APIRouter()
 
 
 @router.get("/content/{kind}/{asset_id}")
-async def download_asset(
+def download_asset(
     asset_id: str,
     kind: str,
     ticket: Optional[str] = None,
@@ -60,28 +60,24 @@ async def download_asset(
     }
     if kind == "avatar":
         check_user_claim(asset_id, principal)
-        path = await asyncio.to_thread(user_service.get_user_avatar_path, asset_id)
+        path = user_service.get_user_avatar_path(asset_id)
         if not path:
             raise HTTPException(404, "Avatar not found.")
-        data = await asyncio.to_thread(
-            storage_service.download_owned_file,
-            f"avatars/{path.name}",
-            max_bytes=MAX_AVATAR_SIZE_BYTES,
+        data = storage_service.download_owned_file(
+            f"avatars/{path.name}", max_bytes=MAX_AVATAR_SIZE_BYTES
         )
         if data is None:
             raise HTTPException(404, "Avatar not found.")
-        return await asyncio.to_thread(image_response, data)
+        return image_response(data)
     row = check_asset(asset_id, principal, kind)
     key = storage_service.owned_storage_key(row, kind)
-    data = await asyncio.to_thread(
-        storage_service.download_owned_file,
-        key,
-        max_bytes=MAX_FILE_SIZE_BYTES if kind != "document" else None,
+    data = storage_service.download_owned_file(
+        key, max_bytes=MAX_FILE_SIZE_BYTES if kind != "document" else None
     )
     if data is None:
         raise HTTPException(404, "Asset not found.")
     if kind != "document":
-        return await asyncio.to_thread(image_response, data)
+        return image_response(data)
     headers["Content-Disposition"] = "attachment"
     return Response(data, media_type="application/octet-stream", headers=headers)
 
@@ -103,7 +99,9 @@ async def upload_media(
     if principal.is_guest and not session_id:
         session_id = uuid.uuid4().hex
     if session_id:
-        ensure_session(session_id, principal, is_temporary=is_temporary)
+        await run_blocking(
+            ensure_session, session_id, principal, is_temporary=is_temporary
+        )
     user_id = principal.user_id
     filename = file.filename or "uploaded_media.png"
     ext = Path(filename).suffix.lower()
@@ -122,7 +120,7 @@ async def upload_media(
                 detail=f"File exceeds maximum allowed size of {MAX_FILE_SIZE_BYTES // (1024 * 1024)}MB",
             )
 
-        attachment = await asyncio.to_thread(
+        attachment = await run_blocking(
             media_service.save_uploaded_media,
             file_bytes=content,
             original_filename=filename,
@@ -130,7 +128,7 @@ async def upload_media(
             user_id=user_id,
             mime_type=file.content_type,
         )
-        return present_attachment(attachment, principal)
+        return await run_blocking(present_attachment, attachment, principal)
     except HTTPException:
         raise
     except Exception as e:
@@ -142,7 +140,7 @@ async def upload_media(
 
 
 @router.get("/session/{session_id}", response_model=List[MediaAttachment])
-async def get_session_media(
+def get_session_media(
     session_id: str, principal: Principal = Depends(require_principal)
 ):
     """Retrieve all media assets associated with a specific session."""
@@ -182,7 +180,7 @@ async def get_session_media(
 
 
 @router.get("/assets", response_model=PaginatedAssetsResponse)
-async def list_unified_assets(
+def list_unified_assets(
     user_id: Optional[str] = Query(None, description="Filter by user ID"),
     session_id: Optional[str] = Query(None, description="Filter by session ID"),
     origin: Optional[str] = Query(
@@ -231,7 +229,7 @@ async def list_unified_assets(
 
 
 @router.delete("/assets/{asset_id}", response_model=AssetDeleteResponse)
-async def delete_unified_asset(
+def delete_unified_asset(
     asset_id: str, principal: Principal = Depends(require_principal)
 ):
     """

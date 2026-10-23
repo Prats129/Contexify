@@ -10,6 +10,7 @@ import httpx
 from fastapi import HTTPException
 from PIL import Image, ImageOps
 
+from app.core.concurrency import run_blocking
 from app.core.config import settings
 from app.core.errors import ImageGenerationError
 from app.core.logging import logger
@@ -120,7 +121,7 @@ class ImageGenService:
                 )
             body.extend(chunk)
         try:
-            payload = await asyncio.to_thread(json.loads, body)
+            payload = await run_blocking(json.loads, body)
         except (ValueError, UnicodeError) as error:
             if not response.is_success:
                 return {}
@@ -276,10 +277,10 @@ class ImageGenService:
         if not cleaned_prompt:
             raise ImageGenerationError("Please enter a prompt for the image.")
         response = await self._request(cleaned_prompt, aspect_ratio, reference)
-        image_bytes = await asyncio.to_thread(self._image_bytes, response)
+        image_bytes = await run_blocking(self._image_bytes, response)
         try:
             # Publish once. A storage failure must never restart generation.
-            return await asyncio.to_thread(
+            return await run_blocking(
                 media_service.save_generated_image,
                 image_bytes=image_bytes,
                 prompt=cleaned_prompt,
@@ -308,14 +309,14 @@ class ImageGenService:
         session_id: Optional[str] = None,
         user_id: Optional[str] = None,
     ) -> MediaAttachment:
-        ref_bytes = await asyncio.to_thread(
+        ref_bytes = await run_blocking(
             media_service.get_media_bytes, reference_image_path
         )
         if not ref_bytes:
             raise ImageGenerationError(
                 "The reference image could not be read. Please reattach it and try again."
             )
-        reference = await asyncio.to_thread(self._prepare_reference, ref_bytes)
+        reference = await run_blocking(self._prepare_reference, ref_bytes)
         return await self._generate(prompt, session_id, user_id, "1:1", reference)
 
 

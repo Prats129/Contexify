@@ -1,6 +1,5 @@
+from threading import RLock
 from typing import Any, Dict, List, Optional
-
-from fastapi import HTTPException
 
 from app.db.database import get_db_connection
 from app.schemas.chat import ChatMode, SessionState
@@ -13,6 +12,7 @@ class SessionStoreRepository:
     """Persistent session & document metadata store backed by SQLite."""
 
     def __init__(self):
+        self._cache_lock = RLock()
         self._sessions: Dict[str, SessionState] = {}
         self._documents: Dict[str, DocumentMetadata] = {}
 
@@ -25,47 +25,44 @@ class SessionStoreRepository:
         with get_db_connection() as conn:
             row = active_session(conn, session_id)
         docs = chat_history_service.list_session_documents(session_id)
-        if session_id not in self._sessions:
-            # Check if exists in DB (logged-in user session)
-            db_session = chat_history_service.get_session(session_id)
-            if db_session:
-                doc_ids = [d.document_id for d in docs]
-                self._sessions[session_id] = SessionState(
+        with self._cache_lock:
+            session = self._sessions.setdefault(
+                session_id,
+                SessionState(
                     session_id=session_id,
-                    mode=db_session.mode,
-                    document_ids=doc_ids,
-                    created_at=db_session.created_at,
+                    mode=row["mode"],
+                    document_ids=[doc.document_id for doc in docs],
+                    created_at=row["created_at"],
                     history_version=row["history_version"],
-                )
-            else:
-                raise HTTPException(404, "Session not found.")
-        session = self._sessions.get(session_id)
-        if session is None:
-            raise HTTPException(404, "Session not found.")
-        # Document references can be added/deleted by another worker. SQL is
-        # authoritative for retrieval scope, just as it is for signed-in history.
-        session.document_ids = [doc.document_id for doc in docs]
-        for doc in docs:
-            self._documents[doc.document_id] = doc
-        self.invalidate_cached_history(session_id, row["history_version"])
-        return session
+                ),
+            )
+            # SQL remains authoritative across API workers.
+            session.mode = ChatMode(row["mode"])
+            session.document_ids = [doc.document_id for doc in docs]
+            for doc in docs:
+                self._documents[doc.document_id] = doc
+            self.invalidate_cached_history(session_id, row["history_version"])
+            return session
 
     def invalidate_cached_history(self, session_id: str, history_version: int) -> None:
         """Discard older history without changing documents or session settings."""
-        session = self._sessions.get(session_id)
-        if session is not None and session.history_version < history_version:
-            session.messages.clear()
-            session.history_version = history_version
+        with self._cache_lock:
+            session = self._sessions.get(session_id)
+            if session is not None and session.history_version < history_version:
+                session.messages.clear()
+                session.history_version = history_version
 
     def set_session_mode(self, session_id: str, mode: ChatMode):
         session = self.get_or_create_session(session_id)
-        session.mode = mode
+        with self._cache_lock:
+            session.mode = mode
         chat_history_service.update_session_mode(session_id, mode)
 
     def attach_document_to_session(self, session_id: str, document_id: str):
         session = self.get_or_create_session(session_id)
-        if document_id not in session.document_ids:
-            session.document_ids.append(document_id)
+        with self._cache_lock:
+            if document_id not in session.document_ids:
+                session.document_ids.append(document_id)
 
     def save_document_metadata(
         self,
@@ -84,7 +81,8 @@ class SessionStoreRepository:
                 total_chunks=metadata.total_chunks,
                 storage_url=getattr(metadata, "storage_url", "") or "",
             )
-        self._documents[metadata.document_id] = metadata
+        with self._cache_lock:
+            self._documents[metadata.document_id] = metadata
 
     def get_document_metadata(self, document_id: str) -> Optional[DocumentMetadata]:
         with get_db_connection() as conn:
@@ -92,7 +90,8 @@ class SessionStoreRepository:
                 "SELECT * FROM documents WHERE id=?", (document_id,)
             ).fetchone()
             if not row:
-                self._documents.pop(document_id, None)
+                with self._cache_lock:
+                    self._documents.pop(document_id, None)
                 return None
             if row["session_id"]:
                 active_session(conn, row["session_id"])
@@ -107,7 +106,8 @@ class SessionStoreRepository:
             )
 
     def list_all_documents(self) -> List[DocumentMetadata]:
-        return list(self._documents.values())
+        with self._cache_lock:
+            return list(self._documents.values())
 
     def get_history_messages(self, session_id: str) -> List[Dict[str, Any]]:
         """Use SQL for signed-in history and versioned memory for guest history."""
@@ -132,6 +132,8 @@ class SessionStoreRepository:
                 for m in db_messages
             ]
         session = self.get_or_create_session(session_id)
+        with self._cache_lock:
+            messages = list(session.messages)
         return [
             {
                 "id": m.get("id", ""),
@@ -140,7 +142,7 @@ class SessionStoreRepository:
                 "attachments": m.get("attachments", []),
                 "reply_to": m.get("reply_to"),
             }
-            for m in session.messages
+            for m in messages
         ]
 
     def record_message(
@@ -169,7 +171,8 @@ class SessionStoreRepository:
                 if hasattr(reply_to, "model_dump")
                 else (reply_to if isinstance(reply_to, dict) else dict(reply_to))
             )
-        session.messages.append(msg_dict)
+        with self._cache_lock:
+            session.messages.append(msg_dict)
 
     def remove_document(self, document_id: str):
         from app.services.storage_service import storage_service
@@ -179,11 +182,11 @@ class SessionStoreRepository:
         if storage_url:
             storage_service.delete_file(storage_url)
 
-        if document_id in self._documents:
-            del self._documents[document_id]
-        for session in self._sessions.values():
-            if document_id in session.document_ids:
-                session.document_ids.remove(document_id)
+        with self._cache_lock:
+            self._documents.pop(document_id, None)
+            for session in self._sessions.values():
+                if document_id in session.document_ids:
+                    session.document_ids.remove(document_id)
         chat_history_service.delete_document(document_id)
 
 

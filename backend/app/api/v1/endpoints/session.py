@@ -1,4 +1,3 @@
-import asyncio
 import uuid
 from typing import List, Optional, Union
 
@@ -33,7 +32,7 @@ router = APIRouter()
 @router.post(
     "/create", response_model=ChatSessionResponse, status_code=status.HTTP_201_CREATED
 )
-async def create_session(
+def create_session(
     req: ChatSessionCreate, principal: Principal = Depends(require_user)
 ):
     check_user_claim(req.user_id, principal)
@@ -49,13 +48,11 @@ async def create_session(
 
 
 @router.post("/purge-temporary")
-async def purge_temporary_sessions(principal: Principal = Depends(require_admin)):
+def purge_temporary_sessions(principal: Principal = Depends(require_admin)):
     """
     Manually or cron-triggered purge of expired temporary chat sessions.
     """
-    count = await asyncio.to_thread(
-        chat_history_service.purge_expired_temporary_sessions
-    )
+    count = chat_history_service.purge_expired_temporary_sessions()
     return {
         "message": f"Completed cleanup for {count} chat session(s).",
         "purged_count": count,
@@ -66,7 +63,7 @@ async def purge_temporary_sessions(principal: Principal = Depends(require_admin)
     "/list",
     response_model=Union[PaginatedChatSessionsResponse, List[ChatSessionResponse]],
 )
-async def list_sessions(
+def list_sessions(
     user_id: str = Query(..., description="ID of the user"),
     limit: Optional[int] = Query(None, ge=1, le=100, description="Page size limit"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
@@ -119,7 +116,7 @@ async def list_sessions(
 
 
 @router.get("/{session_id}/history", response_model=SessionHistoryResponse)
-async def get_session_history(
+def get_session_history(
     session_id: str, principal: Principal = Depends(require_principal)
 ):
     """
@@ -148,7 +145,7 @@ async def get_session_history(
 
 
 @router.patch("/{session_id}/title")
-async def update_session_title(
+def update_session_title(
     session_id: str,
     payload: TitleUpdatePayload,
     principal: Principal = Depends(require_principal),
@@ -168,7 +165,7 @@ async def update_session_title(
 
 
 @router.patch("/{session_id}/pin")
-async def toggle_pin_session(
+def toggle_pin_session(
     session_id: str,
     payload: PinUpdatePayload,
     principal: Principal = Depends(require_principal),
@@ -188,7 +185,7 @@ async def toggle_pin_session(
 
 
 @router.patch("/{session_id}/mode")
-async def update_session_mode(
+def update_session_mode(
     session_id: str,
     payload: ModeUpdatePayload,
     principal: Principal = Depends(require_principal),
@@ -202,7 +199,7 @@ async def update_session_mode(
 
 
 @router.delete("/{session_id}/messages")
-async def clear_session_messages(
+def clear_session_messages(
     session_id: str, principal: Principal = Depends(require_principal)
 ):
     """
@@ -214,14 +211,12 @@ async def clear_session_messages(
 
 
 @router.delete("/{session_id}")
-async def delete_session(
-    session_id: str, principal: Principal = Depends(require_principal)
-):
+def delete_session(session_id: str, principal: Principal = Depends(require_principal)):
     """
     Delete a chat session and cascade delete its messages and document associations.
     """
     check_session(session_id, principal)
-    success = await asyncio.to_thread(chat_history_service.delete_session, session_id)
+    success = chat_history_service.delete_session(session_id)
     if not success:
         raise HTTPException(status_code=404, detail="Session not found.")
     return {

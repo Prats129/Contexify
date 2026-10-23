@@ -1,5 +1,3 @@
-import asyncio
-import os
 import tempfile
 import uuid
 from functools import partial
@@ -8,6 +6,7 @@ from typing import List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 
+from app.core.concurrency import run_blocking
 from app.core.config import settings
 from app.core.errors import EmbeddingDimensionError
 from app.core.logging import logger
@@ -70,47 +69,14 @@ def _store_and_index_document(
     return ingest(extracted_pages=pages) if pages is not None else ingest()
 
 
-@router.post(
-    "/upload",
-    response_model=DocumentUploadResponse,
-    status_code=status.HTTP_201_CREATED,
-)
-async def upload_document(
-    file: UploadFile = File(...),
-    session_id: str = Form(...),
-    user_id: Optional[str] = Form(None),
-    is_temporary: bool = Form(False),
-    principal: Principal = Depends(require_principal),
-):
-    """
-    Upload and index a document (PDF, TXT, MD, CSV, JSON, LOG) into the RAG vector knowledge base.
-    """
-    check_user_claim(user_id, principal)
-    ensure_session(session_id, principal, is_temporary=is_temporary)
-    user_id = principal.user_id
-    filename = Path((file.filename or "uploaded_document").replace("\\", "/")).name
-    ext = Path(filename).suffix.lower()
-
-    if ext not in ALLOWED_EXTENSIONS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unsupported file type '{ext}'. Allowed formats: {', '.join(ALLOWED_EXTENSIONS)}",
-        )
-
-    # Read file content once for disk caching and object storage upload
+def _remove_temp_file(path: Path) -> None:
     try:
-        content = (
-            await file.read(settings.PDF_MAX_FILE_SIZE_BYTES + 1)
-            if ext == ".pdf"
-            else await file.read()
-        )
-    except Exception as e:
-        logger.exception(f"Failed to read uploaded file: {e}")
-        raise HTTPException(status_code=500, detail="Failed to read uploaded file.")
+        path.unlink(missing_ok=True)
+    except OSError:
+        logger.warning("Could not remove temporary upload", exc_info=True)
 
-    if ext == ".pdf" and len(content) > settings.PDF_MAX_FILE_SIZE_BYTES:
-        raise HTTPException(413, "PDF exceeds the upload size limit.")
 
+def _cache_document_upload(content: bytes, ext: str, session_id: str) -> Path:
     temp_file_path = None
     try:
         with resource_operation(session_id):
@@ -139,23 +105,38 @@ async def upload_document(
                 )
         raise HTTPException(status_code=500, detail="Failed to save uploaded file.")
 
+    return temp_file_path
+
+
+def _process_document_upload(
+    content: bytes,
+    filename: str,
+    session_id: str,
+    user_id: Optional[str],
+    content_type: Optional[str],
+    principal: Principal,
+) -> DocumentUploadResponse:
+    # The same worker owns the temporary file through parsing and indexing.
+    temp_file_path = _cache_document_upload(
+        content, Path(filename).suffix.lower(), session_id
+    )
+
     try:
         # Reject unsafe PDFs before persisting the raw file or indexing anything.
         pages = (
-            await asyncio.to_thread(rag_service.extract_text_from_file, temp_file_path)
-            if ext == ".pdf"
+            rag_service.extract_text_from_file(temp_file_path)
+            if temp_file_path.suffix == ".pdf"
             else None
         )
         # Keep the attempt alive in the worker until storage/indexing actually
         # stops, even if the HTTP request is cancelled while awaiting the worker.
-        doc_metadata = await asyncio.to_thread(
-            _store_and_index_document,
+        doc_metadata = _store_and_index_document(
             content,
             temp_file_path,
             filename,
             session_id,
             user_id,
-            file.content_type,
+            content_type,
             pages,
         )
 
@@ -176,18 +157,63 @@ async def upload_document(
         logger.exception(f"Error processing document: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        # Cleanup temp file
-        if temp_file_path.exists():
-            try:
-                os.remove(temp_file_path)
-            except OSError:
-                logger.warning("Could not remove temporary upload", exc_info=True)
+        _remove_temp_file(temp_file_path)
+
+
+@router.post(
+    "/upload",
+    response_model=DocumentUploadResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_document(
+    file: UploadFile = File(...),
+    session_id: str = Form(...),
+    user_id: Optional[str] = Form(None),
+    is_temporary: bool = Form(False),
+    principal: Principal = Depends(require_principal),
+):
+    """
+    Upload and index a document (PDF, TXT, MD, CSV, JSON, LOG) into the RAG vector knowledge base.
+    """
+    check_user_claim(user_id, principal)
+    await run_blocking(ensure_session, session_id, principal, is_temporary=is_temporary)
+    user_id = principal.user_id
+    filename = Path((file.filename or "uploaded_document").replace("\\", "/")).name
+    ext = Path(filename).suffix.lower()
+
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported file type '{ext}'. Allowed formats: {', '.join(ALLOWED_EXTENSIONS)}",
+        )
+
+    # Read file content once for disk caching and object storage upload
+    try:
+        content = (
+            await file.read(settings.PDF_MAX_FILE_SIZE_BYTES + 1)
+            if ext == ".pdf"
+            else await file.read()
+        )
+    except Exception as e:
+        logger.exception(f"Failed to read uploaded file: {e}")
+        raise HTTPException(status_code=500, detail="Failed to read uploaded file.")
+
+    if ext == ".pdf" and len(content) > settings.PDF_MAX_FILE_SIZE_BYTES:
+        raise HTTPException(413, "PDF exceeds the upload size limit.")
+
+    return await run_blocking(
+        _process_document_upload,
+        content,
+        filename,
+        session_id,
+        user_id,
+        file.content_type,
+        principal,
+    )
 
 
 @router.get("/list", response_model=DocumentListResponse)
-async def list_documents(
-    session_id: str, principal: Principal = Depends(require_principal)
-):
+def list_documents(session_id: str, principal: Principal = Depends(require_principal)):
     """
     List all documents attached to the specified session.
     """
@@ -207,7 +233,7 @@ async def list_documents(
 
 
 @router.get("/{document_id}/chunks", response_model=DocumentChunksResponse)
-async def get_document_chunks(
+def get_document_chunks(
     document_id: str, principal: Principal = Depends(require_principal)
 ):
     """
@@ -237,7 +263,7 @@ async def get_document_chunks(
 
 
 @router.delete("/{document_id}")
-async def delete_document(
+def delete_document(
     document_id: str, session_id: str, principal: Principal = Depends(require_principal)
 ):
     """
@@ -254,7 +280,7 @@ async def delete_document(
 
 
 @router.post("/clear-all")
-async def clear_all_documents(principal: Principal = Depends(require_admin)):
+def clear_all_documents(principal: Principal = Depends(require_admin)):
     """
     Purge all vector embeddings from ChromaDB and clear document records.
     """

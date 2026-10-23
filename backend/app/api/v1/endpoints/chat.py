@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from starlette.types import Send
 
+from app.core.concurrency import run_blocking
 from app.core.security import (
     Principal,
     check_asset,
@@ -34,14 +35,7 @@ class ChatStreamingResponse(StreamingResponse):
                     await close()
 
 
-@router.post("/stream")
-async def chat_stream(
-    request: ChatRequest, principal: Principal = Depends(require_principal)
-):
-    """
-    Server-Sent Events (SSE) streaming chat endpoint.
-    Streams tokens, citations, and status events in real-time.
-    """
+def _authorize_request(request: ChatRequest, principal: Principal) -> None:
     check_user_claim(request.user_id, principal)
     ensure_session(
         request.session_id,
@@ -66,6 +60,17 @@ async def chat_stream(
         )
     request.attachments = attachments
 
+
+@router.post("/stream")
+async def chat_stream(
+    request: ChatRequest, principal: Principal = Depends(require_principal)
+):
+    """
+    Server-Sent Events (SSE) streaming chat endpoint.
+    Streams tokens, citations, and status events in real-time.
+    """
+    await run_blocking(_authorize_request, request, principal)
+
     async def authorized_stream():
         async with aclosing(
             chat_orchestrator.route_and_stream(request, principal)
@@ -74,8 +79,10 @@ async def chat_stream(
                 if frame.startswith("data: "):
                     event = json.loads(frame[6:])
                     if event.get("event") == "media" and event.get("media"):
-                        attachment = present_attachment(
-                            MediaAttachment(**event["media"]), principal
+                        attachment = await run_blocking(
+                            present_attachment,
+                            MediaAttachment(**event["media"]),
+                            principal,
                         )
                         event["media"] = attachment.model_dump()
                         frame = f"data: {json.dumps(event)}\n\n"

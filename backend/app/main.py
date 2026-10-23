@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.v1.endpoints import chat, document, health, media, session, user
+from app.core.concurrency import run_blocking
 from app.core.config import settings
 from app.core.logging import logger
 from app.db.database import init_db
@@ -26,9 +27,7 @@ async def _periodic_temporary_cleanup():
             await asyncio.sleep(
                 60
             )  # Retry pending cleanup as well as newly expired chats
-            await asyncio.to_thread(
-                chat_history_service.purge_expired_temporary_sessions
-            )
+            await run_blocking(chat_history_service.purge_expired_temporary_sessions)
         except asyncio.CancelledError:
             break
         except Exception:
@@ -40,7 +39,7 @@ async def lifespan(application: FastAPI):
     logger.info(f"Starting {settings.PROJECT_NAME}...")
     init_db()
     try:
-        await asyncio.to_thread(chat_history_service.purge_expired_temporary_sessions)
+        await run_blocking(chat_history_service.purge_expired_temporary_sessions)
     except Exception:
         logger.warning("Initial temporary chat purge notice", exc_info=True)
     cleanup_task = asyncio.create_task(_periodic_temporary_cleanup())
@@ -99,7 +98,7 @@ if frontend_dist.exists() and (frontend_dist / "index.html").exists():
 
     # SPA catch-all route: serves static files or index.html for client routing
     @app.get("/{full_path:path}")
-    async def serve_frontend(full_path: str):
+    def serve_frontend(full_path: str):
         route_path = posixpath.normpath(full_path.replace("\\", "/")).lstrip("/")
         if route_path == "api" or route_path.startswith(
             ("api/", "docs", "redoc", "openapi.json")

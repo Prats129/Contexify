@@ -2,8 +2,12 @@ import asyncio
 import json
 import re
 from contextlib import aclosing
+from contextvars import ContextVar
 from typing import Any, AsyncGenerator, Dict, List, Literal, Optional
 
+from anyio import CancelScope
+
+from app.core.concurrency import run_blocking
 from app.core.errors import ImageGenerationError, TextGenerationError
 from app.core.logging import logger
 from app.repositories.session_store import session_store_repo
@@ -19,6 +23,10 @@ from app.services.image_gen_service import image_gen_service
 from app.services.llm_service import llm_service
 from app.services.rag_service import rag_service
 from app.services.web_search_service import web_search_service
+
+_saved_messages: ContextVar[Optional[Dict[str, bool]]] = ContextVar(
+    "saved_stream_messages", default=None
+)
 
 
 class ChatOrchestrator:
@@ -275,6 +283,9 @@ class ChatOrchestrator:
             reply_to=reply_to,
             expected_history_version=expected_history_version,
         )
+        saved_messages = _saved_messages.get()
+        if saved_messages is not None:
+            saved_messages[role] = True
         session_store_repo.record_message(
             session_id,
             role,
@@ -295,8 +306,13 @@ class ChatOrchestrator:
         self, message: str, session_id: str
     ) -> AsyncGenerator[str, None]:
         """Emit a simple assistant text response and persist to history."""
-        yield self._persist_message(
-            session_id=session_id, role="assistant", content=message
+        yield (
+            await run_blocking(
+                self._persist_message,
+                session_id=session_id,
+                role="assistant",
+                content=message,
+            )
         )
         yield f"data: {json.dumps({'event': 'token', 'data': message})}\n\n"
         yield f"data: {json.dumps({'event': 'done', 'data': '[DONE]'})}\n\n"
@@ -332,8 +348,13 @@ class ChatOrchestrator:
                 filter(None, [full_answer, f"Response interrupted: {err_str}"])
             )
 
-        yield self._persist_message(
-            session_id=session_id, role="assistant", content=full_answer
+        yield (
+            await run_blocking(
+                self._persist_message,
+                session_id=session_id,
+                role="assistant",
+                content=full_answer,
+            )
         )
         if stream_error is not None:
             yield f"data: {json.dumps({'event': 'error', 'data': stream_error})}\n\n"
@@ -344,25 +365,33 @@ class ChatOrchestrator:
         self, request: ChatRequest, principal
     ) -> AsyncGenerator[str, None]:
         session_id = request.session_id
-        history_version = session_store_repo.get_or_create_session(
-            session_id
+        history_version = (
+            await run_blocking(session_store_repo.get_or_create_session, session_id)
         ).history_version
+        saved_messages = {"user": False, "assistant": False}
         tokens = []
         citations = None
         attachments = []
-        user_saved = False
-        assistant_saved = False
         terminal = False
         try:
             async with aclosing(self._route_and_stream(request, principal)) as stream:
-                async for frame in stream:
+                while True:
+                    # Scope context to one advancement, never across a yielded SSE
+                    # frame: disconnect cleanup may close us from another task.
+                    token = _saved_messages.set(saved_messages)
+                    try:
+                        frame = await anext(stream)
+                    except StopAsyncIteration:
+                        return
+                    finally:
+                        _saved_messages.reset(token)
                     event = json.loads(frame[6:])
                     kind = event.get("event")
                     if kind == "message":
                         if event["message"]["role"] == "assistant":
-                            assistant_saved = True
+                            saved_messages["assistant"] = True
                         else:
-                            user_saved = True
+                            saved_messages["user"] = True
                     elif kind == "token":
                         tokens.append(event["data"])
                     elif kind == "citations":
@@ -378,20 +407,25 @@ class ChatOrchestrator:
         except Exception:
             logger.exception("Chat streaming failed")
             detail = "The response could not be completed. Please try again."
-            if not assistant_saved and user_saved:
+            if not saved_messages["assistant"] and saved_messages["user"]:
                 content = "\n\n".join(
                     filter(None, ["".join(tokens), f"Response interrupted: {detail}"])
                 )
                 try:
-                    acknowledgement = self._persist_message(
-                        session_id,
-                        "assistant",
-                        content,
-                        citations=citations,
-                        attachments=attachments,
-                        expected_history_version=history_version,
-                    )
-                    assistant_saved = True
+                    token = _saved_messages.set(saved_messages)
+                    try:
+                        acknowledgement = await run_blocking(
+                            self._persist_message,
+                            session_id,
+                            "assistant",
+                            content,
+                            citations=citations,
+                            attachments=attachments,
+                            expected_history_version=history_version,
+                        )
+                    finally:
+                        _saved_messages.reset(token)
+                    saved_messages["assistant"] = True
                     yield acknowledgement
                 except Exception:
                     logger.exception("Could not save interrupted chat response")
@@ -401,22 +435,24 @@ class ChatOrchestrator:
             # Cancellation cannot deliver more SSE events. Save the text/media
             # already produced so reopening the conversation does not lose them.
             if (
-                user_saved
-                and not assistant_saved
+                saved_messages["user"]
+                and not saved_messages["assistant"]
                 and not terminal
                 and (tokens or attachments)
             ):
                 try:
-                    self._persist_message(
-                        session_id,
-                        "assistant",
-                        "\n\n".join(
-                            filter(None, ["".join(tokens), "Response stopped."])
-                        ),
-                        citations=citations,
-                        attachments=attachments,
-                        expected_history_version=history_version,
-                    )
+                    with CancelScope(shield=True):
+                        await run_blocking(
+                            self._persist_message,
+                            session_id,
+                            "assistant",
+                            "\n\n".join(
+                                filter(None, ["".join(tokens), "Response stopped."])
+                            ),
+                            citations=citations,
+                            attachments=attachments,
+                            expected_history_version=history_version,
+                        )
                 except Exception:
                     logger.exception("Could not save stopped chat response")
 
@@ -425,31 +461,43 @@ class ChatOrchestrator:
     ) -> AsyncGenerator[str, None]:
         session_id = request.session_id
 
-        session = session_store_repo.get_or_create_session(session_id)
+        session = await run_blocking(
+            session_store_repo.get_or_create_session, session_id
+        )
+
+        mode = request.mode or session.mode
 
         # Enforce Mode Selection if client passed an explicit mode
         if request.mode:
-            session.mode = request.mode
-            chat_history_service.update_session_mode(session_id, request.mode)
+            await run_blocking(
+                chat_history_service.update_session_mode, session_id, request.mode
+            )
 
         logger.info(
-            f"Orchestrator routing query for session '{session_id}' [Mode: {session.mode.value}] Attachments: {len(request.attachments or [])}"
+            f"Orchestrator routing query for session '{session_id}' [Mode: {mode.value}] Attachments: {len(request.attachments or [])}"
         )
 
         # 0. Retrieve Pre-existing Conversation History for this chat thread
-        chat_history = session_store_repo.get_history_messages(session_id)
+        chat_history = await run_blocking(
+            session_store_repo.get_history_messages, session_id
+        )
 
         # 1. Persist User Prompt to database & in-memory store with attachments and reply reference
-        yield self._persist_message(
-            session_id=session_id,
-            role="user",
-            content=request.message or "",
-            attachments=request.attachments,
-            reply_to=request.reply_to,
+        yield (
+            await run_blocking(
+                self._persist_message,
+                session_id=session_id,
+                role="user",
+                content=request.message or "",
+                attachments=request.attachments,
+                reply_to=request.reply_to,
+            )
         )
 
         # 2. Auto-generate title if session is brand new / "New Conversation"
-        existing_session = chat_history_service.get_session(session_id)
+        existing_session = await run_blocking(
+            chat_history_service.get_session, session_id
+        )
         if existing_session and (
             existing_session.title == "New Conversation" or not existing_session.title
         ):
@@ -458,7 +506,9 @@ class ChatOrchestrator:
             )
             if len(summary_title) > 35:
                 summary_title = summary_title[:32] + "..."
-            chat_history_service.update_session_title(session_id, summary_title)
+            await run_blocking(
+                chat_history_service.update_session_title, session_id, summary_title
+            )
 
         query = request.message or ""
         selected_documents = [
@@ -478,12 +528,14 @@ class ChatOrchestrator:
         )
         if (
             selected_documents
-            and session.mode
-            in (ChatMode.AUTO, ChatMode.DOCUMENT_RAG, ChatMode.MULTIMODAL)
+            and mode in (ChatMode.AUTO, ChatMode.DOCUMENT_RAG, ChatMode.MULTIMODAL)
             and not request.attachments
         ):
-            context = rag_service.retrieve_context_for_query(
-                query, session_id, document_ids=selected_documents
+            context = await run_blocking(
+                rag_service.retrieve_context_for_query,
+                query,
+                session_id,
+                document_ids=selected_documents,
             )
             async with aclosing(
                 self._execute_document_rag(
@@ -498,14 +550,16 @@ class ChatOrchestrator:
                 async for chunk in stream:
                     yield chunk
             return
-        recent_images = self._find_recent_image_attachments(chat_history, principal)
+        recent_images = await run_blocking(
+            self._find_recent_image_attachments, chat_history, principal
+        )
 
         # =========================================================================
         # 3. Explicit Mode Handlers (with graceful conversational Q&A fallback)
         # =========================================================================
 
         # 3a. Explicit IMAGE_GENERATION Mode
-        if session.mode == ChatMode.IMAGE_GENERATION:
+        if mode == ChatMode.IMAGE_GENERATION:
             if self._is_conversational_query(
                 query, chat_history
             ) and not self._is_image_gen_intent(query):
@@ -525,7 +579,7 @@ class ChatOrchestrator:
             return
 
         # 3b. Explicit MULTIMODAL Mode
-        if session.mode == ChatMode.MULTIMODAL:
+        if mode == ChatMode.MULTIMODAL:
             # If current request has attachments, use them directly
             if request.attachments and len(request.attachments) > 0:
                 async with aclosing(
@@ -561,7 +615,7 @@ class ChatOrchestrator:
             return
 
         # 3c. Explicit DOCUMENT_RAG Mode
-        if session.mode == ChatMode.DOCUMENT_RAG:
+        if mode == ChatMode.DOCUMENT_RAG:
             # If conversational greeting or general follow-up without document query
             if self._is_conversational_query(query, chat_history):
                 async with aclosing(
@@ -586,7 +640,7 @@ class ChatOrchestrator:
             return
 
         # 3d. Explicit WEB_SEARCH Mode
-        if session.mode == ChatMode.WEB_SEARCH:
+        if mode == ChatMode.WEB_SEARCH:
             async with aclosing(
                 self._execute_web_search(
                     query, session_id, chat_history, reply_to=request.reply_to
@@ -644,7 +698,9 @@ class ChatOrchestrator:
 
         # Case E: Session has uploaded documents -> retrieve context
         if session.document_ids and len(session.document_ids) > 0:
-            chunks = rag_service.retrieve_context_for_query(query, session_id)
+            chunks = await run_blocking(
+                rag_service.retrieve_context_for_query, query, session_id
+            )
             if chunks:
                 async with aclosing(
                     self._execute_document_rag(
@@ -689,7 +745,9 @@ class ChatOrchestrator:
         allow_fallback: bool = True,
         reply_to: Optional[Any] = None,
     ) -> AsyncGenerator[str, None]:
-        session = session_store_repo.get_or_create_session(session_id)
+        session = await run_blocking(
+            session_store_repo.get_or_create_session, session_id
+        )
 
         if not session.document_ids and not context_chunks:
             if allow_fallback:
@@ -708,7 +766,9 @@ class ChatOrchestrator:
 
         # 1. Retrieve relevant chunks if not provided
         if context_chunks is None:
-            context_chunks = rag_service.retrieve_context_for_query(query, session_id)
+            context_chunks = await run_blocking(
+                rag_service.retrieve_context_for_query, query, session_id
+            )
 
         if not context_chunks:
             if allow_fallback:
@@ -766,11 +826,14 @@ class ChatOrchestrator:
             )
 
         # 4. Persist completed assistant message with citations to SQLite & in-memory
-        yield self._persist_message(
-            session_id=session_id,
-            role="assistant",
-            content=full_answer,
-            citations=citations_data,
+        yield (
+            await run_blocking(
+                self._persist_message,
+                session_id=session_id,
+                role="assistant",
+                content=full_answer,
+                citations=citations_data,
+            )
         )
         if stream_error is not None:
             yield f"data: {json.dumps({'event': 'error', 'data': stream_error})}\n\n"
@@ -804,7 +867,7 @@ class ChatOrchestrator:
             return
 
         # 2. Informational Search Query: Execute Search & Emit Sources
-        results = web_search_service.search(query)
+        results = await run_blocking(web_search_service.search, query)
 
         if results:
             citations = [
@@ -845,11 +908,14 @@ class ChatOrchestrator:
             )
 
         # Persist completed assistant message with citations to SQLite & in-memory
-        yield self._persist_message(
-            session_id=session_id,
-            role="assistant",
-            content=full_answer,
-            citations=citations_data,
+        yield (
+            await run_blocking(
+                self._persist_message,
+                session_id=session_id,
+                role="assistant",
+                content=full_answer,
+                citations=citations_data,
+            )
         )
         if stream_error is not None:
             yield f"data: {json.dumps({'event': 'error', 'data': stream_error})}\n\n"
@@ -891,11 +957,14 @@ class ChatOrchestrator:
             yield f"data: {json.dumps({'event': 'token', 'data': done_caption})}\n\n"
 
             # Save assistant message with generated attachment
-            yield self._persist_message(
-                session_id=session_id,
-                role="assistant",
-                content=done_caption,
-                attachments=[generated_media],
+            yield (
+                await run_blocking(
+                    self._persist_message,
+                    session_id=session_id,
+                    role="assistant",
+                    content=done_caption,
+                    attachments=[generated_media],
+                )
             )
 
         except Exception as e:
@@ -906,10 +975,13 @@ class ChatOrchestrator:
                 else "Image generation could not be completed. Please try again."
             )
             err_msg = f"⚠️ Sorry, could not generate image: {detail}"
-            yield self._persist_message(
-                session_id=session_id,
-                role="assistant",
-                content=f"Response interrupted: {err_msg}",
+            yield (
+                await run_blocking(
+                    self._persist_message,
+                    session_id=session_id,
+                    role="assistant",
+                    content=f"Response interrupted: {err_msg}",
+                )
             )
             yield f"data: {json.dumps({'event': 'error', 'data': err_msg})}\n\n"
             return
@@ -949,8 +1021,13 @@ class ChatOrchestrator:
             )
 
         # Persist assistant response
-        yield self._persist_message(
-            session_id=session_id, role="assistant", content=full_answer
+        yield (
+            await run_blocking(
+                self._persist_message,
+                session_id=session_id,
+                role="assistant",
+                content=full_answer,
+            )
         )
         if stream_error is not None:
             yield f"data: {json.dumps({'event': 'error', 'data': stream_error})}\n\n"

@@ -2,6 +2,7 @@ import os
 from contextlib import aclosing
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
+from app.core.concurrency import run_blocking
 from app.core.config import settings
 from app.core.errors import TextGenerationError
 from app.core.logging import logger
@@ -21,7 +22,9 @@ class LLMService:
             try:
                 from google import genai
 
-                self.client = genai.Client(api_key=self.api_key)
+                self.client = genai.Client(
+                    api_key=self.api_key, http_options={"timeout": 60_000}
+                )
                 logger.info(
                     f"Initialized Google GenAI LLM Client with model {settings.DEFAULT_LLM_MODEL}"
                 )
@@ -301,7 +304,7 @@ class LLMService:
                     else getattr(att, "mime_type", "image/png")
                 )
 
-                file_bytes = media_service.get_media_bytes(url)
+                file_bytes = await run_blocking(media_service.get_media_bytes, url)
                 if file_bytes:
                     try:
                         contents.append(
