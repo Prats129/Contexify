@@ -69,12 +69,14 @@ class SessionStoreRepository:
         metadata: DocumentMetadata,
         user_id: Optional[str] = None,
         session_id: Optional[str] = None,
+        embedding_space: Optional[str] = None,
     ):
         if session_id:
             chat_history_service.save_document(
                 document_id=metadata.document_id,
                 user_id=user_id,
                 session_id=session_id,
+                embedding_space=embedding_space,
                 filename=metadata.filename,
                 file_type=metadata.file_type,
                 file_size_bytes=metadata.file_size_bytes,
@@ -83,6 +85,26 @@ class SessionStoreRepository:
             )
         with self._cache_lock:
             self._documents[metadata.document_id] = metadata
+
+    def check_embedding_compatibility(
+        self, document_ids: List[str], embedding_space: str
+    ) -> None:
+        from app.core.errors import EmbeddingCompatibilityError
+
+        # Keep SQL parameter counts bounded for both SQLite and Turso.
+        ids = list(dict.fromkeys(document_ids))
+        with get_db_connection() as conn:
+            for offset in range(0, len(ids), 400):
+                batch = ids[offset : offset + 400]
+                placeholders = ",".join("?" for _ in batch)
+                rows = conn.execute(
+                    f"SELECT id,embedding_space FROM documents WHERE id IN ({placeholders})",
+                    batch,
+                ).fetchall()
+                if len(rows) != len(batch) or any(
+                    row["embedding_space"] != embedding_space for row in rows
+                ):
+                    raise EmbeddingCompatibilityError()
 
     def get_document_metadata(self, document_id: str) -> Optional[DocumentMetadata]:
         with get_db_connection() as conn:

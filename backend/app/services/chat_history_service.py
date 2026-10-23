@@ -438,6 +438,7 @@ class ChatHistoryService:
         file_size_bytes: int,
         total_chunks: int,
         storage_url: str = "",
+        embedding_space: Optional[str] = None,
     ) -> DocumentMetadata:
         now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
         with get_db_connection(write=True) as conn:
@@ -445,8 +446,8 @@ class ChatHistoryService:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                INSERT OR REPLACE INTO documents (id, user_id, session_id, filename, file_type, file_size_bytes, total_chunks, storage_url, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT OR REPLACE INTO documents (id, user_id, session_id, filename, file_type, file_size_bytes, total_chunks, storage_url, created_at, embedding_space)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     document_id,
@@ -458,6 +459,7 @@ class ChatHistoryService:
                     total_chunks,
                     storage_url,
                     now,
+                    embedding_space,
                 ),
             )
             publish_upload(conn)

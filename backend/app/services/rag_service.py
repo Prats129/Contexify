@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.config import settings
+from app.core.errors import EmbeddingCompatibilityError
 from app.core.logging import logger
 from app.repositories.session_store import session_store_repo
 from app.repositories.vector_store import vector_store_repo
@@ -145,6 +146,7 @@ class RAGService:
         metadatas = [
             {
                 "document_id": document_id,
+                "embedding_space": embedding_service.embedding_space,
                 "filename": filename,
                 "page_number": c["page_number"],
                 "chunk_index": c["chunk_index"],
@@ -173,7 +175,10 @@ class RAGService:
         )
 
         session_store_repo.save_document_metadata(
-            doc_metadata, user_id=user_id, session_id=session_id
+            doc_metadata,
+            user_id=user_id,
+            session_id=session_id,
+            embedding_space=embedding_service.embedding_space,
         )
         session_store_repo.attach_document_to_session(session_id, document_id)
 
@@ -194,12 +199,19 @@ class RAGService:
             logger.warning(f"No documents attached to session '{session_id}'")
             return []
 
+        if not set(selected_ids).issubset(session.document_ids):
+            raise EmbeddingCompatibilityError()
+        session_store_repo.check_embedding_compatibility(
+            selected_ids, embedding_service.embedding_space
+        )
+
         # Generate query vector
         query_embedding = embedding_service.embed_text(query)
 
         # Vector similarity search
         retrieved = vector_store_repo.similarity_search(
             query_embedding=query_embedding,
+            embedding_space=embedding_service.embedding_space,
             top_k=settings.TOP_K_RETRIEVAL,
             document_ids=selected_ids,
         )
@@ -210,10 +222,6 @@ class RAGService:
             for c in retrieved
             if c["similarity_score"] >= settings.SIMILARITY_THRESHOLD
         ]
-
-        # If threshold filtered all out, return top retrieved anyway to prevent empty response
-        if not valid_chunks and retrieved:
-            valid_chunks = retrieved[:2]
 
         return valid_chunks
 

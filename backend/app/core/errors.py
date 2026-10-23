@@ -18,3 +18,17 @@ class EmbeddingDimensionError(ValueError):
             "do not match the index configuration. Please contact the administrator. "
             "Existing documents have been preserved."
         )
+
+
+class EmbeddingError(RuntimeError):
+    """An embedding/index availability error safe to show to the user."""
+
+
+class EmbeddingCompatibilityError(EmbeddingError):
+    """A document cannot safely be searched in the configured embedding space."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "One or more selected documents need to be uploaded again in a new chat before they "
+            "can be searched safely. Their original files have been preserved."
+        )

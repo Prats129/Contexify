@@ -372,6 +372,11 @@ def init_db():
                 "ALTER TABLE documents ADD COLUMN storage_url TEXT DEFAULT '';"
             )
 
+        # Unknown legacy provenance must remain unknown; never label old hash vectors
+        # as semantic vectors merely because their dimensions happen to match.
+        if "embedding_space" not in document_columns:
+            cursor.execute("ALTER TABLE documents ADD COLUMN embedding_space TEXT")
+
         # Normal Library documents must survive deletion of their original chat.
         cursor.execute("PRAGMA table_info(documents)")
         if any(
@@ -381,12 +386,12 @@ def init_db():
                 id TEXT PRIMARY KEY, user_id TEXT, session_id TEXT,
                 filename TEXT NOT NULL, file_type TEXT NOT NULL,
                 file_size_bytes INTEGER NOT NULL, total_chunks INTEGER NOT NULL,
-                storage_url TEXT DEFAULT '', created_at TEXT NOT NULL,
+                storage_url TEXT DEFAULT '', created_at TEXT NOT NULL, embedding_space TEXT,
                 FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
             )""")
             cursor.execute(
                 "INSERT INTO documents_retained SELECT id,user_id,session_id,filename,file_type,"
-                "file_size_bytes,total_chunks,storage_url,created_at FROM documents"
+                "file_size_bytes,total_chunks,storage_url,created_at,embedding_space FROM documents"
             )
             cursor.execute("DROP TABLE documents")
             cursor.execute("ALTER TABLE documents_retained RENAME TO documents")

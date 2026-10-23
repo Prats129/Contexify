@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, s
 
 from app.core.concurrency import run_blocking
 from app.core.config import settings
-from app.core.errors import EmbeddingDimensionError
+from app.core.errors import EmbeddingDimensionError, EmbeddingError
 from app.core.logging import logger
 from app.core.security import (
     Principal,
@@ -151,7 +151,7 @@ def _process_document_upload(
         raise
     except PDFProcessingError as e:
         raise HTTPException(e.status_code, str(e)) from None
-    except EmbeddingDimensionError as e:
+    except (EmbeddingDimensionError, EmbeddingError) as e:
         raise HTTPException(status_code=503, detail=str(e)) from None
     except Exception as e:
         logger.exception(f"Error processing document: {e}")

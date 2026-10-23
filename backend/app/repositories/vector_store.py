@@ -1,7 +1,8 @@
+import math
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, cast
 
 from app.core.config import settings
-from app.core.errors import EmbeddingDimensionError
+from app.core.errors import EmbeddingDimensionError, EmbeddingError
 from app.core.logging import logger
 
 if TYPE_CHECKING:
@@ -119,11 +120,17 @@ class VectorStoreRepository:
         query_embedding: List[float],
         top_k: int = 4,
         document_ids: Optional[List[str]] = None,
+        *,
+        embedding_space: str,
     ) -> List[Dict[str, Any]]:
         """
         Perform cosine similarity vector search over indexed chunks.
         Optionally filter by session document_ids.
         """
+        if not embedding_space:
+            raise EmbeddingError("Document search requires a verified embedding space.")
+        if document_ids == []:
+            return []
         try:
             if self.use_pinecone:
                 filter_clause = None
@@ -133,6 +140,12 @@ class VectorStoreRepository:
                     else:
                         filter_clause = {"document_id": {"$in": document_ids}}
 
+                space_filter = {"embedding_space": {"$eq": embedding_space}}
+                filter_clause = (
+                    {"$and": [filter_clause, space_filter]}
+                    if filter_clause
+                    else space_filter
+                )
                 results = self.index.query(
                     vector=query_embedding,
                     top_k=top_k,
@@ -143,8 +156,16 @@ class VectorStoreRepository:
                 retrieved_chunks = []
                 for match in results.get("matches", []):
                     meta = match.get("metadata", {})
+                    if meta.get("embedding_space") != embedding_space or (
+                        document_ids is not None
+                        and meta.get("document_id") not in document_ids
+                    ):
+                        continue
                     # Pinecone cosine similarity score
-                    score = round(max(0.0, float(match.get("score", 0.0))), 4)
+                    raw_score = float(match.get("score", 0.0))
+                    if not math.isfinite(raw_score):
+                        continue
+                    score = round(max(0.0, raw_score), 4)
                     retrieved_chunks.append(
                         {
                             "chunk_id": match.get("id"),
@@ -162,6 +183,12 @@ class VectorStoreRepository:
                     else:
                         where_clause = {"document_id": {"$in": document_ids}}
 
+                space_filter = {"embedding_space": embedding_space}
+                where_clause = (
+                    {"$and": [where_clause, space_filter]}
+                    if where_clause
+                    else space_filter
+                )
                 results = self.collection.query(
                     query_embeddings=[query_embedding],
                     n_results=top_k,
@@ -183,14 +210,22 @@ class VectorStoreRepository:
                     distances = results["distances"][0]
 
                     for i in range(len(ids)):
+                        meta = metadatas[i] or {}
+                        if meta.get("embedding_space") != embedding_space or (
+                            document_ids is not None
+                            and meta.get("document_id") not in document_ids
+                        ):
+                            continue
                         cosine_distance = distances[i]
+                        if not math.isfinite(cosine_distance):
+                            continue
                         similarity_score = round(max(0.0, 1.0 - cosine_distance), 4)
 
                         retrieved_chunks.append(
                             {
                                 "chunk_id": ids[i],
                                 "text": documents[i],
-                                "metadata": metadatas[i],
+                                "metadata": meta,
                                 "similarity_score": similarity_score,
                             }
                         )
@@ -198,7 +233,9 @@ class VectorStoreRepository:
                 return retrieved_chunks
         except Exception as e:
             logger.exception(f"Vector search failed: {str(e)}")
-            return []
+            raise EmbeddingError(
+                "Document search is temporarily unavailable. Please try again later."
+            ) from None
 
     def get_document_chunks(self, document_id: str) -> List[Dict[str, Any]]:
         """Retrieve all indexed chunks and metadata for a specific document."""

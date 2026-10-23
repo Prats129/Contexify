@@ -71,6 +71,10 @@ settings = types.SimpleNamespace(
     PDF_MAX_CONCURRENT_PARSERS=2,
     CHROMA_PERSIST_DIR=root / "chroma_db",
     GEMINI_API_KEY="",
+    DEFAULT_EMBEDDING_MODEL="fixture-embedding",
+    EMBEDDING_DIMENSION=2,
+    TOP_K_RETRIEVAL=4,
+    SIMILARITY_THRESHOLD=0.2,
     CLOUDFLARE_AI_ACCOUNT_ID="",
     CLOUDFLARE_AI_API_TOKEN="",
     IMAGE_GENERATION_TIMEOUT_SECONDS=120,
@@ -1385,6 +1389,7 @@ class SecurityTests(unittest.TestCase):
         setattr(chroma, "PersistentClient", Mock())
         embedding = types.ModuleType("app.services.embedding_service")
         embedder = Mock()
+        embedder.embedding_space = "fixture-space"
         embedder.embed_batch.side_effect = lambda texts: [[1.0, 0.0] for _ in texts]
         setattr(embedding, "embedding_service", embedder)
         with (
@@ -1416,10 +1421,278 @@ class SecurityTests(unittest.TestCase):
                 )["rag_service"]
         return rag, repository, embedder
 
+    def test_embedding_provenance_migration_preserves_legacy_files_and_rows(self):
+        previous_clears = vectors.clear_all.call_count
+        with database.get_db_connection() as conn:
+            conn.execute("ALTER TABLE documents DROP COLUMN embedding_space")
+        database.init_db()
+        database.init_db()
+        with database.get_db_connection() as conn:
+            row = conn.execute(
+                "SELECT filename,embedding_space FROM documents WHERE id='document'"
+            ).fetchone()
+            self.assertIsNotNone(row)
+            assert row is not None
+            self.assertEqual(row["filename"], "fixture.txt")
+            self.assertIsNone(row["embedding_space"])
+        self.assertTrue((root / "documents/alice-session/fixture.txt").exists())
+        self.assertEqual(vectors.clear_all.call_count, previous_clears)
+
+    def test_embedding_failure_returns_503_rolls_back_r2_and_retry_records_space(self):
+        from app.api.v1.endpoints import document
+        from app.core.errors import EmbeddingError
+
+        rag, repository, embedder = self._load_document_pipeline()
+        embedder.embed_batch.side_effect = EmbeddingError(
+            "The document embedding service is temporarily unavailable. Please try again later."
+        )
+        with (
+            self._isolated_r2() as (objects, _),
+            patch.object(document, "rag_service", rag),
+        ):
+            before = set(objects)
+            response = self.request(
+                "POST",
+                "/document/upload",
+                self.token,
+                data={"session_id": "alice-session"},
+                files={"file": ("failed.txt", b"test", "text/plain")},
+            )
+            self.assertEqual(response.status_code, 503, response.text)
+            self.assertIn("temporarily unavailable", response.json()["detail"])
+            self.assertEqual(set(objects), before)
+            self.assertFalse(list(settings.UPLOAD_DIR.iterdir()))
+            repository.collection.add.assert_not_called()
+            embedder.embed_batch.side_effect = lambda texts: [[1.0, 0.0] for _ in texts]
+            response = self.request(
+                "POST",
+                "/document/upload",
+                self.token,
+                data={"session_id": "alice-session"},
+                files={"file": ("retry.txt", b"test", "text/plain")},
+            )
+            self.assertEqual(response.status_code, 201, response.text)
+            document_id = response.json()["document"]["document_id"]
+            with database.get_db_connection() as conn:
+                row = conn.execute(
+                    "SELECT embedding_space FROM documents WHERE id=?", (document_id,)
+                ).fetchone()
+                assert row is not None
+                self.assertEqual(row["embedding_space"], "fixture-space")
+            self.assertTrue(
+                all(
+                    meta["embedding_space"] == "fixture-space"
+                    for meta in repository.collection.add.call_args.kwargs["metadatas"]
+                )
+            )
+            self.assertEqual(len(objects), len(before) + 1)
+            self.assertTrue(before.issubset(objects))
+
+    def test_embedding_compatibility_and_threshold_never_force_unrelated_context(self):
+        from app.core.errors import EmbeddingCompatibilityError
+
+        rag, repository, embedder = self._load_document_pipeline()
+        embedder.embed_text.return_value = [1.0, 0.0]
+        for provenance in (None, "another-model", "google:fixture:dimension:3:v1"):
+            with self.subTest(provenance=provenance):
+                with database.get_db_connection() as conn:
+                    conn.execute(
+                        "UPDATE documents SET embedding_space=? WHERE id='document'",
+                        (provenance,),
+                    )
+                with self.assertRaises(EmbeddingCompatibilityError):
+                    rag.retrieve_context_for_query("question", "alice-session")
+                embedder.embed_text.assert_not_called()
+                repository.collection.query.assert_not_called()
+        with database.get_db_connection() as conn:
+            conn.execute(
+                "UPDATE documents SET embedding_space='fixture-space' WHERE id='document'"
+            )
+        metadata = {"document_id": "document", "embedding_space": "fixture-space"}
+        for distances, expected in (([0.9], []), ([0.9, 0.1], ["strong"])):
+            repository.collection.query.return_value = {
+                "ids": [["weak", "strong"][: len(distances)]],
+                "documents": [["unrelated", "relevant"][: len(distances)]],
+                "metadatas": [[metadata] * len(distances)],
+                "distances": [distances],
+            }
+            result = rag.retrieve_context_for_query("question", "alice-session")
+            self.assertEqual([chunk["chunk_id"] for chunk in result], expected)
+        with database.get_db_connection() as conn:
+            self.assertIsNotNone(
+                conn.execute("SELECT id FROM documents WHERE id='document'").fetchone()
+            )
+
+    def test_embedding_space_filters_reject_legacy_and_foreign_vectors_on_both_backends(
+        self,
+    ):
+        from app.core.errors import EmbeddingError
+
+        _, repository, _ = self._load_document_pipeline()
+        metas = [
+            {"document_id": "document"},
+            {"document_id": "document", "embedding_space": "other"},
+            {"document_id": "foreign", "embedding_space": "fixture-space"},
+            {"document_id": "document", "embedding_space": "fixture-space"},
+        ]
+        for cloud in (False, True):
+            with self.subTest(cloud=cloud):
+                repository.use_pinecone = cloud
+                repository.index = Mock()
+                repository.collection.query.return_value = {
+                    "ids": [["legacy", "different", "foreign", "good"]],
+                    "documents": [["test"] * 4],
+                    "metadatas": [metas],
+                    "distances": [[0.0] * 4],
+                }
+                repository.index.query.return_value = {
+                    "matches": [
+                        {"id": name, "metadata": meta, "score": 1.0}
+                        for name, meta in zip(
+                            ["legacy", "different", "foreign", "good"], metas
+                        )
+                    ]
+                }
+                result = repository.similarity_search(
+                    [1.0, 0.0],
+                    document_ids=["document"],
+                    embedding_space="fixture-space",
+                )
+                self.assertEqual([chunk["chunk_id"] for chunk in result], ["good"])
+                search = (
+                    repository.index.query if cloud else repository.collection.query
+                )
+                filter_value = search.call_args.kwargs["filter" if cloud else "where"]
+                self.assertIn("embedding_space", str(filter_value))
+                repository.collection.query.return_value = {
+                    "ids": [["invalid-score"]],
+                    "documents": [["test"]],
+                    "metadatas": [[metas[-1]]],
+                    "distances": [[float("nan")]],
+                }
+                repository.index.query.return_value = {
+                    "matches": [
+                        {
+                            "id": "invalid-score",
+                            "metadata": metas[-1],
+                            "score": float("inf"),
+                        }
+                    ]
+                }
+                self.assertEqual(
+                    repository.similarity_search(
+                        [1.0, 0.0],
+                        document_ids=["document"],
+                        embedding_space="fixture-space",
+                    ),
+                    [],
+                )
+                search.reset_mock()
+                self.assertEqual(
+                    repository.similarity_search(
+                        [1.0, 0.0], document_ids=[], embedding_space="fixture-space"
+                    ),
+                    [],
+                )
+                search.assert_not_called()
+                search.side_effect = RuntimeError("private fixture failure")
+                with self.assertRaises(EmbeddingError) as caught:
+                    repository.similarity_search(
+                        [1.0, 0.0],
+                        document_ids=["document"],
+                        embedding_space="fixture-space",
+                    )
+                self.assertNotIn("private fixture", str(caught.exception))
+                repository.client.delete_collection.assert_not_called()
+                repository.index.delete.assert_not_called()
+                repository.collection.delete.assert_not_called()
+
+    def test_embedding_errors_reach_chat_and_empty_matches_do_not_call_general_ai(self):
+        from app.api.v1.endpoints import chat
+        from app.core.errors import EmbeddingError
+        from app.services.chat_history_service import chat_history_service
+
+        actual = self.reply_orchestrator()
+        services = actual._route_and_stream.__func__.__globals__
+        services["rag_service"].retrieve_context_for_query.side_effect = EmbeddingError(
+            "Document search is temporarily unavailable. Please try again later."
+        )
+        with patch.object(chat, "chat_orchestrator", actual):
+            response = self.request(
+                "POST",
+                "/chat/stream",
+                self.token,
+                json={
+                    "session_id": "alice-session",
+                    "message": "Review",
+                    "attachments": [{"id": "document", "file_type": "document"}],
+                },
+            )
+        events = [
+            json.loads(frame[6:]) for frame in response.text.strip().split("\n\n")
+        ]
+        self.assertEqual(events[-1]["event"], "error")
+        self.assertIn("temporarily unavailable", events[-1]["data"])
+        self.assertIn(
+            "temporarily unavailable",
+            chat_history_service.get_session_messages("alice-session")[-1].content,
+        )
+        services["rag_service"].retrieve_context_for_query.side_effect = None
+        services["rag_service"].retrieve_context_for_query.return_value = []
+        fallback = Mock()
+        with patch.object(
+            services["llm_service"], "stream_conversational_answer", fallback
+        ):
+
+            async def collect():
+                return [
+                    json.loads(frame[6:])
+                    async for frame in actual._execute_document_rag(
+                        "question", "alice-session", allow_fallback=True
+                    )
+                ]
+
+            events = asyncio.run(collect())
+        fallback.assert_not_called()
+        self.assertFalse(any(event["event"] == "citations" for event in events))
+        self.assertTrue(
+            any("could not find" in event.get("data", "") for event in events)
+        )
+
+        for needs_web in (False, True):
+            with (
+                self.subTest(needs_web=needs_web),
+                patch.object(chat, "chat_orchestrator", actual),
+                patch.object(actual, "_is_conversational_query", return_value=False),
+                patch.object(actual, "_needs_web_search", return_value=needs_web),
+            ):
+                response = self.request(
+                    "POST",
+                    "/chat/stream",
+                    self.token,
+                    json={
+                        "session_id": "alice-session",
+                        "message": "Research current events",
+                        "mode": "AUTO",
+                    },
+                )
+            events = [
+                json.loads(frame[6:]) for frame in response.text.strip().split("\n\n")
+            ]
+            self.assertEqual(events[-1]["event"], "done")
+            self.assertEqual(
+                any(event["event"] == "citations" for event in events), needs_web
+            )
+            if not needs_web:
+                self.assertTrue(
+                    any("could not find" in event.get("data", "") for event in events)
+                )
+
     def test_local_vector_index_and_search_execute_runtime_type_casts(self):
         _, repository, _ = self._load_document_pipeline()
         metadata = {
             "document_id": "runtime-document",
+            "embedding_space": "fixture-space",
             "page_number": 1,
             "chunk_index": 0,
         }
@@ -1450,11 +1723,16 @@ class SecurityTests(unittest.TestCase):
                 {"document_id": {"$in": ["runtime-document", "another"]}},
             ),
         ):
-            result = repository.similarity_search([1.0, 0.0], document_ids=document_ids)
+            result = repository.similarity_search(
+                [1.0, 0.0], document_ids=document_ids, embedding_space="fixture-space"
+            )
             self.assertEqual(len(result), 1)
             self.assertEqual(result[0]["text"], "Searchable fixture text")
             self.assertEqual(
-                repository.collection.query.call_args.kwargs["where"], where
+                repository.collection.query.call_args.kwargs["where"],
+                {"$and": [where, {"embedding_space": "fixture-space"}]}
+                if where
+                else {"embedding_space": "fixture-space"},
             )
 
     def test_dimension_errors_never_reset_or_retry_the_shared_index(self):
@@ -1537,7 +1815,10 @@ class SecurityTests(unittest.TestCase):
             ["alice-chunk", "bob-chunk"],
             [[1.0, 0.0], [0.0, 1.0]],
             ["Alice fixture", "Bob fixture"],
-            [{"document_id": "document"}, {"document_id": "bob-document"}],
+            [
+                {"document_id": "document", "embedding_space": "fixture-space"},
+                {"document_id": "bob-document", "embedding_space": "fixture-space"},
+            ],
         )
         existing = collection.get(include=["documents", "metadatas", "embeddings"])
         embedder.embed_batch.side_effect = lambda texts: [
@@ -1577,7 +1858,9 @@ class SecurityTests(unittest.TestCase):
                 self.assertEqual(
                     len(
                         repository.similarity_search(
-                            [1.0, 0.0], document_ids=["document"]
+                            [1.0, 0.0],
+                            document_ids=["document"],
+                            embedding_space="fixture-space",
                         )
                     ),
                     1,
@@ -2335,7 +2618,9 @@ class SecurityTests(unittest.TestCase):
                 filename TEXT NOT NULL,file_type TEXT NOT NULL,file_size_bytes INTEGER NOT NULL,
                 total_chunks INTEGER NOT NULL,storage_url TEXT DEFAULT '',created_at TEXT NOT NULL,
                 FOREIGN KEY(session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE)""")
-            conn.execute("INSERT INTO legacy_documents SELECT * FROM documents")
+            conn.execute(
+                "INSERT INTO legacy_documents SELECT id,user_id,session_id,filename,file_type,file_size_bytes,total_chunks,storage_url,created_at FROM documents"
+            )
             conn.execute("DROP TABLE documents")
             conn.execute("ALTER TABLE legacy_documents RENAME TO documents")
         database.init_db()
@@ -2429,7 +2714,9 @@ class SecurityTests(unittest.TestCase):
                 id TEXT PRIMARY KEY,user_id TEXT,session_id TEXT NOT NULL,
                 filename TEXT NOT NULL,file_type TEXT NOT NULL,file_size_bytes INTEGER NOT NULL,
                 total_chunks INTEGER NOT NULL,storage_url TEXT DEFAULT '',created_at TEXT NOT NULL)""")
-            conn.execute("INSERT INTO legacy_documents SELECT * FROM documents")
+            conn.execute(
+                "INSERT INTO legacy_documents SELECT id,user_id,session_id,filename,file_type,file_size_bytes,total_chunks,storage_url,created_at FROM documents"
+            )
             conn.execute("DROP TABLE documents")
             conn.execute("ALTER TABLE legacy_documents RENAME TO documents")
         original = database.get_db_connection
@@ -2572,6 +2859,10 @@ class SecurityTests(unittest.TestCase):
                     self.alice.id,
                     datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
                 ),
+            )
+        with database.get_db_connection() as conn:
+            conn.execute(
+                "UPDATE documents SET embedding_space='fixture-space' WHERE id='document'"
             )
         (settings.UPLOAD_IMAGE_DIR / "fixture.png").write_bytes(b"fixture-image")
         directory = root / "documents/alice-session"
@@ -4347,6 +4638,7 @@ class SecurityTests(unittest.TestCase):
         self.assertIn("Third page fixture", pages[1][0])
         embedding = types.ModuleType("app.services.embedding_service")
         embedder = Mock()
+        embedder.embedding_space = "fixture-space"
         embedder.embed_batch.side_effect = lambda texts: [[1.0] for _ in texts]
         setattr(embedding, "embedding_service", embedder)
         with (
@@ -4795,7 +5087,7 @@ class SecurityTests(unittest.TestCase):
         )
         with database.get_db_connection() as conn:
             conn.execute(
-                "INSERT INTO documents SELECT 'foreign-document',?,'bob-session',filename,"
+                "INSERT INTO documents (id,user_id,session_id,filename,file_type,file_size_bytes,total_chunks,storage_url,created_at) SELECT 'foreign-document',?,'bob-session',filename,"
                 "file_type,file_size_bytes,total_chunks,storage_url,created_at "
                 "FROM documents WHERE id='document'",
                 (self.bob.id,),
@@ -4899,8 +5191,19 @@ class SecurityTests(unittest.TestCase):
             "Review",
             attachments=[MediaAttachment(id="document", file_type="document")],
         )
+        chat_history_service.save_document(
+            "selected-fixture",
+            self.alice.id,
+            "alice-session",
+            "selected.txt",
+            "txt",
+            4,
+            1,
+            embedding_space="fixture-space",
+        )
         embedding = types.ModuleType("app.services.embedding_service")
         embedder = Mock()
+        embedder.embedding_space = "fixture-space"
         embedder.embed_text.return_value = [1.0]
         setattr(embedding, "embedding_service", embedder)
         with (
@@ -5802,11 +6105,70 @@ class BlockingWorkerTests(unittest.TestCase):
             for payload in (None, [], [types.SimpleNamespace(values=None)] * 2):
                 with self.subTest(payload=payload):
                     embed.return_value = types.SimpleNamespace(embeddings=payload)
-                    result = asyncio.run(
-                        run_blocking(service.embed_batch, ["one", "two"])
-                    )
-                    self.assertEqual(len(result), 2)
-                    self.assertTrue(all(len(vector) == 3 for vector in result))
+                    from app.core.errors import EmbeddingError
+
+                    with self.assertRaises(EmbeddingError):
+                        asyncio.run(run_blocking(service.embed_batch, ["one", "two"]))
+
+    def test_embedding_provider_failures_invalid_vectors_and_model_changes_are_explicit(
+        self,
+    ):
+        from google import genai
+
+        from app.core.errors import EmbeddingError
+
+        with patch.object(genai, "Client") as client:
+            service_type = runpy.run_path(
+                str(
+                    Path(__file__).resolve().parents[1]
+                    / "app/services/embedding_service.py"
+                )
+            )["EmbeddingService"]
+            with patch.object(settings, "GEMINI_API_KEY", "fixture-key"):
+                service = service_type()
+            embed = client.return_value.models.embed_content
+            embed.side_effect = RuntimeError("private credential detail")
+            with self.assertRaises(EmbeddingError) as caught:
+                service.embed_batch(["test"])
+            self.assertNotIn("private", str(caught.exception))
+
+            class ConfigurationFailure(RuntimeError):
+                def __init__(self, code):
+                    super().__init__("private credential detail")
+                    self.code = code
+
+            for code in (401, 403, 404):
+                embed.side_effect = ConfigurationFailure(code)
+                with (
+                    self.subTest(code=code),
+                    self.assertRaisesRegex(EmbeddingError, "contact support"),
+                ):
+                    service.embed_text("test")
+            embed.side_effect = None
+            for values in (
+                [1.0],
+                [0.0, 0.0],
+                [float("nan"), 1.0],
+                [float("inf"), 1.0],
+                None,
+            ):
+                embed.return_value = types.SimpleNamespace(
+                    embeddings=[types.SimpleNamespace(values=values)]
+                )
+                with self.subTest(values=values), self.assertRaises(EmbeddingError):
+                    service.embed_batch(["test"])
+            service.client = None
+            with self.assertRaises(EmbeddingError):
+                service.embed_text("test")
+            self.assertEqual(service.embed_batch([]), [])
+            original = service.embedding_space
+            for attribute, value in (
+                ("DEFAULT_EMBEDDING_MODEL", "other-model"),
+                ("EMBEDDING_DIMENSION", 3),
+            ):
+                with patch.object(settings, attribute, value):
+                    self.assertNotEqual(service_type().embedding_space, original)
+            self.assertEqual(service_type().embedding_space, original)
 
     def test_worker_limit_context_and_queued_cancellation(self):
         import threading

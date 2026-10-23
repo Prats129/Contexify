@@ -8,7 +8,7 @@ from typing import Any, AsyncGenerator, Dict, List, Literal, Optional
 from anyio import CancelScope
 
 from app.core.concurrency import run_blocking
-from app.core.errors import ImageGenerationError, TextGenerationError
+from app.core.errors import EmbeddingError, ImageGenerationError, TextGenerationError
 from app.core.logging import logger
 from app.repositories.session_store import session_store_repo
 from app.schemas.chat import (
@@ -404,9 +404,13 @@ class ChatOrchestrator:
                         return
         except (asyncio.CancelledError, GeneratorExit):
             raise
-        except Exception:
+        except Exception as error:
             logger.exception("Chat streaming failed")
-            detail = "The response could not be completed. Please try again."
+            detail = (
+                str(error)
+                if isinstance(error, EmbeddingError)
+                else "The response could not be completed. Please try again."
+            )
             if not saved_messages["assistant"] and saved_messages["user"]:
                 content = "\n\n".join(
                     filter(None, ["".join(tokens), f"Response interrupted: {detail}"])
@@ -715,6 +719,13 @@ class ChatOrchestrator:
                     async for chunk in stream:
                         yield chunk
                 return
+            if not self._needs_web_search(query):
+                async for chunk in self._emit_simple_message(
+                    "I searched your uploaded documents, but could not find relevant information for this question.",
+                    session_id,
+                ):
+                    yield chunk
+                return
 
         # Case F: Query requires real-time web search
         if self._needs_web_search(query):
@@ -771,15 +782,6 @@ class ChatOrchestrator:
             )
 
         if not context_chunks:
-            if allow_fallback:
-                async with aclosing(
-                    self._execute_conversational(
-                        query, session_id, chat_history, reply_to=reply_to
-                    )
-                ) as stream:
-                    async for chunk in stream:
-                        yield chunk
-                return
             msg = "I searched your uploaded document(s), but could not find matching information relevant to your question."
             async for chunk in self._emit_simple_message(msg, session_id):
                 yield chunk
