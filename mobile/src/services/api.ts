@@ -997,12 +997,22 @@ export const apiService = {
     const triggerComplete = () => {
       if (hasEnded || isAborted) return;
       hasEnded = true;
+      try {
+        xhr.abort();
+      } catch {
+        // Transport may already be closed.
+      }
       handlers.onComplete();
     };
 
     const triggerError = (errMsg: string) => {
       if (hasEnded || isAborted) return;
       hasEnded = true;
+      try {
+        xhr.abort();
+      } catch {
+        // Transport may already be closed.
+      }
       handlers.onError(errMsg);
     };
 
@@ -1037,6 +1047,8 @@ export const apiService = {
 
           try {
             const data = JSON.parse(payload);
+            if (!data || typeof data !== "object" || Array.isArray(data))
+              throw new Error("Invalid streaming response");
             if (data.event === "message") {
               const saved = data.message;
               if (
@@ -1048,27 +1060,30 @@ export const apiService = {
                 typeof saved.created_at === "string"
               )
                 handlers.onMessage?.(saved);
-            } else if (data.event === "citations" && data.citations) {
+            } else if (data.event === "citations") {
+              if (!Array.isArray(data.citations))
+                throw new Error("Invalid streaming response");
               handlers.onCitations(data.citations);
-            } else if (
-              data.event === "media" &&
-              data.media &&
-              handlers.onMedia
-            ) {
+            } else if (data.event === "media") {
+              if (!data.media || typeof data.media.url !== "string")
+                throw new Error("Invalid streaming response");
               const m: MediaAttachment = {
                 ...data.media,
                 url: data.media.url?.startsWith("/")
                   ? `${host}${data.media.url}`
                   : data.media.url,
               };
-              handlers.onMedia(m);
-            } else if (
-              data.event === "token" &&
-              typeof data.data === "string"
-            ) {
+              handlers.onMedia?.(m);
+            } else if (data.event === "token") {
+              if (typeof data.data !== "string")
+                throw new Error("Invalid streaming response");
               handlers.onToken(data.data);
             } else if (data.event === "error") {
-              triggerError(data.data || "Streaming error encountered");
+              triggerError(
+                typeof data.data === "string" && data.data
+                  ? data.data
+                  : "Streaming error encountered",
+              );
               return;
             } else if (data.event === "done") {
               triggerComplete();
@@ -1153,7 +1168,10 @@ export const apiService = {
             triggerError(errorMsg);
           } else {
             processChunks(true);
-            triggerComplete();
+            if (!hasEnded)
+              triggerError(
+                "The connection closed before the response finished. Please retry.",
+              );
           }
         };
 

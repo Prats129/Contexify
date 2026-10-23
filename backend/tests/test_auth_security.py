@@ -278,6 +278,27 @@ class SecurityTests(unittest.TestCase):
                     )
                 # A reply made before navigation must still target exactly this row
                 # after the conversation is fetched again.
+                terminals = [
+                    event for event in events if event["event"] in ("error", "done")
+                ]
+                self.assertEqual(
+                    [event["event"] for event in terminals],
+                    ["error" if failed else "done"],
+                )
+                displayed = "".join(
+                    event["data"] for event in events if event["event"] == "token"
+                )
+                if failed:
+                    displayed = "\n\n".join(
+                        filter(
+                            None,
+                            [
+                                displayed,
+                                f"Response interrupted: {terminals[0]['data']}",
+                            ],
+                        )
+                    )
+                self.assertEqual(history[1]["content"], displayed)
                 target = history[1]
                 with patch.object(chat, "chat_orchestrator", self.reply_orchestrator()):
                     reply = self.request(
@@ -391,6 +412,248 @@ class SecurityTests(unittest.TestCase):
         history = chat_history_service.get_session_messages("alice-session")
         self.assertEqual(len(history), 1)
         self.assertEqual(history[0].id, first["message"]["id"])
+
+    def test_stream_stop_preserves_partial_text_and_media_in_all_modes(self):
+        from app.repositories.session_store import session_store_repo
+        from app.schemas.chat import ChatRequest
+        from app.services.chat_history_service import chat_history_service
+
+        principal = security.resolve_principal(security.digest(self.token))
+        for mode, prompt, attachments in [
+            ("AUTO", "hello", []),
+            (
+                "DOCUMENT_RAG",
+                "summarize document",
+                [{"id": "document", "file_type": "document"}],
+            ),
+            ("WEB_SEARCH", "latest weather forecast", []),
+            ("MULTIMODAL", "read this image", [{"id": "image", "file_type": "image"}]),
+            ("IMAGE_GENERATION", "draw a tree", []),
+        ]:
+            with self.subTest(mode=mode):
+                session_id = "stopped-" + mode.lower()
+                security.ensure_session(session_id, principal)
+                actual = self.reply_orchestrator()
+
+                async def stop():
+                    iterator = actual.route_and_stream(
+                        ChatRequest(
+                            session_id=session_id,
+                            mode=mode,
+                            message=prompt,
+                            attachments=attachments,
+                        ),
+                        principal,
+                    )
+                    observed = []
+                    async for frame in iterator:
+                        event = json.loads(frame[6:])
+                        observed.append(event)
+                        if event["event"] in ("token", "media"):
+                            break
+                    await iterator.aclose()
+                    return observed
+
+                observed = asyncio.run(stop())
+                history = chat_history_service.get_session_messages(session_id)
+                self.assertEqual(len(history), 2)
+                self.assertEqual(
+                    history[1].content,
+                    "\n\n".join(
+                        filter(
+                            None,
+                            [
+                                "".join(
+                                    event["data"]
+                                    for event in observed
+                                    if event["event"] == "token"
+                                ),
+                                "Response stopped.",
+                            ],
+                        )
+                    ),
+                )
+                if mode == "IMAGE_GENERATION":
+                    saved_attachments = history[1].attachments
+                    if not saved_attachments:
+                        self.fail("Stopped image response must retain its attachment.")
+                    self.assertEqual(
+                        saved_attachments[0].id, observed[-1]["media"]["id"]
+                    )
+                else:
+                    self.assertTrue(history[1].content)
+                if mode in ("DOCUMENT_RAG", "WEB_SEARCH"):
+                    self.assertTrue(history[1].citations)
+                self.assertEqual(
+                    session_store_repo.get_history_messages(session_id)[1]["content"],
+                    history[1].content,
+                )
+
+    def test_stream_cancellation_during_provider_wait_saves_partial_once_and_closes_provider(
+        self,
+    ):
+        from app.schemas.chat import ChatRequest
+        from app.services.chat_history_service import chat_history_service
+
+        principal = security.resolve_principal(security.digest(self.token))
+        actual = self.reply_orchestrator()
+        closed = []
+
+        async def verify():
+            waiting = asyncio.Event()
+
+            async def provider(*args, **kwargs):
+                try:
+                    yield "Partial fixture"
+                    waiting.set()
+                    await asyncio.Event().wait()
+                finally:
+                    closed.append(True)
+
+            llm = actual._execute_conversational.__func__.__globals__["llm_service"]
+            with patch.object(llm, "stream_conversational_answer", provider):
+                iterator = actual.route_and_stream(
+                    ChatRequest(session_id="alice-session", message="hello"), principal
+                )
+                async for frame in iterator:
+                    if json.loads(frame[6:])["event"] == "token":
+                        break
+                task = asyncio.create_task(anext(iterator))
+                await waiting.wait()
+                task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+                await iterator.aclose()
+
+        asyncio.run(verify())
+        self.assertEqual(closed, [True])
+        history = chat_history_service.get_session_messages("alice-session")
+        self.assertEqual(len(history), 2)
+        self.assertEqual(history[1].content, "Partial fixture\n\nResponse stopped.")
+
+    def test_stream_disconnect_closes_generator_and_saves_partial_for_both_asgi_versions(
+        self,
+    ):
+        from starlette.requests import ClientDisconnect
+
+        from app.api.v1.endpoints import chat
+        from app.schemas.chat import ChatRequest
+        from app.services.chat_history_service import chat_history_service
+
+        principal = security.resolve_principal(security.digest(self.token))
+        for spec in ("2.3", "2.4"):
+            with self.subTest(spec=spec):
+                session_id = "disconnect-" + spec.replace(".", "-")
+                security.ensure_session(session_id, principal)
+                actual = self.reply_orchestrator()
+                closed = []
+
+                async def provider(*args, **kwargs):
+                    try:
+                        yield "Partial fixture"
+                        await asyncio.Event().wait()
+                    finally:
+                        closed.append(True)
+
+                llm = actual._execute_conversational.__func__.__globals__["llm_service"]
+
+                async def disconnect():
+                    disconnected = asyncio.Event()
+
+                    async def receive():
+                        await disconnected.wait()
+                        return {"type": "http.disconnect"}
+
+                    async def send(message):
+                        if (
+                            message["type"] == "http.response.body"
+                            and b'"event": "token"' in message.get("body", b"")
+                        ):
+                            if spec == "2.4":
+                                raise OSError("Fixture socket closed")
+                            disconnected.set()
+
+                    with (
+                        patch.object(llm, "stream_conversational_answer", provider),
+                        patch.object(chat, "chat_orchestrator", actual),
+                    ):
+                        response = await chat.chat_stream(
+                            ChatRequest(session_id=session_id, message="hello"),
+                            principal,
+                        )
+                        try:
+                            await asyncio.wait_for(
+                                response(
+                                    {"type": "http", "asgi": {"spec_version": spec}},
+                                    receive,
+                                    send,
+                                ),
+                                timeout=2,
+                            )
+                        except ClientDisconnect:
+                            if spec != "2.4":
+                                raise
+                        self.assertEqual(closed, [True])
+                        history = chat_history_service.get_session_messages(session_id)
+                        self.assertEqual(
+                            [message.content for message in history],
+                            ["hello", "Partial fixture\n\nResponse stopped."],
+                        )
+
+                asyncio.run(disconnect())
+
+    def test_stream_stop_cannot_restore_cleared_or_deleted_history(self):
+        from app.schemas.chat import ChatRequest
+        from app.services.chat_history_service import chat_history_service
+
+        principal = security.resolve_principal(security.digest(self.token))
+        for deleted in (False, True):
+            session_id = "stop-invalidated-" + str(deleted)
+            security.ensure_session(session_id, principal)
+            actual = self.reply_orchestrator()
+
+            async def stop():
+                iterator = actual.route_and_stream(
+                    ChatRequest(session_id=session_id, message="hello"), principal
+                )
+                async for frame in iterator:
+                    if json.loads(frame[6:])["event"] == "token":
+                        break
+                if deleted:
+                    from app.services.session_lifecycle import request_deletion
+
+                    request_deletion(session_id)
+                else:
+                    chat_history_service.clear_session_messages(session_id)
+                await iterator.aclose()
+
+            asyncio.run(stop())
+            self.assertEqual(chat_history_service.get_session_messages(session_id), [])
+
+    def test_stream_stop_after_saved_assistant_ack_does_not_duplicate_message(self):
+        from app.schemas.chat import ChatRequest
+        from app.services.chat_history_service import chat_history_service
+
+        actual = self.reply_orchestrator()
+        principal = security.resolve_principal(security.digest(self.token))
+
+        async def stop():
+            iterator = actual.route_and_stream(
+                ChatRequest(session_id="alice-session", message="hello"), principal
+            )
+            async for frame in iterator:
+                event = json.loads(frame[6:])
+                if (
+                    event["event"] == "message"
+                    and event["message"]["role"] == "assistant"
+                ):
+                    break
+            await iterator.aclose()
+
+        asyncio.run(stop())
+        self.assertEqual(
+            len(chat_history_service.get_session_messages("alice-session")), 2
+        )
 
     def test_legacy_reply_previews_survive_without_guessing_and_dom_ids_normalize(self):
         from app.services.chat_history_service import chat_history_service as service
@@ -3479,7 +3742,7 @@ class SecurityTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn('"event": "error"', response.text)
         self.assertIn("free image allowance", response.text)
-        self.assertIn('"event": "done"', response.text)
+        self.assertNotIn('"event": "done"', response.text)
         self.assertNotIn('"event": "media"', response.text)
         self.assertNotIn("private provider detail", response.text)
         self.assertEqual(len(calls), 1)
@@ -5263,6 +5526,181 @@ class SecurityTests(unittest.TestCase):
                 conn.execute("SELECT delivery_status FROM email_otps").fetchone()[0],
                 "failed",
             )
+
+
+class TextStreamingTests(unittest.TestCase):
+    def setUp(self):
+        self.patches = [
+            patch.dict("os.environ", {"GEMINI_API_KEY": ""}),
+            patch.object(settings, "DEFAULT_LLM_MODEL", "primary", create=True),
+            patch.object(
+                settings,
+                "FALLBACK_LLM_MODELS",
+                ["primary", "fallback", "fallback"],
+                create=True,
+            ),
+        ]
+        for replacement in self.patches:
+            replacement.start()
+            self.addCleanup(replacement.stop)
+        self.namespace = runpy.run_path(
+            str(Path(__file__).resolve().parents[1] / "app/services/llm_service.py")
+        )
+        self.service = self.namespace["llm_service"]
+        self.attempts = []
+        self.closed = []
+
+    def provider(self, plans):
+        async def generate(**kwargs):
+            model = kwargs["model"]
+            self.attempts.append(model)
+            plan = plans[model]
+            if isinstance(plan, BaseException):
+                raise plan
+
+            async def chunks():
+                try:
+                    for value in plan:
+                        if isinstance(value, BaseException):
+                            raise value
+                        yield types.SimpleNamespace(text=value)
+                finally:
+                    self.closed.append(model)
+
+            return chunks()
+
+        self.service.client = types.SimpleNamespace(
+            aio=types.SimpleNamespace(
+                models=types.SimpleNamespace(generate_content_stream=generate)
+            )
+        )
+
+    def test_fallback_is_allowed_only_before_any_text_and_empty_models_are_retried(
+        self,
+    ):
+        for first in (RuntimeError("fixture unavailable"), [], [None, ""]):
+            self.attempts.clear()
+            self.provider({"primary": first, "fallback": ["Fallback ", "answer"]})
+
+            async def collect():
+                return [
+                    token
+                    async for token in self.service._stream_answer("fixture", "fixture")
+                ]
+
+            self.assertEqual(asyncio.run(collect()), ["Fallback ", "answer"])
+            self.assertEqual(self.attempts, ["primary", "fallback"])
+
+    def test_all_text_routes_preserve_partial_output_without_starting_a_second_answer(
+        self,
+    ):
+        from app.core.errors import TextGenerationError
+
+        for mode in ("conversation", "rag", "web", "vision"):
+            with self.subTest(mode=mode):
+                self.attempts.clear()
+                self.closed.clear()
+                self.provider(
+                    {
+                        "primary": [
+                            "Partial ",
+                            RuntimeError("private fixture provider detail"),
+                        ],
+                        "fallback": ["Must not append"],
+                    }
+                )
+                if mode == "conversation":
+                    stream = self.service.stream_conversational_answer("hello")
+                elif mode == "rag":
+                    stream = self.service.stream_rag_answer(
+                        "review", [{"text": "fixture", "metadata": {}}]
+                    )
+                elif mode == "web":
+                    stream = self.service.stream_web_search_answer("weather", [])
+                else:
+                    stream = self.service.stream_multimodal_answer("describe", [])
+                observed = []
+
+                async def collect():
+                    async for token in stream:
+                        observed.append(token)
+
+                with self.assertRaises(TextGenerationError) as caught:
+                    asyncio.run(collect())
+                self.assertEqual(observed, ["Partial "])
+                self.assertNotIn("private fixture", str(caught.exception))
+                self.assertEqual(self.attempts, ["primary"])
+                self.assertEqual(self.closed, ["primary"])
+
+    def test_unconfigured_and_exhausted_providers_fail_instead_of_fabricating_answers(
+        self,
+    ):
+        from app.core.errors import TextGenerationError
+
+        for configured in (False, True):
+            if configured:
+                self.provider(
+                    {"primary": [], "fallback": RuntimeError("fixture unavailable")}
+                )
+            else:
+                self.service.client = None
+
+            async def collect():
+                return [
+                    token
+                    async for token in self.service.stream_conversational_answer(
+                        "hello"
+                    )
+                ]
+
+            with self.assertRaises(TextGenerationError):
+                asyncio.run(collect())
+
+    def test_closing_after_output_closes_provider_without_starting_fallback(self):
+        self.provider({"primary": ["First", "Second"], "fallback": ["Wrong"]})
+
+        async def stop():
+            stream = self.service.stream_conversational_answer("hello")
+            self.assertEqual(await anext(stream), "First")
+            await stream.aclose()
+
+        asyncio.run(stop())
+        self.assertEqual(self.closed, ["primary"])
+        self.assertEqual(self.attempts, ["primary"])
+
+    def test_task_cancellation_while_waiting_for_provider_does_not_retry(self):
+        async def verify():
+            waiting = asyncio.Event()
+
+            async def chunks():
+                try:
+                    yield types.SimpleNamespace(text="Partial")
+                    waiting.set()
+                    await asyncio.Event().wait()
+                finally:
+                    self.closed.append("primary")
+
+            async def generate(**kwargs):
+                self.attempts.append(kwargs["model"])
+                return chunks()
+
+            self.service.client = types.SimpleNamespace(
+                aio=types.SimpleNamespace(
+                    models=types.SimpleNamespace(generate_content_stream=generate)
+                )
+            )
+            stream = self.service.stream_conversational_answer("hello")
+            self.assertEqual(await anext(stream), "Partial")
+            task = asyncio.create_task(anext(stream))
+            await waiting.wait()
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+            await stream.aclose()
+
+        asyncio.run(verify())
+        self.assertEqual(self.closed, ["primary"])
+        self.assertEqual(self.attempts, ["primary"])
 
 
 class CloudAdapterSecurityTests(SecurityTests):

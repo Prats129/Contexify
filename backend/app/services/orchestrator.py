@@ -1,8 +1,10 @@
+import asyncio
 import json
 import re
+from contextlib import aclosing
 from typing import Any, AsyncGenerator, Dict, List, Literal, Optional
 
-from app.core.errors import ImageGenerationError
+from app.core.errors import ImageGenerationError, TextGenerationError
 from app.core.logging import logger
 from app.repositories.session_store import session_store_repo
 from app.schemas.chat import (
@@ -262,6 +264,7 @@ class ChatOrchestrator:
         citations: Optional[List[Dict[str, Any]]] = None,
         attachments: Optional[List[Any]] = None,
         reply_to: Optional[Any] = None,
+        expected_history_version: Optional[int] = None,
     ) -> str:
         saved = chat_history_service.save_message(
             session_id,
@@ -270,6 +273,7 @@ class ChatOrchestrator:
             citations=citations,
             attachments=attachments,
             reply_to=reply_to,
+            expected_history_version=expected_history_version,
         )
         session_store_repo.record_message(
             session_id,
@@ -308,25 +312,115 @@ class ChatOrchestrator:
         stream_error = None
         full_answer = ""
         try:
-            async for token in llm_service.stream_conversational_answer(
-                query, chat_history, reply_to=reply_to
-            ):
-                full_answer += token
-                yield f"data: {json.dumps({'event': 'token', 'data': token})}\n\n"
+            async with aclosing(
+                llm_service.stream_conversational_answer(
+                    query, chat_history, reply_to=reply_to
+                )
+            ) as stream:
+                async for token in stream:
+                    full_answer += token
+                    yield f"data: {json.dumps({'event': 'token', 'data': token})}\n\n"
         except Exception as e:
             logger.exception(f"Error during Conversational LLM streaming: {e}")
-            err_str = f"Error generating response: {str(e)}"
+            err_str = (
+                str(e)
+                if isinstance(e, TextGenerationError)
+                else "The AI response could not be completed. Please try again."
+            )
             stream_error = err_str
-            full_answer = err_str
+            full_answer = "\n\n".join(
+                filter(None, [full_answer, f"Response interrupted: {err_str}"])
+            )
 
         yield self._persist_message(
             session_id=session_id, role="assistant", content=full_answer
         )
         if stream_error is not None:
             yield f"data: {json.dumps({'event': 'error', 'data': stream_error})}\n\n"
+            return
         yield f"data: {json.dumps({'event': 'done', 'data': '[DONE]'})}\n\n"
 
     async def route_and_stream(
+        self, request: ChatRequest, principal
+    ) -> AsyncGenerator[str, None]:
+        session_id = request.session_id
+        history_version = session_store_repo.get_or_create_session(
+            session_id
+        ).history_version
+        tokens = []
+        citations = None
+        attachments = []
+        user_saved = False
+        assistant_saved = False
+        terminal = False
+        try:
+            async with aclosing(self._route_and_stream(request, principal)) as stream:
+                async for frame in stream:
+                    event = json.loads(frame[6:])
+                    kind = event.get("event")
+                    if kind == "message":
+                        if event["message"]["role"] == "assistant":
+                            assistant_saved = True
+                        else:
+                            user_saved = True
+                    elif kind == "token":
+                        tokens.append(event["data"])
+                    elif kind == "citations":
+                        citations = event.get("citations")
+                    elif kind == "media":
+                        attachments.append(MediaAttachment(**event["media"]))
+                    terminal = kind in ("done", "error")
+                    yield frame
+                    if terminal:
+                        return
+        except (asyncio.CancelledError, GeneratorExit):
+            raise
+        except Exception:
+            logger.exception("Chat streaming failed")
+            detail = "The response could not be completed. Please try again."
+            if not assistant_saved and user_saved:
+                content = "\n\n".join(
+                    filter(None, ["".join(tokens), f"Response interrupted: {detail}"])
+                )
+                try:
+                    acknowledgement = self._persist_message(
+                        session_id,
+                        "assistant",
+                        content,
+                        citations=citations,
+                        attachments=attachments,
+                        expected_history_version=history_version,
+                    )
+                    assistant_saved = True
+                    yield acknowledgement
+                except Exception:
+                    logger.exception("Could not save interrupted chat response")
+            terminal = True
+            yield f"data: {json.dumps({'event': 'error', 'data': detail})}\n\n"
+        finally:
+            # Cancellation cannot deliver more SSE events. Save the text/media
+            # already produced so reopening the conversation does not lose them.
+            if (
+                user_saved
+                and not assistant_saved
+                and not terminal
+                and (tokens or attachments)
+            ):
+                try:
+                    self._persist_message(
+                        session_id,
+                        "assistant",
+                        "\n\n".join(
+                            filter(None, ["".join(tokens), "Response stopped."])
+                        ),
+                        citations=citations,
+                        attachments=attachments,
+                        expected_history_version=history_version,
+                    )
+                except Exception:
+                    logger.exception("Could not save stopped chat response")
+
+    async def _route_and_stream(
         self, request: ChatRequest, principal
     ) -> AsyncGenerator[str, None]:
         session_id = request.session_id
@@ -391,15 +485,18 @@ class ChatOrchestrator:
             context = rag_service.retrieve_context_for_query(
                 query, session_id, document_ids=selected_documents
             )
-            async for chunk in self._execute_document_rag(
-                query,
-                session_id,
-                chat_history,
-                context_chunks=context,
-                allow_fallback=False,
-                reply_to=request.reply_to,
-            ):
-                yield chunk
+            async with aclosing(
+                self._execute_document_rag(
+                    query,
+                    session_id,
+                    chat_history,
+                    context_chunks=context,
+                    allow_fallback=False,
+                    reply_to=request.reply_to,
+                )
+            ) as stream:
+                async for chunk in stream:
+                    yield chunk
             return
         recent_images = self._find_recent_image_attachments(chat_history, principal)
 
@@ -412,40 +509,51 @@ class ChatOrchestrator:
             if self._is_conversational_query(
                 query, chat_history
             ) and not self._is_image_gen_intent(query):
-                async for chunk in self._execute_conversational(
-                    query, session_id, chat_history, reply_to=request.reply_to
-                ):
-                    yield chunk
+                async with aclosing(
+                    self._execute_conversational(
+                        query, session_id, chat_history, reply_to=request.reply_to
+                    )
+                ) as stream:
+                    async for chunk in stream:
+                        yield chunk
                 return
-            async for chunk in self._execute_image_generation(request, session_id):
-                yield chunk
+            async with aclosing(
+                self._execute_image_generation(request, session_id)
+            ) as stream:
+                async for chunk in stream:
+                    yield chunk
             return
 
         # 3b. Explicit MULTIMODAL Mode
         if session.mode == ChatMode.MULTIMODAL:
             # If current request has attachments, use them directly
             if request.attachments and len(request.attachments) > 0:
-                async for chunk in self._execute_multimodal(
-                    request, session_id, chat_history
-                ):
-                    yield chunk
+                async with aclosing(
+                    self._execute_multimodal(request, session_id, chat_history)
+                ) as stream:
+                    async for chunk in stream:
+                        yield chunk
                 return
             # If no current attachments, but recent image exists in history
             if recent_images:
                 req_with_recent = request.model_copy(
                     update={"attachments": recent_images}
                 )
-                async for chunk in self._execute_multimodal(
-                    req_with_recent, session_id, chat_history
-                ):
-                    yield chunk
+                async with aclosing(
+                    self._execute_multimodal(req_with_recent, session_id, chat_history)
+                ) as stream:
+                    async for chunk in stream:
+                        yield chunk
                 return
             # If conversational query or greeting
             if self._is_conversational_query(query, chat_history):
-                async for chunk in self._execute_conversational(
-                    query, session_id, chat_history, reply_to=request.reply_to
-                ):
-                    yield chunk
+                async with aclosing(
+                    self._execute_conversational(
+                        query, session_id, chat_history, reply_to=request.reply_to
+                    )
+                ) as stream:
+                    async for chunk in stream:
+                        yield chunk
                 return
             msg = "Please attach an image or document to analyze with Vision & OCR, or ask any general question."
             async for chunk in self._emit_simple_message(msg, session_id):
@@ -456,27 +564,36 @@ class ChatOrchestrator:
         if session.mode == ChatMode.DOCUMENT_RAG:
             # If conversational greeting or general follow-up without document query
             if self._is_conversational_query(query, chat_history):
-                async for chunk in self._execute_conversational(
-                    query, session_id, chat_history, reply_to=request.reply_to
-                ):
-                    yield chunk
+                async with aclosing(
+                    self._execute_conversational(
+                        query, session_id, chat_history, reply_to=request.reply_to
+                    )
+                ) as stream:
+                    async for chunk in stream:
+                        yield chunk
                 return
-            async for chunk in self._execute_document_rag(
-                query,
-                session_id,
-                chat_history,
-                allow_fallback=False,
-                reply_to=request.reply_to,
-            ):
-                yield chunk
+            async with aclosing(
+                self._execute_document_rag(
+                    query,
+                    session_id,
+                    chat_history,
+                    allow_fallback=False,
+                    reply_to=request.reply_to,
+                )
+            ) as stream:
+                async for chunk in stream:
+                    yield chunk
             return
 
         # 3d. Explicit WEB_SEARCH Mode
         if session.mode == ChatMode.WEB_SEARCH:
-            async for chunk in self._execute_web_search(
-                query, session_id, chat_history, reply_to=request.reply_to
-            ):
-                yield chunk
+            async with aclosing(
+                self._execute_web_search(
+                    query, session_id, chat_history, reply_to=request.reply_to
+                )
+            ) as stream:
+                async for chunk in stream:
+                    yield chunk
             return
 
         # =========================================================================
@@ -485,16 +602,20 @@ class ChatOrchestrator:
 
         # Case A: Explicit Image Generation Intent
         if self._is_image_gen_intent(query):
-            async for chunk in self._execute_image_generation(request, session_id):
-                yield chunk
+            async with aclosing(
+                self._execute_image_generation(request, session_id)
+            ) as stream:
+                async for chunk in stream:
+                    yield chunk
             return
 
         # Case B: Current request contains attached images or media
         if request.attachments and len(request.attachments) > 0:
-            async for chunk in self._execute_multimodal(
-                request, session_id, chat_history
-            ):
-                yield chunk
+            async with aclosing(
+                self._execute_multimodal(request, session_id, chat_history)
+            ) as stream:
+                async for chunk in stream:
+                    yield chunk
             return
 
         # Case C: Recent image exists in history + visual follow-up or conversational query
@@ -503,48 +624,61 @@ class ChatOrchestrator:
             or self._is_conversational_query(query, chat_history)
         ):
             req_with_recent = request.model_copy(update={"attachments": recent_images})
-            async for chunk in self._execute_multimodal(
-                req_with_recent, session_id, chat_history
-            ):
-                yield chunk
+            async with aclosing(
+                self._execute_multimodal(req_with_recent, session_id, chat_history)
+            ) as stream:
+                async for chunk in stream:
+                    yield chunk
             return
 
         # Case D: Conversational greeting or short follow-up
         if self._is_conversational_query(query, chat_history):
-            async for chunk in self._execute_conversational(
-                query, session_id, chat_history, reply_to=request.reply_to
-            ):
-                yield chunk
+            async with aclosing(
+                self._execute_conversational(
+                    query, session_id, chat_history, reply_to=request.reply_to
+                )
+            ) as stream:
+                async for chunk in stream:
+                    yield chunk
             return
 
         # Case E: Session has uploaded documents -> retrieve context
         if session.document_ids and len(session.document_ids) > 0:
             chunks = rag_service.retrieve_context_for_query(query, session_id)
             if chunks:
-                async for chunk in self._execute_document_rag(
-                    query,
-                    session_id,
-                    chat_history,
-                    context_chunks=chunks,
-                    allow_fallback=True,
-                    reply_to=request.reply_to,
-                ):
-                    yield chunk
+                async with aclosing(
+                    self._execute_document_rag(
+                        query,
+                        session_id,
+                        chat_history,
+                        context_chunks=chunks,
+                        allow_fallback=True,
+                        reply_to=request.reply_to,
+                    )
+                ) as stream:
+                    async for chunk in stream:
+                        yield chunk
                 return
 
         # Case F: Query requires real-time web search
         if self._needs_web_search(query):
-            async for chunk in self._execute_web_search(
-                query, session_id, chat_history, reply_to=request.reply_to
-            ):
-                yield chunk
+            async with aclosing(
+                self._execute_web_search(
+                    query, session_id, chat_history, reply_to=request.reply_to
+                )
+            ) as stream:
+                async for chunk in stream:
+                    yield chunk
             return
 
         # Case G: Default general knowledge / reasoning / coding / conversation
-        async for chunk in self._execute_conversational(
-            query, session_id, chat_history, reply_to=request.reply_to
-        ):
-            yield chunk
+        async with aclosing(
+            self._execute_conversational(
+                query, session_id, chat_history, reply_to=request.reply_to
+            )
+        ) as stream:
+            async for chunk in stream:
+                yield chunk
 
     async def _execute_document_rag(
         self,
@@ -559,10 +693,13 @@ class ChatOrchestrator:
 
         if not session.document_ids and not context_chunks:
             if allow_fallback:
-                async for chunk in self._execute_conversational(
-                    query, session_id, chat_history, reply_to=reply_to
-                ):
-                    yield chunk
+                async with aclosing(
+                    self._execute_conversational(
+                        query, session_id, chat_history, reply_to=reply_to
+                    )
+                ) as stream:
+                    async for chunk in stream:
+                        yield chunk
                 return
             msg = "⚠️ No documents uploaded to this chat session yet! Please upload a PDF or text file first to ask document-based questions, or switch to Auto / Web Search mode."
             async for chunk in self._emit_simple_message(msg, session_id):
@@ -575,10 +712,13 @@ class ChatOrchestrator:
 
         if not context_chunks:
             if allow_fallback:
-                async for chunk in self._execute_conversational(
-                    query, session_id, chat_history, reply_to=reply_to
-                ):
-                    yield chunk
+                async with aclosing(
+                    self._execute_conversational(
+                        query, session_id, chat_history, reply_to=reply_to
+                    )
+                ) as stream:
+                    async for chunk in stream:
+                        yield chunk
                 return
             msg = "I searched your uploaded document(s), but could not find matching information relevant to your question."
             async for chunk in self._emit_simple_message(msg, session_id):
@@ -605,16 +745,25 @@ class ChatOrchestrator:
         stream_error = None
         full_answer = ""
         try:
-            async for token in llm_service.stream_rag_answer(
-                query, context_chunks, chat_history, reply_to=reply_to
-            ):
-                full_answer += token
-                yield f"data: {json.dumps({'event': 'token', 'data': token})}\n\n"
+            async with aclosing(
+                llm_service.stream_rag_answer(
+                    query, context_chunks, chat_history, reply_to=reply_to
+                )
+            ) as stream:
+                async for token in stream:
+                    full_answer += token
+                    yield f"data: {json.dumps({'event': 'token', 'data': token})}\n\n"
         except Exception as e:
             logger.exception(f"Error during LLM streaming: {e}")
-            err_str = f"Error generating answer: {str(e)}"
+            err_str = (
+                str(e)
+                if isinstance(e, TextGenerationError)
+                else "The AI response could not be completed. Please try again."
+            )
             stream_error = err_str
-            full_answer = err_str
+            full_answer = "\n\n".join(
+                filter(None, [full_answer, f"Response interrupted: {err_str}"])
+            )
 
         # 4. Persist completed assistant message with citations to SQLite & in-memory
         yield self._persist_message(
@@ -625,6 +774,7 @@ class ChatOrchestrator:
         )
         if stream_error is not None:
             yield f"data: {json.dumps({'event': 'error', 'data': stream_error})}\n\n"
+            return
 
         yield f"data: {json.dumps({'event': 'done', 'data': '[DONE]'})}\n\n"
 
@@ -644,10 +794,13 @@ class ChatOrchestrator:
             logger.info(
                 f"Routing query '{query}' to conversational assistant with chat history"
             )
-            async for chunk in self._execute_conversational(
-                query, session_id, chat_history, reply_to=reply_to
-            ):
-                yield chunk
+            async with aclosing(
+                self._execute_conversational(
+                    query, session_id, chat_history, reply_to=reply_to
+                )
+            ) as stream:
+                async for chunk in stream:
+                    yield chunk
             return
 
         # 2. Informational Search Query: Execute Search & Emit Sources
@@ -671,16 +824,25 @@ class ChatOrchestrator:
                 yield f"data: {json.dumps({'event': 'citations', 'data': '', 'citations': citations_data})}\n\n"
 
         try:
-            async for token in llm_service.stream_web_search_answer(
-                query, results, chat_history, reply_to=reply_to
-            ):
-                full_answer += token
-                yield f"data: {json.dumps({'event': 'token', 'data': token})}\n\n"
+            async with aclosing(
+                llm_service.stream_web_search_answer(
+                    query, results, chat_history, reply_to=reply_to
+                )
+            ) as stream:
+                async for token in stream:
+                    full_answer += token
+                    yield f"data: {json.dumps({'event': 'token', 'data': token})}\n\n"
         except Exception as e:
             logger.exception(f"Error during Web Search LLM streaming: {e}")
-            err_str = f"Error generating web search answer: {str(e)}"
+            err_str = (
+                str(e)
+                if isinstance(e, TextGenerationError)
+                else "The AI response could not be completed. Please try again."
+            )
             stream_error = err_str
-            full_answer = err_str
+            full_answer = "\n\n".join(
+                filter(None, [full_answer, f"Response interrupted: {err_str}"])
+            )
 
         # Persist completed assistant message with citations to SQLite & in-memory
         yield self._persist_message(
@@ -691,6 +853,7 @@ class ChatOrchestrator:
         )
         if stream_error is not None:
             yield f"data: {json.dumps({'event': 'error', 'data': stream_error})}\n\n"
+            return
 
         yield f"data: {json.dumps({'event': 'done', 'data': '[DONE]'})}\n\n"
 
@@ -698,8 +861,6 @@ class ChatOrchestrator:
         self, request: ChatRequest, session_id: str
     ) -> AsyncGenerator[str, None]:
         prompt = self._clean_image_prompt(request.message or "Creative artwork")
-        loading_text = f"🎨 *Generating image for '{prompt}'...*\n\n"
-        yield f"data: {json.dumps({'event': 'token', 'data': loading_text})}\n\n"
 
         try:
             # Check if reference image exists in attachments
@@ -746,9 +907,12 @@ class ChatOrchestrator:
             )
             err_msg = f"⚠️ Sorry, could not generate image: {detail}"
             yield self._persist_message(
-                session_id=session_id, role="assistant", content=err_msg
+                session_id=session_id,
+                role="assistant",
+                content=f"Response interrupted: {err_msg}",
             )
             yield f"data: {json.dumps({'event': 'error', 'data': err_msg})}\n\n"
+            return
 
         yield f"data: {json.dumps({'event': 'done', 'data': '[DONE]'})}\n\n"
 
@@ -761,19 +925,28 @@ class ChatOrchestrator:
         stream_error = None
         full_answer = ""
         try:
-            async for token in llm_service.stream_multimodal_answer(
-                query=request.message or "",
-                attachments=request.attachments or [],
-                chat_history=chat_history,
-                reply_to=request.reply_to,
-            ):
-                full_answer += token
-                yield f"data: {json.dumps({'event': 'token', 'data': token})}\n\n"
+            async with aclosing(
+                llm_service.stream_multimodal_answer(
+                    query=request.message or "",
+                    attachments=request.attachments or [],
+                    chat_history=chat_history,
+                    reply_to=request.reply_to,
+                )
+            ) as stream:
+                async for token in stream:
+                    full_answer += token
+                    yield f"data: {json.dumps({'event': 'token', 'data': token})}\n\n"
         except Exception as e:
             logger.exception(f"Multimodal vision execution error: {e}")
-            err_msg = f"⚠️ Error analyzing image/document: {str(e)}"
+            err_msg = (
+                str(e)
+                if isinstance(e, TextGenerationError)
+                else "The AI response could not be completed. Please try again."
+            )
             stream_error = err_msg
-            full_answer = err_msg
+            full_answer = "\n\n".join(
+                filter(None, [full_answer, f"Response interrupted: {err_msg}"])
+            )
 
         # Persist assistant response
         yield self._persist_message(
@@ -781,6 +954,7 @@ class ChatOrchestrator:
         )
         if stream_error is not None:
             yield f"data: {json.dumps({'event': 'error', 'data': stream_error})}\n\n"
+            return
         yield f"data: {json.dumps({'event': 'done', 'data': '[DONE]'})}\n\n"
 
 

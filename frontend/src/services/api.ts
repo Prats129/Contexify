@@ -826,11 +826,23 @@ export const apiService = {
     isTemporary = false,
   ): Promise<void> {
     const { onCitations, onMedia, onToken, onError, onDone } = handlers;
-
+    let hasEnded = false;
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    const fail = (message: string) => {
+      if (hasEnded || signal?.aborted) return;
+      hasEnded = true;
+      onError?.(message);
+    };
+    const cancelReader = () => {
+      void reader?.cancel().catch(() => undefined);
+    };
     try {
       const response = await authenticatedFetch(`${API_BASE_URL}/chat/stream`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+        },
         body: JSON.stringify({
           session_id: sessionId,
           user_id: userId || undefined,
@@ -842,100 +854,138 @@ export const apiService = {
         }),
         signal,
       });
-
-      if (!response.ok) {
+      if (signal?.aborted) return;
+      if (!response.ok)
         throw new Error(`Server returned HTTP ${response.status}`);
-      }
-
-      if (!response.body) {
-        throw new Error("Response body is null");
-      }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder("utf-8");
-      let buffer = "";
-      let hasCompleted = false;
-
-      const triggerDone = () => {
-        if (!hasCompleted) {
-          hasCompleted = true;
-          if (onDone) onDone();
+      if (!response.body) throw new Error("Response body is null");
+      reader = response.body.getReader();
+      signal?.addEventListener("abort", cancelReader);
+      const decoder = new TextDecoder("utf-8", { fatal: true });
+      let pendingLine = "";
+      let skipNextLF = false;
+      let dataLines: string[] = [];
+      const complete = () => {
+        if (hasEnded || signal?.aborted) return;
+        hasEnded = true;
+        onDone?.();
+      };
+      const dispatch = () => {
+        if (hasEnded || signal?.aborted || !dataLines.length) return;
+        const payload = dataLines.join("\n");
+        dataLines = [];
+        if (payload === "[DONE]") {
+          complete();
+          return;
+        }
+        let parsed;
+        try {
+          parsed = JSON.parse(payload);
+        } catch {
+          fail("Received an invalid streaming response. Please retry.");
+          return;
+        }
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          fail("Received an invalid streaming response. Please retry.");
+          return;
+        }
+        if (parsed.event === "message") {
+          const saved = parsed.message;
+          if (
+            saved &&
+            typeof saved.id === "string" &&
+            saved.id &&
+            saved.session_id === sessionId &&
+            (saved.role === "user" || saved.role === "assistant") &&
+            typeof saved.created_at === "string"
+          )
+            handlers.onMessage?.(saved);
+        } else if (parsed.event === "citations") {
+          if (!Array.isArray(parsed.citations))
+            fail("Received an invalid streaming response. Please retry.");
+          else onCitations?.(parsed.citations);
+        } else if (parsed.event === "media") {
+          if (!parsed.media || typeof parsed.media.url !== "string")
+            fail("Received an invalid streaming response. Please retry.");
+          else
+            onMedia?.({
+              ...parsed.media,
+              url: formatMediaUrl(parsed.media.url),
+            });
+        } else if (parsed.event === "token") {
+          if (typeof parsed.data !== "string")
+            fail("Received an invalid streaming response. Please retry.");
+          else onToken?.(parsed.data);
+        } else if (parsed.event === "error") {
+          fail(
+            typeof parsed.data === "string" && parsed.data
+              ? parsed.data
+              : "Streaming error encountered",
+          );
+        } else if (parsed.event === "done") {
+          complete();
         }
       };
-
-      while (true) {
-        if (signal?.aborted) {
-          try {
-            await reader.cancel();
-          } catch {
-            // ignore
-          }
-          break;
+      const processLine = (line: string) => {
+        if (!line) {
+          dispatch();
+          return;
         }
-
-        const { value, done } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          if (signal?.aborted) break;
-          if (line.startsWith("data: ")) {
-            const jsonStr = line.replace("data: ", "").trim();
-            if (!jsonStr) continue;
-
-            try {
-              const parsed = JSON.parse(jsonStr);
-
-              if (parsed.event === "message") {
-                const saved = parsed.message;
-                if (
-                  saved &&
-                  typeof saved.id === "string" &&
-                  saved.id &&
-                  saved.session_id === sessionId &&
-                  (saved.role === "user" || saved.role === "assistant") &&
-                  typeof saved.created_at === "string"
-                )
-                  handlers.onMessage?.(saved);
-              } else if (parsed.event === "citations" && onCitations) {
-                onCitations(parsed.citations);
-              } else if (parsed.event === "media" && onMedia) {
-                const mediaItem: MediaAttachment = {
-                  ...parsed.media,
-                  url: formatMediaUrl(parsed.media?.url),
-                };
-                onMedia(mediaItem);
-              } else if (parsed.event === "token" && onToken) {
-                onToken(parsed.data);
-              } else if (parsed.event === "error" && onError) {
-                onError(parsed.data);
-              } else if (parsed.event === "done") {
-                triggerDone();
-              }
-            } catch (e) {
-              console.error("Failed to parse SSE line:", line, e);
+        if (!line.startsWith("data:")) return;
+        const value = line.slice(5);
+        dataLines.push(value.startsWith(" ") ? value.slice(1) : value);
+      };
+      const consume = (text: string) => {
+        let start = 0;
+        for (let index = 0; index < text.length; index++) {
+          if (hasEnded || signal?.aborted) return;
+          const char = text[index];
+          if (skipNextLF) {
+            skipNextLF = false;
+            if (char === "\n") {
+              start = index + 1;
+              continue;
             }
           }
+          if (char !== "\r" && char !== "\n") continue;
+          processLine(pendingLine + text.slice(start, index));
+          pendingLine = "";
+          start = index + 1;
+          skipNextLF = char === "\r";
+        }
+        if (!hasEnded && !signal?.aborted) pendingLine += text.slice(start);
+      };
+      while (!hasEnded && !signal?.aborted) {
+        const { value, done } = await reader.read();
+        consume(
+          done ? decoder.decode() : decoder.decode(value, { stream: true }),
+        );
+        if (done) {
+          if (pendingLine) processLine(pendingLine);
+          dispatch();
+          break;
         }
       }
-
-      if (!signal?.aborted) {
-        triggerDone();
-      }
+      if (!hasEnded && !signal?.aborted)
+        fail(
+          "The connection closed before the response finished. Please retry.",
+        );
     } catch (err: unknown) {
       if (
-        (err instanceof DOMException && err.name === "AbortError") ||
-        (err instanceof Error && err.name === "AbortError") ||
-        signal?.aborted
-      ) {
-        // Stream was stopped by the user - do not treat as an error
+        signal?.aborted ||
+        (err instanceof Error && err.name === "AbortError")
+      )
         return;
+      fail(err instanceof Error ? err.message : String(err));
+    } finally {
+      signal?.removeEventListener("abort", cancelReader);
+      if (reader) {
+        try {
+          await reader.cancel();
+        } catch {
+          // Transport may already be closed.
+        }
+        reader.releaseLock();
       }
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      if (onError) onError(errorMessage);
     }
   },
 };

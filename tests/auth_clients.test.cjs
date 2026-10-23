@@ -198,6 +198,7 @@ for (const platform of ["frontend", "mobile"]) {
                 ? { value: chunks[index++], done: false }
                 : { done: true },
             cancel: async () => {},
+            releaseLock() {},
           }),
         },
       };
@@ -289,6 +290,174 @@ async function mobileStreamFixture() {
   };
 }
 
+async function webStreamFixture() {
+  let chunks;
+  let readFailure;
+  let cancelled;
+  let released;
+  let index;
+  const fixture = client("frontend", (url) => {
+    if (!url.endsWith("/chat/stream"))
+      return response(credentials("stream-token"));
+    return {
+      ...response({}),
+      body: {
+        getReader: () => ({
+          async read() {
+            if (readFailure && index === chunks.length)
+              throw new Error("Fixture connection lost");
+            return index < chunks.length
+              ? { value: chunks[index++], done: false }
+              : { done: true };
+          },
+          async cancel() {
+            cancelled++;
+          },
+          releaseLock() {
+            released++;
+          },
+        }),
+      },
+    };
+  });
+  await fixture.api.login("fixture", "password");
+  return async (parts, failReading = false, onToken) => {
+    chunks = parts;
+    readFailure = failReading;
+    cancelled = released = index = 0;
+    const events = [];
+    const controller = new AbortController();
+    await fixture.api.streamChat(
+      "fixture-session",
+      "hello",
+      "AUTO",
+      {
+        onToken: (text) => {
+          events.push(["token", text]);
+          onToken?.(controller);
+        },
+        onCitations: (value) => events.push(["citations", value]),
+        onMedia: (value) => events.push(["media", value]),
+        onError: (text) => events.push(["error", text]),
+        onDone: () => events.push(["complete"]),
+      },
+      controller.signal,
+    );
+    return { events, cancelled, released };
+  };
+}
+
+test("frontend: SSE preserves every byte split and line ending, and terminates at explicit completion", async () => {
+  const stream = await webStreamFixture();
+  for (const newline of ["\n", "\r\n", "\r"]) {
+    const wire = [
+      ": keepalive",
+      "id: ignored",
+      'data:{"event":"token",',
+      'data:"data":"Hello 🌍 नमस्ते"}',
+      "",
+      'data:{"event":"done"}',
+      "",
+      'data:{"event":"token","data":"must not appear"}',
+      "",
+      "",
+    ].join(newline);
+    const bytes = new TextEncoder().encode(wire);
+    for (let split = 0; split <= bytes.length; split++) {
+      const { events, cancelled, released } = await stream([
+        bytes.slice(0, split),
+        bytes.slice(split),
+      ]);
+      assert.deepEqual(events, [["token", "Hello 🌍 नमस्ते"], ["complete"]]);
+      assert.equal(cancelled, 1);
+      assert.equal(released, 1);
+    }
+  }
+});
+
+test("frontend: malformed, truncated and disconnected streams fail exactly once and retain partial output", async () => {
+  const stream = await webStreamFixture();
+  const partial = 'data: {"event":"token","data":"Partial"}\n\n';
+  for (const wire of [
+    partial,
+    partial + 'data: {"event":"token","data":"cut',
+    partial + "data: broken\n\n",
+  ]) {
+    const { events, released } = await stream([new TextEncoder().encode(wire)]);
+    assert.equal(events[0][1], "Partial");
+    assert.equal(events[1][0], "error");
+    assert.equal(events.length, 2);
+    assert.equal(released, 1);
+  }
+  const { events } = await stream([new TextEncoder().encode(partial)], true);
+  assert.equal(events.length, 2);
+  assert.equal(events[0][1], "Partial");
+  assert.match(events[1][1], /connection lost/);
+});
+
+test("frontend: split errors suppress later done/tokens and cancellation never reports success", async () => {
+  const stream = await webStreamFixture();
+  const wire = new TextEncoder().encode(
+    'data: {"event":"error","data":"Fixture provider unavailable"}\n\ndata: {"event":"done"}\n\ndata: {"event":"token","data":"ignored"}\n\n',
+  );
+  for (let split = 0; split <= wire.length; split++) {
+    const { events } = await stream([wire.slice(0, split), wire.slice(split)]);
+    assert.deepEqual(events, [["error", "Fixture provider unavailable"]]);
+  }
+  const partial = new TextEncoder().encode(
+    'data: {"event":"token","data":"Partial"}\n\n',
+  );
+  const { events } = await stream([partial, partial], false, (controller) =>
+    controller.abort(),
+  );
+  assert.deepEqual(events, [["token", "Partial"]]);
+});
+
+test("both clients: a final terminal event without a trailing newline is accepted, and EOF alone is an error", async () => {
+  const web = await webStreamFixture();
+  const mobile = await mobileStreamFixture();
+  for (const terminal of [false, true]) {
+    const wire =
+      'data: {"event":"token","data":"Partial"}\n\n' +
+      (terminal ? 'data: {"event":"done"}' : "");
+    const webResult = await web([new TextEncoder().encode(wire)]);
+    const { xhr, events } = await mobile();
+    xhr.responseText = wire;
+    xhr.onload();
+    for (const result of [webResult.events, events]) {
+      assert.equal(result[0][1], "Partial");
+      assert.equal(result[1][0], terminal ? "complete" : "error");
+      assert.equal(result.length, 2);
+      if (!terminal)
+        assert.match(result[1][1], /closed before the response finished/);
+    }
+  }
+});
+
+test("both clients: malformed event fields cannot be followed by a successful completion", async () => {
+  const web = await webStreamFixture();
+  const mobile = await mobileStreamFixture();
+  for (const invalid of [
+    null,
+    [],
+    { event: "token", data: {} },
+    { event: "citations", citations: {} },
+    { event: "media", media: {} },
+  ]) {
+    const wire = `data: ${JSON.stringify(invalid)}\n\ndata: {"event":"done"}\n\n`;
+    const webResult = await web([new TextEncoder().encode(wire)]);
+    const { xhr, events } = await mobile();
+    xhr.responseText = wire;
+    xhr.onprogress();
+    xhr.onload();
+    for (const result of [webResult.events, events]) {
+      assert.equal(result.length, 1);
+      assert.equal(result[0][0], "error");
+      assert.match(result[0][1], /invalid streaming response/i);
+    }
+  }
+});
+
 test("mobile: SSE survives every split without delaying complete events", async () => {
   const stream = await mobileStreamFixture();
   const first = 'data: {"event":"token","data":"Hello 🌍 नमस्ते"}\n\n';
@@ -299,7 +468,7 @@ test("mobile: SSE survives every split without delaying complete events", async 
     xhr.onprogress();
     assert.equal(events[0]?.[1], "Hello 🌍 नमस्ते");
     assert.equal(events.length, split === second.length ? 2 : 1);
-    xhr.responseText = first + second;
+    xhr.responseText = first + second + 'data: {"event":"done"}\n\n';
     xhr.onprogress();
     xhr.onprogress();
     xhr.onload();
@@ -359,7 +528,8 @@ test("mobile: SSE flushes final bytes at EOF and rejects malformed or truncated 
   const stream = await mobileStreamFixture();
   for (const suffix of ["", "\n", "\n\n", "\r\n\r\n"]) {
     const { xhr, events } = await stream();
-    xhr.responseText = 'data: {"token":"final"}' + suffix;
+    xhr.responseText =
+      'data: {"token":"final"}\n\ndata: {"event":"done"}' + suffix;
     xhr.onload();
     xhr.onload();
     assert.deepEqual(events, [["token", "final"], ["complete"]]);
@@ -635,7 +805,10 @@ for (const platform of ["frontend", "mobile"]) {
     assert.deepEqual(stopped, []);
     fixture.callbacks.handleStopGeneration();
     assert.deepEqual(stopped, ["chat-b"]);
-    assert.equal(fixture.state.messages.at(-1).content, "B partial");
+    assert.equal(
+      fixture.state.messages.at(-1).content,
+      "B partial\n\nResponse stopped.",
+    );
     await fixture.callbacks.selectSession("fixture-session");
     assert.equal(
       fixture.state.streamingMessage.content,
@@ -650,7 +823,10 @@ for (const platform of ["frontend", "mobile"]) {
     );
     assert.equal(fixture.state.isSending, false);
     await fixture.callbacks.selectSession("chat-b");
-    assert.equal(fixture.state.messages.at(-1).content, "B partial");
+    assert.equal(
+      fixture.state.messages.at(-1).content,
+      "B partial\n\nResponse stopped.",
+    );
   });
 
   test(`${platform}: late image and document uploads stay in their original conversation`, async () => {

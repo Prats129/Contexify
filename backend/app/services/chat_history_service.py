@@ -248,6 +248,7 @@ class ChatHistoryService:
         citations: Optional[List[Dict[str, Any]]] = None,
         attachments: Optional[List[Any]] = None,
         reply_to: Optional[Any] = None,
+        expected_history_version: Optional[int] = None,
     ) -> MessageResponse:
         message_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
@@ -295,6 +296,13 @@ class ChatHistoryService:
 
         with get_db_connection(write=True) as conn:
             db_session = active_session(conn, session_id)
+            if (
+                expected_history_version is not None
+                and db_session["history_version"] != expected_history_version
+            ):
+                raise HTTPException(
+                    409, "The chat was cleared while the response was streaming."
+                )
             if role == "user":
                 for attachment in attachments_obj or []:
                     if attachment.file_type != "document":

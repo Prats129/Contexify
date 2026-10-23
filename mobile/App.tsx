@@ -1279,7 +1279,9 @@ export default function App() {
           id: partial.id || `stopped-${Date.now()}`,
           session_id: conversation.sessionId || "",
           role: "assistant",
-          content: partial.content,
+          content: [partial.content, "Response stopped."]
+            .filter(Boolean)
+            .join("\n\n"),
           citations: partial.citations,
           attachments: partial.attachments,
           created_at: partial.created_at || new Date().toISOString(),

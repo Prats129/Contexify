@@ -5,6 +5,10 @@ class ImageGenerationError(RuntimeError):
     """An image-generation failure with a message safe to show to the user."""
 
 
+class TextGenerationError(RuntimeError):
+    """A text-generation failure with a message safe to show to the user."""
+
+
 class EmbeddingDimensionError(ValueError):
     """Embedding dimensions are incompatible with the document index."""
 
