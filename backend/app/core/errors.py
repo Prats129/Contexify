@@ -32,3 +32,12 @@ class EmbeddingCompatibilityError(EmbeddingError):
             "One or more selected documents need to be uploaded again in a new chat before they "
             "can be searched safely. Their original files have been preserved."
         )
+
+
+class WebSearchError(RuntimeError):
+    """Search could not obtain usable evidence; safe for client display."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Web search is temporarily unavailable. I could not verify current information. Please try again later."
+        )

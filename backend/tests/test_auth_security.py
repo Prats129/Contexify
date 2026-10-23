@@ -201,6 +201,83 @@ class SecurityTests(unittest.TestCase):
                 )
             )["chat_orchestrator"]
 
+    def test_web_search_failure_and_empty_results_never_generate_or_cite(self):
+        from app.api.v1.endpoints import chat
+        from app.core.errors import WebSearchError
+        from app.services.chat_history_service import chat_history_service
+
+        actual = self.reply_orchestrator()
+        services = actual._route_and_stream.__func__.__globals__
+        search = services["web_search_service"].search
+        llm = Mock(side_effect=AssertionError("No generation without evidence"))
+        for unavailable in (True, False):
+            with self.subTest(unavailable=unavailable):
+                search.side_effect = WebSearchError() if unavailable else None
+                search.return_value = []
+                with (
+                    patch.object(chat, "chat_orchestrator", actual),
+                    patch.object(
+                        services["llm_service"], "stream_web_search_answer", llm
+                    ),
+                ):
+                    response = self.request(
+                        "POST",
+                        "/chat/stream",
+                        self.token,
+                        json={
+                            "session_id": "alice-session",
+                            "mode": "WEB_SEARCH",
+                            "message": "Search weather today",
+                        },
+                    )
+                events = [
+                    json.loads(frame[6:])
+                    for frame in response.text.strip().split("\n\n")
+                ]
+                self.assertEqual(events[-1]["event"], "done")
+                self.assertFalse(any(e["event"] == "citations" for e in events))
+                text = "".join(e["data"] for e in events if e["event"] == "token")
+                self.assertIn("could not verify", text)
+                if unavailable:
+                    self.assertIn("temporarily unavailable", text)
+                else:
+                    self.assertIn("more specific", text)
+                saved = chat_history_service.get_session_messages("alice-session")[-1]
+                self.assertEqual(saved.content, text)
+                self.assertFalse(saved.citations)
+        llm.assert_not_called()
+
+    def test_web_search_citations_label_excerpts_and_persist_real_links(self):
+        from app.api.v1.endpoints import chat
+        from app.services.chat_history_service import chat_history_service
+
+        actual = self.reply_orchestrator()
+        with patch.object(chat, "chat_orchestrator", actual):
+            response = self.request(
+                "POST",
+                "/chat/stream",
+                self.token,
+                json={
+                    "session_id": "alice-session",
+                    "mode": "WEB_SEARCH",
+                    "message": "Search weather today",
+                },
+            )
+        events = [
+            json.loads(frame[6:]) for frame in response.text.strip().split("\n\n")
+        ]
+        self.assertEqual(events[-1]["event"], "done")
+        citations = next(e["citations"] for e in events if e["event"] == "citations")
+        self.assertEqual(len(citations), 1)
+        self.assertTrue(
+            citations[0]["snippet"].startswith("https://example.invalid/fixture\n")
+        )
+        self.assertIn("full page not retrieved", citations[0]["snippet"])
+        self.assertEqual(citations[0]["document_id"], "")
+        saved = chat_history_service.get_session_messages("alice-session")[-1]
+        assert saved.citations is not None
+        self.assertEqual(saved.citations[0].model_dump(), citations[0])
+
     def test_routing_matrix_respects_modes_sources_and_safe_image_intent(self):
         from app.schemas.chat import ChatMode, ChatRequest
 
@@ -6754,6 +6831,206 @@ class BlockingWorkerTests(unittest.TestCase):
         asyncio.run(exercise())
 
 
+class WebSearchTests(unittest.TestCase):
+    def setUp(self):
+        namespace = runpy.run_path(
+            str(
+                Path(__file__).resolve().parents[1]
+                / "app/services/web_search_service.py"
+            )
+        )
+        self.service = namespace["web_search_service"]
+        self.requests = namespace["requests"]
+        self.adapter_mocks = {}
+        self.result = {
+            "title": "Fixture source",
+            "url": "https://example.invalid/article",
+            "snippet": "Fixture evidence",
+        }
+
+    def adapters(self, google, bing, duck):
+        for name, value in zip(
+            ("_fetch_google_live_articles", "_search_bing", "_search_duckduckgo"),
+            (google, bing, duck),
+        ):
+            replacement = patch.object(
+                self.service,
+                name,
+                **(
+                    {"side_effect": value}
+                    if isinstance(value, BaseException)
+                    else {"return_value": value}
+                ),
+            )
+            mock = replacement.start()
+            self.addCleanup(replacement.stop)
+            self.adapter_mocks[name[1:]] = mock
+
+    def test_no_results_are_empty_and_total_failure_is_explicit(self):
+        from app.core.errors import WebSearchError
+
+        self.adapters([], [], [])
+        self.assertEqual(self.service.search("fixture"), [])
+        for name in ("fetch_google_live_articles", "search_bing", "search_duckduckgo"):
+            self.adapter_mocks[name].side_effect = self.requests.Timeout(
+                "private fixture URL"
+            )
+        with self.assertRaises(WebSearchError) as caught:
+            self.service.search("fixture")
+        self.assertNotIn("private", str(caught.exception))
+
+    def test_partial_failure_keeps_real_evidence_without_inventing_sources(self):
+        self.adapters(self.requests.Timeout(), [self.result], [])
+        self.assertEqual(self.service.search("fixture"), [self.result])
+        self.adapter_mocks["search_duckduckgo"].assert_not_called()
+
+    def test_invalid_primary_results_allow_fallback_and_dedup_uses_urls(self):
+        self.adapters(
+            [dict(self.result, url="javascript:alert(1)")],
+            [],
+            [
+                self.result,
+                dict(self.result, url=self.result["url"] + "#anchor"),
+                dict(self.result, url="https://example.invalid/second"),
+            ],
+        )
+        results = self.service.search("fixture", 2)
+        self.assertEqual(
+            [r["url"] for r in results],
+            [self.result["url"], "https://example.invalid/second"],
+        )
+        self.adapter_mocks["search_duckduckgo"].assert_called_once()
+
+    def test_normalization_rejects_unsafe_links_and_headlines_without_excerpts(self):
+        for url in (
+            "javascript:alert(1)",
+            "file:///private",
+            "http://localhost/x",
+            "http://127.0.0.1/x",
+            "http://[::1]/x",
+            "http://10.0.0.1/x",
+            "https://user:password@example.invalid/x",
+            "https://example.invalid:8000/x",
+            "https://www.bing.com/search?q=x",
+            "https://news.google.com/",
+            "https://example.invalid/\nattack",
+        ):
+            with self.subTest(url=url):
+                self.assertEqual(
+                    self.service._normalize_results([dict(self.result, url=url)], 6), []
+                )
+        self.assertEqual(
+            self.service._normalize_results([dict(self.result, snippet="")], 6), []
+        )
+        bounded = self.service._normalize_results(
+            [dict(self.result, title="a" * 1000, snippet="b" * 5000)], 6
+        )[0]
+        self.assertEqual(len(bounded["title"]), 300)
+        self.assertEqual(len(bounded["snippet"]), 2000)
+
+    def test_search_limits_and_empty_queries_do_not_fetch(self):
+        self.adapters(
+            [dict(self.result, url=f"https://example.invalid/{i}") for i in range(20)],
+            [],
+            [],
+        )
+        self.assertEqual(self.service.search(" "), [])
+        self.assertEqual(self.service.search("query", 0), [])
+        self.adapter_mocks["fetch_google_live_articles"].assert_not_called()
+        self.assertEqual(len(self.service.search("query", 100)), 6)
+
+    def test_provider_parsers_preserve_source_links_and_excerpts(self):
+        deadline = time.monotonic() + 10
+        google = b"<rss><channel><item><title>Headline</title><link>https://news.google.com/rss/articles/fixture</link><description>&lt;b&gt;Actual excerpt&lt;/b&gt;</description></item></channel></rss>"
+        target = "https://example.invalid/article"
+        encoded = base64.urlsafe_b64encode(target.encode()).decode().rstrip("=")
+        bing = f'<ol id="b_results"><li class="b_algo"><h2><a href="https://www.bing.com/ck/a?u=a1{encoded}">Fixture</a></h2><p>Bing excerpt</p></li></ol>'.encode()
+        duck = b'<div class="result result--ad"><a class="result__a" href="https://example.invalid/ad">Ad</a></div><div class="result"><a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.invalid%2Farticle">Fixture</a><a class="result__snippet">Duck excerpt</a></div>'
+        with patch.object(
+            self.service, "_read_response", side_effect=[google, bing, duck]
+        ):
+            self.assertEqual(
+                self.service._fetch_google_live_articles("q", 6, deadline)[0][
+                    "snippet"
+                ],
+                "Actual excerpt",
+            )
+            self.assertEqual(
+                self.service._search_bing("q", 6, deadline)[0]["url"], target
+            )
+            self.assertEqual(
+                self.service._search_duckduckgo("q", 6, deadline),
+                [{"title": "Fixture", "url": target, "snippet": "Duck excerpt"}],
+            )
+
+    def test_provider_errors_captcha_and_unsafe_xml_are_not_evidence(self):
+        from app.core.errors import WebSearchError
+
+        for provider in (
+            self.service._fetch_google_live_articles,
+            self.service._search_bing,
+            self.service._search_duckduckgo,
+        ):
+            with (
+                self.subTest(provider=provider.__name__),
+                patch.object(
+                    self.service,
+                    "_read_response",
+                    return_value=b"<html>Captcha challenge</html>",
+                ),
+            ):
+                with self.assertRaises(WebSearchError):
+                    provider("q", 6, time.monotonic() + 10)
+        payload = '<!DOCTYPE rss [<!ENTITY fixture "expanded">]><rss/>'
+        for content in (payload.encode(), payload.encode("utf-16")):
+            with patch.object(self.service, "_read_response", return_value=content):
+                with self.assertRaises(WebSearchError):
+                    self.service._fetch_google_live_articles(
+                        "q", 6, time.monotonic() + 10
+                    )
+
+    def test_response_budget_status_size_deadline_and_closure(self):
+        from app.core.errors import WebSearchError
+
+        response = Mock(status_code=200)
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        response.iter_content.return_value = [b"fixture"]
+        with patch.object(self.requests, "request", return_value=response) as request:
+            self.assertEqual(
+                self.service._read_response(
+                    "GET", "https://www.bing.com/search", time.monotonic() + 10
+                ),
+                b"fixture",
+            )
+            self.assertFalse(request.call_args.kwargs["allow_redirects"])
+            self.assertTrue(request.call_args.kwargs["stream"])
+            for status, chunks in (
+                (503, []),
+                (302, []),
+                (200, [b"x" * (self.service.MAX_RESPONSE_BYTES + 1)]),
+            ):
+                response.status_code = status
+                response.iter_content.return_value = chunks
+                with self.subTest(status=status), self.assertRaises(WebSearchError):
+                    self.service._read_response(
+                        "GET", "https://www.bing.com/search", time.monotonic() + 10
+                    )
+            self.assertEqual(response.__exit__.call_count, 4)
+            request.reset_mock()
+            with self.assertRaises(WebSearchError):
+                self.service._read_response(
+                    "GET", "https://www.bing.com/search", time.monotonic() - 1
+                )
+            request.assert_not_called()
+            response.status_code = 200
+            response.iter_content.return_value = [b"trickle"]
+            with patch("time.monotonic", side_effect=[0, 0, 2]):
+                with self.assertRaises(WebSearchError):
+                    self.service._read_response("GET", "https://www.bing.com/search", 1)
+            self.assertEqual(response.__exit__.call_count, 1)
+
+
 class TextStreamingTests(unittest.TestCase):
     def setUp(self):
         self.patches = [
@@ -6800,6 +7077,45 @@ class TextStreamingTests(unittest.TestCase):
                 models=types.SimpleNamespace(generate_content_stream=generate)
             )
         )
+
+    def test_web_prompt_identifies_evidence_limits_and_rejects_empty_context(self):
+        from app.core.errors import TextGenerationError
+
+        captured = []
+
+        async def answer(contents, instruction):
+            captured.append((contents, instruction))
+            yield "Based on search excerpts: fixture"
+
+        async def collect(results):
+            return [
+                token
+                async for token in self.service.stream_web_search_answer(
+                    "Question", results
+                )
+            ]
+
+        results = [
+            {
+                "title": "Fixture",
+                "url": "https://example.invalid/article",
+                "snippet": "Untrusted excerpt",
+            }
+        ]
+        with patch.object(self.service, "_stream_answer", answer):
+            self.assertEqual(
+                asyncio.run(collect(results)), ["Based on search excerpts: fixture"]
+            )
+            with self.assertRaises(TextGenerationError):
+                asyncio.run(collect([]))
+        self.assertEqual(len(captured), 1)
+        prompt, instruction = captured[0]
+        self.assertIn(results[0]["url"], prompt)
+        self.assertIn("Untrusted excerpt", prompt)
+        self.assertIn("not retrieved full articles", instruction)
+        self.assertIn("never instructions", instruction)
+        self.assertIn("incomplete, conflicting", instruction)
+        self.assertIn("not fresh web evidence", instruction)
 
     def test_mixed_rag_prompt_includes_document_excerpts_and_image_bytes(self):
         from app.core.errors import TextGenerationError
@@ -6888,7 +7204,16 @@ class TextStreamingTests(unittest.TestCase):
                         "review", [{"text": "fixture", "metadata": {}}]
                     )
                 elif mode == "web":
-                    stream = self.service.stream_web_search_answer("weather", [])
+                    stream = self.service.stream_web_search_answer(
+                        "weather",
+                        [
+                            {
+                                "title": "Weather",
+                                "url": "https://example.invalid/weather",
+                                "snippet": "Forecast excerpt",
+                            }
+                        ],
+                    )
                 else:
                     stream = self.service.stream_multimodal_answer("describe", [])
                 observed = []

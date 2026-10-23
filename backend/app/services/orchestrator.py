@@ -8,7 +8,12 @@ from typing import Any, AsyncGenerator, Dict, List, Literal, Optional
 from anyio import CancelScope
 
 from app.core.concurrency import run_blocking
-from app.core.errors import EmbeddingError, ImageGenerationError, TextGenerationError
+from app.core.errors import (
+    EmbeddingError,
+    ImageGenerationError,
+    TextGenerationError,
+    WebSearchError,
+)
 from app.core.logging import logger
 from app.repositories.session_store import session_store_repo
 from app.schemas.chat import (
@@ -872,7 +877,21 @@ class ChatOrchestrator:
             return
 
         # 2. Informational Search Query: Execute Search & Emit Sources
-        results = await run_blocking(web_search_service.search, search_query or query)
+        try:
+            results = await run_blocking(
+                web_search_service.search, search_query or query
+            )
+        except WebSearchError as error:
+            async for frame in self._emit_simple_message(str(error), session_id):
+                yield frame
+            return
+        if not results:
+            async for frame in self._emit_simple_message(
+                "I could not find usable web search excerpts for this question. Try a more specific search; I could not verify an answer.",
+                session_id,
+            ):
+                yield frame
+            return
 
         if results:
             citations = [
@@ -881,7 +900,7 @@ class ChatOrchestrator:
                     filename=r.get("title", "Web Source"),
                     page_number=None,
                     chunk_index=idx,
-                    snippet=f"{r.get('url', '')}\n{r.get('snippet', '')[:160]}",
+                    snippet=f"{r.get('url', '')}\nSearch excerpt (full page not retrieved): {r.get('snippet', '')[:160]}",
                     similarity_score=1.0,
                 )
                 for idx, r in enumerate(results)
