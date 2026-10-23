@@ -143,6 +143,10 @@ class SessionStoreRepository:
                     "id": m.id,
                     "role": m.role,
                     "content": m.content,
+                    "citations": [
+                        c.model_dump() if hasattr(c, "model_dump") else c
+                        for c in (m.citations or [])
+                    ],
                     "attachments": [
                         a.model_dump() if hasattr(a, "model_dump") else a
                         for a in (m.attachments or [])
@@ -161,6 +165,7 @@ class SessionStoreRepository:
                 "id": m.get("id", ""),
                 "role": m.get("role", "user"),
                 "content": m.get("content", ""),
+                "citations": m.get("citations", []),
                 "attachments": m.get("attachments", []),
                 "reply_to": m.get("reply_to"),
             }
@@ -175,6 +180,7 @@ class SessionStoreRepository:
         attachments: Optional[List[Any]] = None,
         reply_to: Optional[Any] = None,
         message_id: Optional[str] = None,
+        citations: Optional[List[Any]] = None,
     ):
         """Record an in-memory message for active/guest sessions."""
         session = self.get_or_create_session(session_id)
@@ -183,6 +189,10 @@ class SessionStoreRepository:
             "role": role,
             "content": content,
         }
+        if citations:
+            msg_dict["citations"] = [
+                c.model_dump() if hasattr(c, "model_dump") else c for c in citations
+            ]
         if attachments:
             msg_dict["attachments"] = [
                 a.model_dump() if hasattr(a, "model_dump") else a for a in attachments

@@ -201,6 +201,492 @@ class SecurityTests(unittest.TestCase):
                 )
             )["chat_orchestrator"]
 
+    def test_routing_matrix_respects_modes_sources_and_safe_image_intent(self):
+        from app.schemas.chat import ChatMode, ChatRequest
+
+        actual = self.reply_orchestrator()
+        doc = [{"id": "document", "file_type": "document"}]
+        image = [{"id": "image", "file_type": "image"}]
+        doc_history = [
+            {
+                "id": "doc-answer",
+                "role": "assistant",
+                "content": "Document answer",
+                "citations": [{"document_id": "document"}],
+            }
+        ]
+        web_history = [
+            {
+                "id": "web-answer",
+                "role": "assistant",
+                "content": "Web answer",
+                "citations": [{"document_id": ""}],
+            }
+        ]
+        image_history = [
+            {
+                "id": "image-message",
+                "role": "user",
+                "content": "Describe this image",
+                "attachments": image,
+            },
+            {"role": "assistant", "content": "A tree"},
+        ]
+        general_history = image_history + [
+            {"role": "user", "content": "Create a Python function"},
+            {"role": "assistant", "content": "Here is code"},
+        ]
+        cases = [
+            ("DOCUMENT_RAG", "Summarize the document", [], [], "DOCUMENT_RAG"),
+            ("DOCUMENT_RAG", "Why?", [], doc_history, "DOCUMENT_RAG"),
+            ("DOCUMENT_RAG", "Generate an image of a tree", [], [], "DOCUMENT_RAG"),
+            ("DOCUMENT_RAG", "Latest weather today", [], [], "DOCUMENT_RAG"),
+            ("DOCUMENT_RAG", "Hi", [], [], "AUTO"),
+            ("DOCUMENT_RAG", "Hi, summarize the report", [], [], "DOCUMENT_RAG"),
+            ("WEB_SEARCH", "Summarize this document", doc, [], "WEB_SEARCH"),
+            ("WEB_SEARCH", "Create a Python function", [], [], "WEB_SEARCH"),
+            ("WEB_SEARCH", "Thanks", [], web_history, "AUTO"),
+            ("IMAGE_GENERATION", "A mountain at sunrise", [], [], "IMAGE_GENERATION"),
+            ("IMAGE_GENERATION", "Hello", [], [], "AUTO"),
+            ("IMAGE_GENERATION", "Help me", [], [], "AUTO"),
+            ("IMAGE_GENERATION", "Do not generate an image", [], [], "AUTO"),
+            ("IMAGE_GENERATION", "Explain more", [], image_history, "MULTIMODAL"),
+            ("MULTIMODAL", "Summarize", doc, [], "DOCUMENT_RAG"),
+            ("MULTIMODAL", "Compare both", doc + image, [], "DOCUMENT_RAG"),
+            ("AUTO", "Hi", [], image_history, "AUTO"),
+            ("AUTO", "Hi, summarize this file", doc, [], "DOCUMENT_RAG"),
+            ("AUTO", "Summarize", [], [], "DOCUMENT_RAG"),
+            ("AUTO", "Why?", [], doc_history, "DOCUMENT_RAG"),
+            ("AUTO", "What is this?", [], doc_history, "DOCUMENT_RAG"),
+            ("AUTO", "Tell me more", [], web_history, "WEB_SEARCH"),
+            ("AUTO", "Tell me more", [], image_history, "MULTIMODAL"),
+            ("AUTO", "Tell me more", [], general_history, "AUTO"),
+            ("AUTO", "What is this?", [], general_history, "AUTO"),
+            ("AUTO", "Make it brighter", [], image_history, "IMAGE_GENERATION"),
+            ("AUTO", "Remove the background", [], image_history, "IMAGE_GENERATION"),
+            ("AUTO", "Describe the earlier image", [], general_history, "MULTIMODAL"),
+            ("AUTO", "Can you create a Python function?", [], image_history, "AUTO"),
+            ("AUTO", "Create a function to read the file", [], [], "AUTO"),
+            (
+                "AUTO",
+                "Create a function based on this document",
+                [],
+                [],
+                "DOCUMENT_RAG",
+            ),
+            ("AUTO", "Draw a graph using Python", [], [], "AUTO"),
+            ("AUTO", "Create an SVG image of a cat", [], [], "AUTO"),
+            ("AUTO", "Latest news today", [], doc_history, "WEB_SEARCH"),
+            ("AUTO", "Latest news according to this document", [], [], "DOCUMENT_RAG"),
+            ("AUTO", "Latest news", doc, [], "DOCUMENT_RAG"),
+            ("AUTO", "Read this image", image, [], "MULTIMODAL"),
+            (
+                "AUTO",
+                "Compare the image and this file",
+                doc + image,
+                [],
+                "DOCUMENT_RAG",
+            ),
+            (
+                "AUTO",
+                "Generate an image of a mountain",
+                [],
+                doc_history,
+                "IMAGE_GENERATION",
+            ),
+        ]
+        for mode, query, attachments, history, expected in cases:
+            with self.subTest(mode=mode, query=query, expected=expected):
+                request = ChatRequest(
+                    session_id="alice-session",
+                    mode=mode,
+                    message=query,
+                    attachments=attachments,
+                )
+                route, scope = actual._choose_route(
+                    request, ChatMode(mode), ["document"], history
+                )
+                self.assertEqual(route.value, expected)
+                if (
+                    attachments
+                    and any(a["file_type"] == "document" for a in attachments)
+                    and expected == "DOCUMENT_RAG"
+                ):
+                    self.assertEqual(scope, ["document"])
+        for query in (
+            "Generate an image of a cat",
+            "Could you please make me a photo of a lake",
+            "Draw a tree",
+            "Sketch a house",
+            "/image a cat",
+            "/imagine a tree",
+            "image: a city",
+            "Edit this picture",
+            "Turn this picture into watercolor",
+            "Design an infographic",
+            "Create 3 pictures",
+            "Create an image of a Python function",
+        ):
+            with self.subTest(image_query=query):
+                self.assertTrue(actual._is_image_gen_intent(query))
+        for query in (
+            "Can you create a Python function?",
+            "Could you create a SQL query?",
+            "Draw a conclusion",
+            "Draw parallels between these ideas",
+            "Draw up a plan",
+            "Sketch out a plan",
+            "Illustrate an algorithm",
+            "Generate a CSV file",
+            "Explain how to generate an image",
+            "Do not generate an image",
+            "Don't draw a cat",
+            "/imagesomething",
+            "Generate an SVG image",
+            "Create an image using Python",
+            "Create an image classifier",
+            "Tell a story about an artist who draws pictures",
+        ):
+            with self.subTest(non_image_query=query):
+                self.assertFalse(actual._is_image_gen_intent(query))
+        for query in (
+            "stockpile inventory",
+            "research methods",
+            "What does this score function do?",
+            "What happened in 2025?",
+        ):
+            self.assertFalse(actual._needs_web_search(query), query)
+
+    def test_routing_followups_use_saved_citations_and_explicit_reply_scope(self):
+        from app.api.v1.endpoints import chat
+
+        actual = self.reply_orchestrator()
+        services = actual._route_and_stream.__func__.__globals__
+        with patch.object(chat, "chat_orchestrator", actual):
+            first = self.request(
+                "POST",
+                "/chat/stream",
+                self.token,
+                json={
+                    "session_id": "alice-session",
+                    "mode": "AUTO",
+                    "message": "Summarize quantum entanglement from this file",
+                    "attachments": [{"id": "document", "file_type": "document"}],
+                },
+            )
+            self.assertIn('"event": "citations"', first.text)
+            history = self.request(
+                "GET", "/session/alice-session/history", self.token
+            ).json()["messages"]
+            document_answer = history[-1]["id"]
+            for query in ("Why?", "Latest weather forecast", "Tell me more"):
+                response = self.request(
+                    "POST",
+                    "/chat/stream",
+                    self.token,
+                    json={
+                        "session_id": "alice-session",
+                        "mode": "AUTO",
+                        "message": query,
+                    },
+                )
+                events = [
+                    json.loads(frame[6:])
+                    for frame in response.text.strip().split("\n\n")
+                ]
+                self.assertEqual(events[-1]["event"], "done", response.text)
+            self.assertIn(
+                "Latest weather forecast",
+                services["web_search_service"].search.call_args.args[0],
+            )
+            self.assertIn(
+                "Summarize quantum entanglement",
+                services["rag_service"].retrieve_context_for_query.call_args.args[0],
+            )
+            response = self.request(
+                "POST",
+                "/chat/stream",
+                self.token,
+                json={
+                    "session_id": "alice-session",
+                    "mode": "AUTO",
+                    "message": "Explain more",
+                    "reply_to": {
+                        "id": document_answer,
+                        "role": "assistant",
+                        "content": "Document answer",
+                    },
+                },
+            )
+            self.assertIn('"event": "citations"', response.text)
+            self.assertEqual(
+                services["rag_service"].retrieve_context_for_query.call_args.kwargs[
+                    "document_ids"
+                ],
+                ["document"],
+            )
+            self.assertEqual(
+                len(
+                    self.request(
+                        "GET", "/session/alice-session/history", self.token
+                    ).json()["messages"]
+                ),
+                10,
+            )
+
+    def test_routing_mixed_attachments_preserves_document_scope_and_images(self):
+        from app.api.v1.endpoints import chat
+
+        actual = self.reply_orchestrator()
+        services = actual._route_and_stream.__func__.__globals__
+        received = []
+
+        async def grounded(query, context_chunks, chat_history=None, **kwargs):
+            received.append((query, context_chunks, kwargs.get("attachments")))
+            yield "Grounded comparison"
+
+        with (
+            patch.object(chat, "chat_orchestrator", actual),
+            patch.object(services["llm_service"], "stream_rag_answer", grounded),
+        ):
+            response = self.request(
+                "POST",
+                "/chat/stream",
+                self.token,
+                json={
+                    "session_id": "alice-session",
+                    "message": "Compare the attached image and document",
+                    "attachments": [
+                        {"id": "document", "file_type": "document"},
+                        {"id": "image", "file_type": "image"},
+                    ],
+                },
+            )
+            followup = self.request(
+                "POST",
+                "/chat/stream",
+                self.token,
+                json={
+                    "session_id": "alice-session",
+                    "message": "Explain more",
+                    "mode": "AUTO",
+                },
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(len(received), 2)
+        self.assertIn('"event": "citations"', followup.text)
+        self.assertEqual([a.id for a in received[1][2]], ["image"])
+        self.assertEqual([a.id for a in received[0][2]], ["image"])
+        self.assertEqual(received[0][1][0]["metadata"]["document_id"], "document")
+        self.assertIn('"event": "citations"', response.text)
+        history = self.request(
+            "GET", "/session/alice-session/history", self.token
+        ).json()["messages"]
+        self.assertEqual(
+            {a["id"] for a in history[0]["attachments"]}, {"image", "document"}
+        )
+
+    def test_routing_runtime_prevents_unwanted_image_and_stale_vision_calls(self):
+        from app.api.v1.endpoints import chat
+        from app.schemas.chat import MediaAttachment
+        from app.services.chat_history_service import chat_history_service
+
+        actual = self.reply_orchestrator()
+        services = actual._route_and_stream.__func__.__globals__
+        chat_history_service.save_message(
+            "alice-session",
+            "user",
+            "Describe this image",
+            attachments=[MediaAttachment(id="image", file_type="image")],
+        )
+        chat_history_service.save_message("alice-session", "assistant", "A tree")
+        forbidden = Mock(side_effect=AssertionError("Unrequested provider call"))
+        with (
+            patch.object(chat, "chat_orchestrator", actual),
+            patch.object(actual, "_execute_image_generation", forbidden),
+            patch.object(actual, "_execute_multimodal", forbidden),
+            patch.object(actual, "_execute_web_search", forbidden),
+        ):
+            for query in (
+                "Hello",
+                "Can you create a Python function?",
+                "Create a function to read the file",
+                "Tell me more",
+            ):
+                response = self.request(
+                    "POST",
+                    "/chat/stream",
+                    self.token,
+                    json={
+                        "session_id": "alice-session",
+                        "message": query,
+                        "mode": "AUTO",
+                    },
+                )
+                events = [
+                    json.loads(frame[6:])
+                    for frame in response.text.strip().split("\n\n")
+                ]
+                self.assertEqual(events[-1]["event"], "done", response.text)
+                self.assertFalse(any(event["event"] == "citations" for event in events))
+            forbidden.assert_not_called()
+            services["rag_service"].retrieve_context_for_query.assert_not_called()
+            for query in (
+                "Summarize key points covered in the document",
+                "Why?",
+                "Hi, summarize the report",
+            ):
+                response = self.request(
+                    "POST",
+                    "/chat/stream",
+                    self.token,
+                    json={
+                        "session_id": "alice-session",
+                        "message": query,
+                        "mode": "DOCUMENT_RAG",
+                    },
+                )
+                events = [
+                    json.loads(frame[6:])
+                    for frame in response.text.strip().split("\n\n")
+                ]
+                self.assertEqual(events[-1]["event"], "done", response.text)
+                self.assertTrue(any(event["event"] == "citations" for event in events))
+            forbidden.assert_not_called()
+
+    def test_routing_image_followups_use_authorized_focus_without_resurrecting_old_images(
+        self,
+    ):
+        from app.api.v1.endpoints import chat
+        from app.schemas.chat import MediaAttachment
+        from app.services.chat_history_service import chat_history_service
+        from app.services.media_service import media_service
+
+        actual = self.reply_orchestrator()
+        services = actual._route_and_stream.__func__.__globals__
+        edit = AsyncMock(
+            return_value=MediaAttachment(
+                id="image", url="media/uploads/fixture.png", file_type="image"
+            )
+        )
+        vision = Mock(wraps=actual._execute_multimodal)
+        with (
+            patch.object(chat, "chat_orchestrator", actual),
+            patch.object(actual, "_execute_multimodal", vision),
+            patch.object(
+                services["image_gen_service"], "generate_from_reference", edit
+            ),
+        ):
+
+            def send(message, attachments=None):
+                response = self.request(
+                    "POST",
+                    "/chat/stream",
+                    self.token,
+                    json={
+                        "session_id": "alice-session",
+                        "mode": "AUTO",
+                        "message": message,
+                        "attachments": attachments or [],
+                    },
+                )
+                events = [
+                    json.loads(frame[6:])
+                    for frame in response.text.strip().split("\n\n")
+                ]
+                self.assertEqual(events[-1]["event"], "done", response.text)
+                return events
+
+            send("Describe this image", [{"id": "image", "file_type": "image"}])
+            send("Make it brighter")
+            edit.assert_awaited_once()
+            self.assertEqual(
+                edit.call_args.kwargs["reference_image_path"],
+                "media/uploads/fixture.png",
+            )
+            self.assertEqual(vision.call_count, 1)
+            send("Create a Python function")
+            send("Explain more")
+            self.assertEqual(vision.call_count, 1)
+            self.assertEqual(edit.await_count, 1)
+            send("Describe the earlier image")
+            self.assertEqual(vision.call_count, 2)
+            generated = media_service.save_generated_image(
+                self.image_fixture(), "fixture", session_id="alice-session"
+            )
+            chat_history_service.save_message(
+                "alice-session", "assistant", "New image", attachments=[generated]
+            )
+            with database.get_db_connection() as conn:
+                conn.execute("DELETE FROM media_assets WHERE id=?", (generated.id,))
+            events = send("Tell me more")
+            self.assertTrue(
+                any("attach an image" in event.get("data", "") for event in events)
+            )
+            self.assertEqual(vision.call_count, 2)
+            self.assertEqual(edit.await_count, 1)
+
+    def test_routing_guest_memory_keeps_citations_for_followups(self):
+        from app.repositories.session_store import session_store_repo
+        from app.schemas.chat import ChatMode, ChatRequest
+
+        guest = security.create_guest()
+        principal = security.resolve_principal(security.digest(guest["access_token"]))
+        security.ensure_session("routing-guest", principal)
+        actual = self.reply_orchestrator()
+        actual._persist_message("routing-guest", "user", "Explain quantum mechanics")
+        actual._persist_message(
+            "routing-guest",
+            "assistant",
+            "Document evidence",
+            citations=[
+                {
+                    "document_id": "guest-document",
+                    "filename": "guest.txt",
+                    "chunk_index": 0,
+                    "snippet": "Evidence",
+                    "similarity_score": 1.0,
+                }
+            ],
+        )
+        history = session_store_repo.get_history_messages("routing-guest")
+        self.assertEqual(history[-1]["citations"][0]["document_id"], "guest-document")
+        route, scope = actual._choose_route(
+            ChatRequest(message="Why?"), ChatMode.AUTO, ["guest-document"], history
+        )
+        self.assertEqual(route, ChatMode.DOCUMENT_RAG)
+        self.assertEqual(scope, ["guest-document"])
+
+    def test_routing_deleted_document_followup_does_not_leak_into_web_search(self):
+        from app.api.v1.endpoints import chat
+        from app.services.chat_history_service import chat_history_service
+
+        actual = self.reply_orchestrator()
+        services = actual._route_and_stream.__func__.__globals__
+        with patch.object(chat, "chat_orchestrator", actual):
+            response = self.request(
+                "POST",
+                "/chat/stream",
+                self.token,
+                json={
+                    "session_id": "alice-session",
+                    "message": "Summarize this document",
+                    "attachments": [{"id": "document", "file_type": "document"}],
+                },
+            )
+            self.assertIn('"event": "citations"', response.text)
+            chat_history_service.delete_document("document")
+            services["rag_service"].retrieve_context_for_query.reset_mock()
+            response = self.request(
+                "POST",
+                "/chat/stream",
+                self.token,
+                json={"session_id": "alice-session", "message": "Why?", "mode": "AUTO"},
+            )
+        self.assertIn("no longer available", response.text)
+        services["web_search_service"].search.assert_not_called()
+        services["rag_service"].retrieve_context_for_query.assert_not_called()
+
     def test_slow_search_retrieval_and_auth_leave_other_requests_responsive(self):
         import threading
 
@@ -6314,6 +6800,52 @@ class TextStreamingTests(unittest.TestCase):
                 models=types.SimpleNamespace(generate_content_stream=generate)
             )
         )
+
+    def test_mixed_rag_prompt_includes_document_excerpts_and_image_bytes(self):
+        from app.core.errors import TextGenerationError
+        from app.services.media_service import media_service
+
+        captured = []
+
+        async def answer(contents, instruction):
+            captured.append((contents, instruction))
+            yield "Comparison"
+
+        attachments = [{"url": "media/uploads/fixture.png", "mime_type": "image/png"}]
+        context = [
+            {
+                "text": "Document evidence",
+                "metadata": {"filename": "fixture.txt", "page_number": 1},
+            }
+        ]
+
+        async def collect():
+            return [
+                token
+                async for token in self.service.stream_rag_answer(
+                    "Compare", context, attachments=attachments
+                )
+            ]
+
+        with (
+            patch.object(self.service, "_stream_answer", answer),
+            patch.object(
+                media_service, "get_media_bytes", return_value=b"fixture-image"
+            ),
+        ):
+            self.assertEqual(asyncio.run(collect()), ["Comparison"])
+        contents, instruction = captured[0]
+        self.assertEqual(contents[0].inline_data.data, b"fixture-image")
+        self.assertIn("Document evidence", contents[1])
+        self.assertIn("Compare", contents[1])
+        self.assertIn("attached images", instruction)
+        with (
+            patch.object(self.service, "_stream_answer", answer),
+            patch.object(media_service, "get_media_bytes", return_value=None),
+        ):
+            with self.assertRaises(TextGenerationError):
+                asyncio.run(collect())
+        self.assertEqual(len(captured), 1)
 
     def test_fallback_is_allowed_only_before_any_text_and_empty_models_are_retried(
         self,
