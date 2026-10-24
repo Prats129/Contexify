@@ -1,12 +1,12 @@
 # -------------------------------------------------------------
 # Stage 1: Build the React + Vite Frontend
 # -------------------------------------------------------------
-FROM node:20-alpine AS frontend-builder
+FROM node:22-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914 AS frontend-builder
 WORKDIR /frontend
 
 # Copy package manifests and install dependencies
-COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci || npm install
+COPY frontend/package.json frontend/package-lock.json frontend/.npmrc ./
+RUN npm ci
 
 # Copy source code and build production assets
 COPY frontend/index.html frontend/tsconfig.json frontend/tsconfig.node.json frontend/vite.config.ts ./
@@ -20,7 +20,7 @@ RUN npm run build
 # -------------------------------------------------------------
 # Stage 2: Production Python Backend + Static Frontend
 # -------------------------------------------------------------
-FROM python:3.11-slim
+FROM python:3.11-slim@sha256:b7a9e5f6a93d6d4a31f129bbd4bdee69efccb6ded0fb230d78aafaf37af98377
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -38,7 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install Python requirements
 COPY backend/requirements.txt ./backend/requirements.txt
-RUN pip install --no-cache-dir -r ./backend/requirements.txt
+RUN pip install --no-cache-dir --require-hashes -r ./backend/requirements.txt
 
 # Copy backend application code
 COPY backend/app/ ./backend/app/

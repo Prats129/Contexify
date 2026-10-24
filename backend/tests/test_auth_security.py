@@ -2692,9 +2692,13 @@ class SecurityTests(unittest.TestCase):
                 any(event["event"] == "citations" for event in events), needs_web
             )
             if not needs_web:
-                self.assertTrue(
-                    any("could not find" in event.get("data", "") for event in events)
+                # A new AUTO topic must use conversation, not an old document's empty matches.
+                answer = "".join(
+                    event.get("data", "")
+                    for event in events
+                    if event["event"] == "token"
                 )
+                self.assertEqual(answer, "Fixture answer")
 
     def test_local_vector_index_and_search_execute_runtime_type_casts(self):
         _, repository, _ = self._load_document_pipeline()
@@ -3532,6 +3536,32 @@ class SecurityTests(unittest.TestCase):
         self.assertEqual(
             keys, {"media/uploads/fixture.png", "documents/alice-session/fixture.txt"}
         )
+
+    def test_selected_r2_initialization_failure_never_falls_back_to_local_disk(self):
+        import app.services.storage_service as storage_module
+
+        with patch.multiple(
+            settings,
+            create=True,
+            is_cloudflare_r2_configured=True,
+            r2_endpoint_url="https://fixture.invalid",
+            CLOUDFLARE_R2_ACCESS_KEY_ID="fixture",
+            CLOUDFLARE_R2_SECRET_ACCESS_KEY="fixture",
+        ):
+            with patch.object(storage_module, "BOTO3_AVAILABLE", False):
+                with self.assertRaisesRegex(RuntimeError, "boto3"):
+                    storage_module.StorageService()
+            with patch.object(
+                storage_module.boto3,
+                "client",
+                side_effect=ValueError("private-provider-detail"),
+            ):
+                with self.assertRaises(RuntimeError) as error:
+                    storage_module.StorageService()
+                self.assertNotIn("private-provider-detail", str(error.exception))
+        with patch.object(settings, "is_cloudflare_r2_configured", False):
+            with patch.object(storage_module, "BOTO3_AVAILABLE", False):
+                self.assertFalse(storage_module.StorageService().is_r2_active)
 
     def test_missing_r2_configuration_does_not_discard_cleanup_intent(self):
         from app.services import session_lifecycle

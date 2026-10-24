@@ -9,6 +9,7 @@ backend/**
 !frontend/
 frontend/**
 !frontend/package.json
+!frontend/.npmrc
 !frontend/package-lock.json
 !frontend/index.html
 !frontend/tsconfig.json

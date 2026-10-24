@@ -10,18 +10,19 @@ from app.services.session_lifecycle import protect_resource_write, register_reso
 try:
     import boto3
     from botocore.config import Config
-    from botocore.exceptions import ClientError
+    from botocore.exceptions import BotoCoreError, ClientError
 
     BOTO3_AVAILABLE = True
 except ImportError:
     BOTO3_AVAILABLE = False
     ClientError = Exception
+    BotoCoreError = RuntimeError
 
 
 class StorageService:
     """
     Unified Object Storage Service supporting Cloudflare R2 (S3-compatible)
-    with seamless local disk fallback for development.
+    with explicit local disk mode for development.
     """
 
     def __init__(self):
@@ -30,23 +31,18 @@ class StorageService:
         self._init_r2_client()
 
     def _init_r2_client(self):
-        if not BOTO3_AVAILABLE:
-            logger.info(
-                "boto3 is not available. StorageService running in local disk mode."
-            )
-            return
-
         if not settings.is_cloudflare_r2_configured:
-            logger.info(
-                "Cloudflare R2 not configured. StorageService operating in local disk mode."
-            )
+            logger.info("StorageService operating in explicit local disk mode.")
             return
+        if not BOTO3_AVAILABLE:
+            raise RuntimeError("Cloudflare R2 requires the boto3 dependency.")
 
         try:
             endpoint = settings.r2_endpoint_url
             if not endpoint:
-                logger.warning("Cloudflare R2 endpoint URL could not be determined.")
-                return
+                raise RuntimeError(
+                    "Cloudflare R2 endpoint URL could not be determined."
+                )
 
             self._s3_client = boto3.client(
                 service_name="s3",
@@ -65,12 +61,12 @@ class StorageService:
             logger.info(
                 f"Initialized Cloudflare R2 Storage client for bucket '{settings.CLOUDFLARE_R2_BUCKET_NAME}' at {endpoint}"
             )
-        except Exception as e:
-            logger.exception(
-                f"Failed to initialize Cloudflare R2 client: {e}. Falling back to local disk storage."
-            )
+        except (BotoCoreError, ValueError, RuntimeError, OSError):
             self._s3_client = None
             self._initialized = False
+            raise RuntimeError(
+                "Could not initialize selected Cloudflare R2 storage."
+            ) from None
 
     @property
     def is_r2_active(self) -> bool:

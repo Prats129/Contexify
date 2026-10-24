@@ -1,7 +1,8 @@
 import os
 from pathlib import Path
+from typing import Self
 
-from pydantic import Field
+from pydantic import Field, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -87,7 +88,8 @@ class Settings(BaseSettings):
     )  # Optional override: "sqlite" | "turso"
 
     # Object Storage Mode: "cloudflare" (Cloudflare R2 S3-compatible) or "local" (local disk)
-    STORAGE_MODE: str = Field(default="cloudflare", env="STORAGE_MODE")
+    # Unspecified mode preserves existing R2 deployments; fresh installs use local disk.
+    STORAGE_MODE: str = Field(default="", env="STORAGE_MODE")
 
     # Cloudflare R2 Object Storage Configuration (S3-Compatible)
     CLOUDFLARE_R2_ACCOUNT_ID: str = Field(default="", env="CLOUDFLARE_R2_ACCOUNT_ID")
@@ -166,10 +168,105 @@ class Settings(BaseSettings):
         3  # Temporary conversations automatically purged after 3 days
     )
 
+    @field_validator(
+        "DB_MODE", "DATABASE_TYPE", "VECTOR_STORE_TYPE", "STORAGE_MODE", mode="before"
+    )
+    @classmethod
+    def normalize_storage_modes(cls, value: object, info: ValidationInfo) -> str:
+        aliases = {
+            "DB_MODE": {
+                "local": "local",
+                "sqlite": "local",
+                "chroma": "local",
+                "chromadb": "local",
+                "cloud": "cloud",
+                "turso-pinecone": "cloud",
+                "turso": "cloud",
+                "pinecone": "cloud",
+                "production": "cloud",
+            },
+            "DATABASE_TYPE": {
+                "": "",
+                "local": "sqlite",
+                "sqlite": "sqlite",
+                "turso": "turso",
+            },
+            "VECTOR_STORE_TYPE": {
+                "": "",
+                "local": "chromadb",
+                "chroma": "chromadb",
+                "chromadb": "chromadb",
+                "pinecone": "pinecone",
+            },
+            "STORAGE_MODE": {
+                "": "",
+                "local": "local",
+                "disk": "local",
+                "cloudflare": "cloudflare",
+                "r2": "cloudflare",
+            },
+        }
+        normalized = str(value).strip().lower()
+        field = info.field_name or ""
+        if normalized not in aliases[field]:
+            raise ValueError(
+                f"Unsupported {info.field_name}; select a documented storage mode."
+            )
+        return aliases[field][normalized]
+
+    @model_validator(mode="after")
+    def validate_selected_backends(self) -> Self:
+        if not self.STORAGE_MODE:
+            r2_values = (
+                self.CLOUDFLARE_R2_ACCOUNT_ID,
+                self.CLOUDFLARE_R2_ENDPOINT_URL,
+                self.CLOUDFLARE_R2_ACCESS_KEY_ID,
+                self.CLOUDFLARE_R2_SECRET_ACCESS_KEY,
+            )
+            self.STORAGE_MODE = (
+                "cloudflare" if any(value.strip() for value in r2_values) else "local"
+            )
+
+        def configured(name: str) -> bool:
+            value = str(getattr(self, name, "")).strip()
+            if name in ("PINECONE_INDEX_NAME", "CLOUDFLARE_R2_BUCKET_NAME"):
+                return bool(value)
+            return bool(value) and not value.lower().startswith(
+                ("your_", "paste_", "changeme")
+            )
+
+        required = []
+        database = self.DATABASE_TYPE or (
+            "turso" if self.DB_MODE == "cloud" else "sqlite"
+        )
+        vectors = self.VECTOR_STORE_TYPE or (
+            "pinecone" if self.DB_MODE == "cloud" else "chromadb"
+        )
+        if database == "turso":
+            required += ["TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN"]
+        if vectors == "pinecone":
+            required += ["PINECONE_API_KEY", "PINECONE_INDEX_NAME"]
+        if self.STORAGE_MODE == "cloudflare":
+            required += [
+                "CLOUDFLARE_R2_ACCESS_KEY_ID",
+                "CLOUDFLARE_R2_SECRET_ACCESS_KEY",
+                "CLOUDFLARE_R2_BUCKET_NAME",
+            ]
+            if not (
+                configured("CLOUDFLARE_R2_ACCOUNT_ID")
+                or configured("CLOUDFLARE_R2_ENDPOINT_URL")
+            ):
+                required += ["CLOUDFLARE_R2_ACCOUNT_ID or CLOUDFLARE_R2_ENDPOINT_URL"]
+        missing = [name for name in required if not configured(name)]
+        if missing:
+            raise ValueError("Selected storage backends require: " + ", ".join(missing))
+        return self
+
     model_config = SettingsConfigDict(
         env_file=[str(BASE_DIR / ".env"), ".env"],
         env_file_encoding="utf-8",
         extra="ignore",
+        hide_input_in_errors=True,
     )
 
 

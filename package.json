@@ -10,9 +10,9 @@
     "dev:all": "concurrently -n \"BACKEND,FRONTEND,MOBILE\" -c \"blue,green,magenta\" \"npm run backend\" \"npm run frontend\" \"npm run mobile\"",
     "build:frontend": "npm run build --prefix frontend",
     "db:reset": "cd backend && .\\venv\\Scripts\\python.exe reset_db.py",
-    "setup:backend": "cd backend && python -m venv venv && .\\venv\\Scripts\\pip install -r requirements.txt",
-    "setup:mobile": "npm install --prefix mobile",
-    "setup": "npm install --prefix frontend && npm run setup:backend",
+    "setup:backend": "cd backend && python -m venv venv && .\\venv\\Scripts\\pip install --require-hashes -r requirements.txt",
+    "setup:mobile": "npm ci --prefix mobile",
+    "setup": "npm ci --prefix frontend && npm run setup:backend",
     "deploy:mobile": "node scripts/deploy-mobile.js",
     "deploy:mobile:bundle": "node scripts/deploy-mobile.js --bundle",
     "deploy:mobile:ios": "node scripts/deploy-mobile.js --ios",
@@ -20,5 +20,8 @@
   },
   "devDependencies": {
     "concurrently": "^8.2.2"
+  },
+  "engines": {
+    "node": "^20.19.4 || ^22.13.0 || ^24.3.0 || >=25.0.0"
   }
 }

@@ -99,12 +99,13 @@ if frontend_dist.exists() and (frontend_dist / "index.html").exists():
     # SPA catch-all route: serves static files or index.html for client routing
     @app.get("/{full_path:path}")
     def serve_frontend(full_path: str):
-        route_path = posixpath.normpath(full_path.replace("\\", "/")).lstrip("/")
+        normalized_path = full_path.replace("\\", "/")
+        route_path = posixpath.normpath(normalized_path).lstrip("/")
         if route_path == "api" or route_path.startswith(
             ("api/", "docs", "redoc", "openapi.json")
         ):
             raise HTTPException(status_code=404, detail="Not Found")
-        candidate = (frontend_dist / full_path).resolve()
+        candidate = (frontend_dist / normalized_path).resolve()
         if not candidate.is_relative_to(frontend_dist.resolve()):
             raise HTTPException(status_code=404, detail="Not Found")
         if candidate.is_file():
