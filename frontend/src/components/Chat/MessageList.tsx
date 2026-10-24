@@ -172,7 +172,8 @@ export const MessageList: React.FC<MessageListProps> = ({
     if (!el) return;
     const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
     const atBottom = distance < 80;
-    isAtBottomRef.current = atBottom && !hasNewerHistory;
+    if (userScrolledRef.current || hasNewerHistory)
+      isAtBottomRef.current = atBottom && !hasNewerHistory;
     setShowScrollButton(
       hasNewerHistory || (!atBottom && el.scrollHeight > el.clientHeight + 100),
     );
@@ -205,12 +206,19 @@ export const MessageList: React.FC<MessageListProps> = ({
 
   const scrollToBottom = useCallback(
     async (smooth = true) => {
+      if (loadingRef.current || historyNavigationDisabled) return;
+      const wasAtBottom = isAtBottomRef.current;
+      const hadUserScrolled = userScrolledRef.current;
+      // Keep following late layout changes until the reader scrolls manually.
+      userScrolledRef.current = false;
+      isAtBottomRef.current = true;
       if (hasNewerHistory && onHistoryPage) {
-        if (loadingRef.current || historyNavigationDisabled) return;
         latestRequestedRef.current = true;
         userScrolledRef.current = false;
         if (!(await onHistoryPage("latest"))) {
           latestRequestedRef.current = false;
+          isAtBottomRef.current = wasAtBottom;
+          userScrolledRef.current = hadUserScrolled;
           return;
         }
       }
@@ -352,6 +360,7 @@ export const MessageList: React.FC<MessageListProps> = ({
         scrollEndRef.current?.scrollIntoView({ behavior: "auto" });
     });
     observer.observe(contentRef.current);
+    if (containerRef.current) observer.observe(containerRef.current);
     return () => observer.disconnect();
   }, []);
 

@@ -344,11 +344,7 @@ class ChatOrchestrator:
             if mode == ChatMode.MULTIMODAL and selected:
                 return ChatMode.DOCUMENT_RAG, scope
             return mode, scope
-        if (
-            selected
-            or self._has_document_reference(query)
-            or (request.reply_to and source == ChatMode.DOCUMENT_RAG)
-        ):
+        if selected or self._has_document_reference(query):
             return ChatMode.DOCUMENT_RAG, scope
         if self._is_image_gen_intent(query) or (
             source == ChatMode.MULTIMODAL and self._is_image_edit_followup(query)
@@ -371,7 +367,10 @@ class ChatOrchestrator:
             return ChatMode.WEB_SEARCH, None
         if (followup or request.reply_to) and source is not None:
             return source, scope
-        return (ChatMode.DOCUMENT_RAG, None) if document_ids else (ChatMode.AUTO, None)
+        # An uploaded document is available context, not a permanent routing mode.
+        if followup and source is None and document_ids and not request.reply_to:
+            return ChatMode.DOCUMENT_RAG, None
+        return ChatMode.AUTO, None
 
     def _retrieval_query(
         self, request: ChatRequest, history: List[Dict[str, Any]]

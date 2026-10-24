@@ -819,6 +819,66 @@ class SecurityTests(unittest.TestCase):
         ):
             self.assertFalse(actual._needs_web_search(query), query)
 
+    def test_routing_auto_documents_do_not_capture_new_topics_or_explicit_web_replies(
+        self,
+    ):
+        from app.schemas.chat import ChatMode, ChatRequest
+
+        actual = self.reply_orchestrator()
+        history = [
+            {"id": "question", "role": "user", "content": "Review this document"},
+            {
+                "id": "answer",
+                "role": "assistant",
+                "content": "Document summary",
+                "citations": [{"document_id": "document"}],
+            },
+        ]
+        cases = [
+            ("What is quantum computing?", None, ChatMode.AUTO),
+            ("Explain how a bicycle works", None, ChatMode.AUTO),
+            (
+                "Search the web for the latest Python release",
+                "answer",
+                ChatMode.WEB_SEARCH,
+            ),
+            ("Create a Python function to reverse a string", "answer", ChatMode.AUTO),
+            ("Why?", "answer", ChatMode.DOCUMENT_RAG),
+            ("Summarize this document", None, ChatMode.DOCUMENT_RAG),
+        ]
+        for query, reply_id, expected in cases:
+            with self.subTest(query=query):
+                request = ChatRequest(
+                    message=query,
+                    reply_to={
+                        "id": reply_id,
+                        "role": "assistant",
+                        "content": "Document summary",
+                    }
+                    if reply_id
+                    else None,
+                )
+                route, _ = actual._choose_route(
+                    request, ChatMode.AUTO, ["document"], history
+                )
+                self.assertEqual(route, expected)
+        # A reply to an unrelated message must not inherit older document evidence.
+        history += [{"id": "general", "role": "user", "content": "Explain gravity"}]
+        route, _ = actual._choose_route(
+            ChatRequest(
+                message="Why?",
+                reply_to={
+                    "id": "general",
+                    "role": "user",
+                    "content": "Explain gravity",
+                },
+            ),
+            ChatMode.AUTO,
+            ["document"],
+            history,
+        )
+        self.assertEqual(route, ChatMode.AUTO)
+
     def test_routing_followups_use_saved_citations_and_explicit_reply_scope(self):
         from app.api.v1.endpoints import chat
 

@@ -440,6 +440,7 @@ export default function App() {
 
   const handleScrollToBottom = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    historyGestureRef.current.interacted = false;
     isAtBottomRef.current = true;
     showScrollToBottomRef.current = false;
     setShowScrollToBottom(false);
@@ -853,7 +854,13 @@ export default function App() {
     const gesture = historyGestureRef.current;
     if (gesture.viewId !== conversation.viewId) return;
     if (!gesture.interacted && !conversation.state.hasNewerHistory) {
+      // A reply jump explicitly releases bottom intent without a drag gesture.
+      if (!isAtBottomRef.current) return;
       isAtBottomRef.current = true;
+      const { contentSize, layoutMeasurement, contentOffset } = event.nativeEvent;
+      const endOffset = Math.max(0, contentSize.height - layoutMeasurement.height);
+      if (Math.abs(endOffset - contentOffset.y) > 2)
+        flatListRef.current?.scrollToOffset({ offset: endOffset, animated: false });
       return;
     }
     handleScroll(event);
@@ -2256,7 +2263,15 @@ export default function App() {
                       100,
                     );
                   }}
-                  maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+                  maintainVisibleContentPosition={
+                    conversation.state.hasNewerHistory || !isAtBottomRef.current
+                      ? { minIndexForVisible: 0 }
+                      : undefined
+                  }
+                  onLayout={() => {
+                    if (isAtBottomRef.current && !conversation.state.hasNewerHistory)
+                      flatListRef.current?.scrollToEnd({ animated: false });
+                  }}
                   onScrollBeginDrag={(event) => {
                     historyGestureRef.current = {
                       viewId: conversation.viewId,

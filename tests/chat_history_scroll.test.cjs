@@ -347,6 +347,7 @@ function mobileHistory() {
     "handleHistoryScroll",
     "scrollToPendingMessage",
     "handleJumpToMessage",
+    "handleScrollToBottom",
   ];
   const declarations = [];
   const attributes = {};
@@ -468,11 +469,8 @@ test("mobile: initial history follows the bottom and prepending does not trigger
   fixture.context.conversation.state.messages = messages(148, 200);
   fixture.callbacks.onContentSizeChange();
   assert.equal(fixture.calls.filter((call) => call[0] === "end").length, 1);
-  // The installed native list maintains its visible keyed item while data is prepended.
-  assert.equal(
-    fixture.callbacks.maintainVisibleContentPosition.minIndexForVisible,
-    0,
-  );
+  // Initial bottom positioning must not compete with native visible-item anchoring.
+  assert.equal(fixture.callbacks.maintainVisibleContentPosition, undefined);
 });
 
 test("mobile: an old reply fetches its own history window and scrolls to the canonical target", async () => {
@@ -787,4 +785,83 @@ test("mobile: history loading uses a visible overlay without changing the list l
   }
   context.isLoadingHistory = false;
   assert.equal(context.exports.render(), false);
+});
+
+test("web: programmatic scroll events during initial layout do not cancel bottom anchoring", () => {
+  const view = messageList({ messages: messages(0, 50) });
+  const before = view.bottomCalls;
+  view.container.scrollTop = 4100;
+  view.container.handlers.onScroll();
+  view.resize();
+  assert.equal(view.bottomCalls, before + 1);
+  assert.equal(view.container.scrollTop, 4600);
+  view.container.scrollTop = 3800;
+  view.container.handlers.onWheel();
+  const reading = view.bottomCalls;
+  view.resize();
+  assert.equal(view.bottomCalls, reading);
+  assert.equal(view.container.scrollTop, 3800);
+});
+
+test("web: jump to bottom restores anchoring after manually reading older messages", async () => {
+  const view = messageList({ messages: messages(0, 50) });
+  view.container.scrollTop = 2000;
+  view.container.handlers.onWheel();
+  view.render();
+  const button = find(
+    view.tree,
+    (node) => node.props["aria-label"] === "Scroll to latest message",
+  );
+  assert.ok(button);
+  await button.props.onClick();
+  const before = view.bottomCalls;
+  view.container.scrollTop = 4100;
+  view.container.handlers.onScroll();
+  view.resize();
+  assert.equal(view.bottomCalls, before + 1);
+  assert.equal(view.container.scrollTop, 4600);
+});
+
+test("mobile: bottom intent uses measured scroll extent and survives late content growth", () => {
+  const fixture = mobileHistory();
+  fixture.callbacks.onContentSizeChange();
+  fixture.callbacks.handleHistoryScroll(mobileEvent(4100));
+  const correction = fixture.calls.find((call) => call[0] === "offset");
+  assert.equal(correction[1].offset, 4600);
+  assert.equal(correction[1].animated, false);
+  assert.equal(fixture.context.isAtBottomRef.current, true);
+  const before = fixture.calls.filter((call) => call[0] === "end").length;
+  fixture.callbacks.onContentSizeChange();
+  assert.equal(
+    fixture.calls.filter((call) => call[0] === "end").length,
+    before + 1,
+  );
+  fixture.callbacks.onScrollBeginDrag(mobileEvent(2000));
+  const reading = fixture.calls.length;
+  fixture.callbacks.onContentSizeChange();
+  assert.equal(fixture.calls.length, reading);
+});
+
+test("mobile: a reply jump releases bottom intent even without a manual drag", async () => {
+  const fixture = mobileHistory();
+  fixture.callbacks.onContentSizeChange();
+  await fixture.callbacks.handleJumpToMessage("saved-175");
+  const before = fixture.calls.length;
+  fixture.callbacks.handleHistoryScroll(mobileEvent(2500));
+  fixture.callbacks.onContentSizeChange();
+  assert.equal(fixture.context.isAtBottomRef.current, false);
+  assert.equal(fixture.calls.length, before);
+});
+
+test("mobile: jump to latest restores bottom intent after manually reading history", () => {
+  const fixture = mobileHistory();
+  fixture.callbacks.onContentSizeChange();
+  fixture.callbacks.onScrollBeginDrag(mobileEvent(2000));
+  assert.equal(fixture.context.isAtBottomRef.current, false);
+  fixture.callbacks.handleScrollToBottom();
+  fixture.callbacks.handleHistoryScroll(mobileEvent(4100));
+  assert.equal(fixture.context.isAtBottomRef.current, true);
+  assert.equal(fixture.context.historyGestureRef.current.interacted, false);
+  assert.equal(fixture.calls.at(-1)[0], "offset");
+  assert.equal(fixture.calls.at(-1)[1].offset, 4600);
 });
