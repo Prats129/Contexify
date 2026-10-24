@@ -6,6 +6,102 @@ const path = require("node:path");
 const vm = require("node:vm");
 const ts = require("../frontend/node_modules/typescript");
 
+test("file pickers offer backend-supported formats and preserve selected assets", async () => {
+  const read = (relative) =>
+    fs.readFileSync(path.join(__dirname, "..", relative), "utf8");
+  const extensions = (relative, constant) => {
+    const value = read(relative).match(
+      new RegExp(`${constant} = \\{([^}]+)\\}`),
+    );
+    assert.ok(value, `Missing ${constant}`);
+    return [...value[1].matchAll(/"([.][a-z]+)"/g)].map((match) => match[1]);
+  };
+  const supported = new Set([
+    ...extensions(
+      "backend/app/api/v1/endpoints/document.py",
+      "ALLOWED_EXTENSIONS",
+    ),
+    ...extensions(
+      "backend/app/services/image_validation.py",
+      "ALLOWED_IMAGE_EXTENSIONS",
+    ),
+  ]);
+  const filename = "mobile/src/components/ChatInput.tsx";
+  const parsed = ts.createSourceFile(
+    filename,
+    read(filename),
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX,
+  );
+  let expression;
+  function visit(node) {
+    if (
+      ts.isVariableDeclaration(node) &&
+      node.name.getText(parsed) === "handlePickDocument"
+    ) {
+      expression = node.initializer.getText(parsed);
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(parsed);
+  assert.ok(expression);
+  let options;
+  let result = { canceled: true };
+  const attached = [];
+  const compiled = ts.transpileModule(`exports.pick = (${expression});`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2020 },
+  }).outputText;
+  const context = {
+    exports: {},
+    Haptics: { impactAsync() {}, ImpactFeedbackStyle: { Light: "light" } },
+    DocumentPicker: {
+      async getDocumentAsync(value) {
+        options = value;
+        return result;
+      },
+    },
+    onAttachFile: (asset) => attached.push(asset),
+    console,
+  };
+  vm.runInNewContext(compiled, context);
+  await context.exports.pick();
+  assert.equal(attached.length, 0);
+  assert.equal(options.copyToCacheDirectory, true);
+  const mimeExtensions = {
+    "image/png": [".png"],
+    "image/jpeg": [".jpg", ".jpeg"],
+    "image/webp": [".webp"],
+    "image/gif": [".gif"],
+    "image/bmp": [".bmp"],
+    "image/x-ms-bmp": [".bmp"],
+    "application/pdf": [".pdf"],
+    "text/plain": [".txt", ".log"],
+    "text/markdown": [".md"],
+    "text/csv": [".csv"],
+    "application/json": [".json"],
+  };
+  const offered = new Set();
+  for (const mime of options.type) {
+    assert.ok(mimeExtensions[mime], `Unsupported picker MIME: ${mime}`);
+    for (const extension of mimeExtensions[mime]) offered.add(extension);
+  }
+  assert.deepEqual(offered, supported);
+  const webAccept = read("frontend/src/components/Chat/ChatInput.tsx").match(
+    /accept="([^"]+)"/,
+  );
+  assert.ok(webAccept);
+  assert.deepEqual(new Set(webAccept[1].split(",")), supported);
+  const asset = {
+    uri: "file:///fixture.pdf",
+    name: "fixture.pdf",
+    mimeType: "application/pdf",
+  };
+  result = { canceled: false, assets: [asset] };
+  await context.exports.pick();
+  assert.deepEqual(JSON.parse(JSON.stringify(attached)), [asset]);
+});
+
 test("frontend: reply clicks use the message ID rather than the DOM element ID", () => {
   const filename = path.join(
     __dirname,

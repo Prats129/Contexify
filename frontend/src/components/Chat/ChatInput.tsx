@@ -264,7 +264,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       case "IMAGE_GENERATION":
         return {
           title: "Image Gen",
-          desc: "Google Imagen 3 Artwork",
+          desc: "Generate and edit images",
           icon: <LuPalette size={15} className="text-pink-500" />,
         };
       default:
@@ -423,7 +423,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             <input
               type="file"
               ref={fileInputRef}
-              accept=".pdf,.txt,.md,.csv,.json,.log,.png,.jpg,.jpeg,.webp"
+              accept=".pdf,.txt,.md,.csv,.json,.log,.png,.jpg,.jpeg,.webp,.gif,.bmp"
               multiple
               hidden
               onChange={handleFileChange}
@@ -635,7 +635,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                           <span className="font-semibold">Image Gen</span>
                         </div>
                         <span className="text-[10px] text-(--text-muted)">
-                          Google Imagen 3 Artwork
+                          Generate and edit images
                         </span>
                       </div>
                     </div>

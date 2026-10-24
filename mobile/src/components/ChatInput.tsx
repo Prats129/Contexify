@@ -123,13 +123,17 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       const res = await DocumentPicker.getDocumentAsync({
         type: [
-          "image/*",
+          "image/png",
+          "image/jpeg",
+          "image/webp",
+          "image/gif",
+          "image/bmp",
+          "image/x-ms-bmp",
           "application/pdf",
           "text/plain",
           "text/markdown",
           "text/csv",
           "application/json",
-          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         ],
         copyToCacheDirectory: true,
       });

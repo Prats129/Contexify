@@ -11,7 +11,7 @@ from app.core.logging import logger
 class LLMService:
     """
     LLM Service offering streaming completions.
-    Integrates Google GenAI Gemini models (`gemini-3.6-flash`) with fallback streaming.
+    Uses the configured Google GenAI models with bounded fallback before output starts.
     """
 
     def __init__(self):
