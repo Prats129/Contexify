@@ -36,7 +36,11 @@ export class ConversationStore<T> {
     for (const listener of this.listeners) listener();
   }
 
-  constructor(private initial: () => T) {
+  constructor(
+    private initial: () => T,
+    private canEvict: (entry: ConversationEntry<T>) => boolean = () => false,
+    private maxIdleEntries = 8,
+  ) {
     this.active = this.create(null);
   }
 
@@ -66,8 +70,29 @@ export class ConversationStore<T> {
   select(sessionId: string | null): ConversationEntry<T> {
     this.active =
       (sessionId && this.entries.get(sessionId)) || this.create(sessionId);
+    this.entries.delete(this.active.key);
+    this.entries.set(this.active.key, this.active);
+    this.trimIdle();
     this.notify();
     return this.active;
+  }
+
+  private trimIdle(): void {
+    const idle = [...this.entries.values()].filter(
+      (entry) =>
+        entry !== this.active &&
+        !entry.cancel &&
+        !entry.preparing &&
+        entry.uploads === 0 &&
+        !entry.preserveHistory &&
+        this.canEvict(entry),
+    );
+    for (const entry of idle.slice(
+      0,
+      Math.max(0, idle.length - this.maxIdleEntries),
+    )) {
+      this.entries.delete(entry.key);
+    }
   }
 
   adopt(entry: ConversationEntry<T>, sessionId: string): void {
@@ -84,6 +109,7 @@ export class ConversationStore<T> {
   patch(entry: ConversationEntry<T>, changes: Partial<T>): void {
     if (!this.live(entry)) return;
     entry.state = { ...entry.state, ...changes };
+    this.trimIdle();
     if (this.active === entry) this.notify();
   }
 
@@ -128,4 +154,44 @@ export class ConversationStore<T> {
     this.active = this.create(null);
     this.notify();
   }
+}
+
+export type HistoryDirection = "older" | "newer" | "latest" | "target";
+
+/** Keep a continuous, deduplicated window; SQL retains everything outside it. */
+export function mergeHistoryWindow<T extends { id: string }>(
+  current: {
+    messages: T[];
+    hasOlderHistory: boolean;
+    hasNewerHistory: boolean;
+  },
+  page: { messages: T[]; has_older?: boolean; has_newer?: boolean },
+  direction: HistoryDirection,
+) {
+  if (direction === "latest" || direction === "target") {
+    return {
+      messages: page.messages,
+      hasOlderHistory: Boolean(page.has_older),
+      hasNewerHistory: Boolean(page.has_newer),
+    };
+  }
+  const ordered =
+    direction === "older"
+      ? [...page.messages, ...current.messages]
+      : [...current.messages, ...page.messages];
+  const messages = [
+    ...new Map(ordered.map((message) => [message.id, message])).values(),
+  ];
+  const trimmed = messages.length > 200;
+  return direction === "older"
+    ? {
+        messages: messages.slice(0, 200),
+        hasOlderHistory: Boolean(page.has_older),
+        hasNewerHistory: current.hasNewerHistory || trimmed,
+      }
+    : {
+        messages: messages.slice(-200),
+        hasOlderHistory: current.hasOlderHistory || trimmed,
+        hasNewerHistory: Boolean(page.has_newer),
+      };
 }

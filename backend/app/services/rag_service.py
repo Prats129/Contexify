@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.config import settings
-from app.core.errors import EmbeddingCompatibilityError
+from app.core.errors import DocumentLimitError, EmbeddingCompatibilityError
 from app.core.logging import logger
 from app.repositories.session_store import session_store_repo
 from app.repositories.vector_store import vector_store_repo
@@ -32,7 +32,12 @@ class RAGService:
         elif ext in [".txt", ".md", ".csv", ".json", ".log"]:
             try:
                 with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-                    content = f.read()
+                    maximum = getattr(settings, "DOCUMENT_MAX_TEXT_CHARS", 2_000_000)
+                    content = f.read(maximum + 1)
+                    if len(content) > maximum:
+                        raise DocumentLimitError(
+                            "Document exceeds the text processing limit. Please split it into smaller files."
+                        )
                     pages.append((content, 1))
             except Exception as e:
                 logger.error(f"Error reading text file '{file_path.name}': {e}")
@@ -132,10 +137,22 @@ class RAGService:
         if not pages:
             raise ValueError("No extractable text found in uploaded document.")
 
+        if sum(len(text) for text, _ in pages) > getattr(
+            settings, "DOCUMENT_MAX_TEXT_CHARS", 2_000_000
+        ):
+            raise DocumentLimitError(
+                "Document exceeds the text processing limit. Please split it into smaller files."
+            )
+
         # 2. Chunk
         chunks = self.recursive_character_chunking(pages)
         if not chunks:
             raise ValueError("Document could not be split into valid text chunks.")
+
+        if len(chunks) > getattr(settings, "DOCUMENT_MAX_CHUNKS", 5000):
+            raise DocumentLimitError(
+                "Document contains too many text chunks. Please split it into smaller files."
+            )
 
         # 3. Vectorize
         chunk_texts = [c["text"] for c in chunks]

@@ -215,6 +215,8 @@ export interface DocumentChunksResponse {
 }
 
 export interface SessionHistoryResponse {
+  has_older?: boolean;
+  has_newer?: boolean;
   session: ChatSession;
   messages: Message[];
   documents: DocumentMetadata[];

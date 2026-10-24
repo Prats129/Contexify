@@ -1,7 +1,16 @@
+from typing import Any, List, Optional
+
 from pydantic import BaseModel, Field, model_validator
-from typing import List, Optional, Any
-from app.schemas.chat import ChatMode, Citation, MediaAttachment, MessageReplyReference, normalize_chat_mode
+
+from app.schemas.chat import (
+    ChatMode,
+    Citation,
+    MediaAttachment,
+    MessageReplyReference,
+    normalize_chat_mode,
+)
 from app.schemas.document import DocumentMetadata
+
 
 class ChatSessionCreate(BaseModel):
     user_id: str
@@ -17,6 +26,7 @@ class ChatSessionCreate(BaseModel):
             data["mode"] = normalize_chat_mode(data.get("mode"), default=ChatMode.AUTO)
         return data
 
+
 class ChatSessionUpdate(BaseModel):
     title: Optional[str] = None
     mode: Optional[ChatMode] = None
@@ -29,11 +39,18 @@ class ChatSessionUpdate(BaseModel):
             data["mode"] = normalize_chat_mode(data.get("mode"), default=None)
         return data
 
+
 class TitleUpdatePayload(BaseModel):
-    title: str = Field(..., min_length=1, max_length=100, description="New title for the session")
+    title: str = Field(
+        ..., min_length=1, max_length=100, description="New title for the session"
+    )
+
 
 class ModeUpdatePayload(BaseModel):
-    mode: ChatMode = Field(default=ChatMode.AUTO, description="Target chat mode (AUTO, DOCUMENT_RAG, WEB_SEARCH, MULTIMODAL, IMAGE_GENERATION)")
+    mode: ChatMode = Field(
+        default=ChatMode.AUTO,
+        description="Target chat mode (AUTO, DOCUMENT_RAG, WEB_SEARCH, MULTIMODAL, IMAGE_GENERATION)",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -41,6 +58,7 @@ class ModeUpdatePayload(BaseModel):
         if isinstance(data, dict) and "mode" in data:
             data["mode"] = normalize_chat_mode(data.get("mode"), default=ChatMode.AUTO)
         return data
+
 
 class PinUpdatePayload(BaseModel):
     is_pinned: bool = Field(..., description="Whether the session is pinned")
@@ -60,6 +78,7 @@ class ChatSessionResponse(BaseModel):
     message_count: int = 0
     document_count: int = 0
 
+
 class MessageResponse(BaseModel):
     id: str
     session_id: str
@@ -70,10 +89,14 @@ class MessageResponse(BaseModel):
     reply_to: Optional[MessageReplyReference] = None
     created_at: str
 
+
 class SessionHistoryResponse(BaseModel):
     session: ChatSessionResponse
     messages: List[MessageResponse]
     documents: List[DocumentMetadata]
+    has_older: bool = False
+    has_newer: bool = False
+
 
 class PaginatedChatSessionsResponse(BaseModel):
     sessions: List[ChatSessionResponse]

@@ -16,6 +16,15 @@ import type {
 } from "../../types";
 
 interface ChatWorkspaceProps {
+  historyLatestRevision?: number;
+  hasOlderHistory?: boolean;
+  hasNewerHistory?: boolean;
+  historyNavigationDisabled?: boolean;
+  historyLoadingDirection?: "older" | "newer" | "latest" | "target" | null;
+  onHistoryPage?: (
+    direction: "older" | "newer" | "latest" | "target",
+    targetId?: string,
+  ) => Promise<boolean>;
   currentMode: ChatMode;
   onModeChange: (mode: ChatMode) => void;
   messages: Message[];
@@ -54,6 +63,12 @@ interface ChatWorkspaceProps {
 }
 
 export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
+  historyLatestRevision,
+  hasOlderHistory,
+  hasNewerHistory,
+  historyNavigationDisabled,
+  historyLoadingDirection,
+  onHistoryPage,
   currentMode,
   onModeChange,
   messages,
@@ -125,26 +140,43 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
   >(null);
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const handleJumpToMessage = useCallback((targetId: string) => {
-    if (!targetId) return;
-    const cleanId = targetId.startsWith("msg-") ? targetId.slice(4) : targetId;
-    const el =
-      document.getElementById(`msg-${cleanId}`) ||
-      document.getElementById(cleanId);
-    if (el) {
-      el.scrollIntoView({
-        behavior: "smooth",
-        block: "center",
-      });
-      if (highlightTimerRef.current) {
-        clearTimeout(highlightTimerRef.current);
+  const handleJumpToMessage = useCallback(
+    async (targetId: string) => {
+      if (!targetId) return;
+      const cleanId = targetId.startsWith("msg-")
+        ? targetId.slice(4)
+        : targetId;
+      let el =
+        document.getElementById(`msg-${cleanId}`) ||
+        document.getElementById(cleanId);
+      const index = messages.findIndex((message) => message.id === cleanId);
+      const needsContext =
+        index < 0 ||
+        (hasOlderHistory && index < 5) ||
+        (hasNewerHistory && messages.length - index - 1 < 5);
+      if ((!el || needsContext) && onHistoryPage) {
+        if (!(await onHistoryPage("target", cleanId))) return;
+        await new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        );
+        el = document.getElementById(`msg-${cleanId}`);
       }
-      setHighlightedMessageId(cleanId);
-      highlightTimerRef.current = setTimeout(() => {
-        setHighlightedMessageId(null);
-      }, 1800);
-    }
-  }, []);
+      if (el) {
+        el.scrollIntoView({
+          behavior: "smooth",
+          block: "center",
+        });
+        if (highlightTimerRef.current) {
+          clearTimeout(highlightTimerRef.current);
+        }
+        setHighlightedMessageId(cleanId);
+        highlightTimerRef.current = setTimeout(() => {
+          setHighlightedMessageId(null);
+        }, 1800);
+      }
+    },
+    [onHistoryPage, messages, hasOlderHistory, hasNewerHistory],
+  );
 
   const handleJumpToReply = useCallback(() => {
     if (replyingTo?.id) {
@@ -312,6 +344,12 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
             </div>
           )}
           <MessageList
+            historyLatestRevision={historyLatestRevision}
+            hasOlderHistory={hasOlderHistory}
+            hasNewerHistory={hasNewerHistory}
+            historyNavigationDisabled={historyNavigationDisabled}
+            historyLoadingDirection={historyLoadingDirection}
+            onHistoryPage={onHistoryPage}
             messages={messages}
             streamingMessage={streamingMessage}
             onSelectPrompt={onSelectPrompt}

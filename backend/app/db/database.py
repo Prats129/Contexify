@@ -514,6 +514,9 @@ def init_db():
             "CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);"
         )
         cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_messages_history ON messages(session_id,created_at,id)"
+        )
+        cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_documents_session_id ON documents(session_id);"
         )
         cursor.execute(

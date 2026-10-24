@@ -117,13 +117,26 @@ def list_sessions(
 
 @router.get("/{session_id}/history", response_model=SessionHistoryResponse)
 def get_session_history(
-    session_id: str, principal: Principal = Depends(require_principal)
+    session_id: str,
+    principal: Principal = Depends(require_principal),
+    limit: int = Query(50, ge=1, le=100),
+    before: Optional[str] = Query(None, max_length=100),
+    after: Optional[str] = Query(None, max_length=100),
+    through: Optional[str] = Query(None, max_length=100),
+    around: Optional[str] = Query(None, min_length=1, max_length=100),
 ):
     """
-    Get full message history, citations, and attached documents for a session.
+    Get a bounded message window, citations, and attached documents for a session.
     """
     check_session(session_id, principal)
-    history = chat_history_service.get_session_history(session_id)
+    history = chat_history_service.get_session_history(
+        session_id,
+        limit=limit,
+        before=before,
+        after=after,
+        through=through,
+        around=around,
+    )
     if not history:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

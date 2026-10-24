@@ -1,6 +1,9 @@
+from collections import OrderedDict
 from threading import RLock
+from time import monotonic
 from typing import Any, Dict, List, Optional
 
+from app.core.config import settings
 from app.db.database import get_db_connection
 from app.schemas.chat import ChatMode, SessionState
 from app.schemas.document import DocumentMetadata
@@ -9,12 +12,30 @@ from app.services.session_lifecycle import active_session
 
 
 class SessionStoreRepository:
-    """Persistent session & document metadata store backed by SQLite."""
+    """SQL-backed session and document metadata with bounded local caches."""
 
     def __init__(self):
         self._cache_lock = RLock()
-        self._sessions: Dict[str, SessionState] = {}
-        self._documents: Dict[str, DocumentMetadata] = {}
+        self._sessions: Dict[str, SessionState] = OrderedDict()
+        self._documents: Dict[str, DocumentMetadata] = OrderedDict()
+        self._accessed: Dict[str, float] = {}
+
+    def _trim_cache(self) -> None:
+        """Evict only reconstructible SQL-backed state; never delete stored data."""
+        now = monotonic()
+        ttl = getattr(settings, "SESSION_CACHE_TTL_SECONDS", 1800)
+        for key in list(self._accessed):
+            if key not in self._sessions or now - self._accessed[key] >= ttl:
+                self._sessions.pop(key, None)
+                self._accessed.pop(key, None)
+        maximum = getattr(settings, "SESSION_CACHE_MAX_ENTRIES", 128)
+        while len(self._sessions) > maximum:
+            key = next(iter(self._sessions))
+            self._sessions.pop(key, None)
+            self._accessed.pop(key, None)
+        maximum_docs = getattr(settings, "DOCUMENT_CACHE_MAX_ENTRIES", 512)
+        while len(self._documents) > maximum_docs:
+            self._documents.pop(next(iter(self._documents)), None)
 
     def get_or_create_session(
         self,
@@ -26,6 +47,7 @@ class SessionStoreRepository:
             row = active_session(conn, session_id)
         docs = chat_history_service.list_session_documents(session_id)
         with self._cache_lock:
+            self._trim_cache()
             session = self._sessions.setdefault(
                 session_id,
                 SessionState(
@@ -42,6 +64,10 @@ class SessionStoreRepository:
             for doc in docs:
                 self._documents[doc.document_id] = doc
             self.invalidate_cached_history(session_id, row["history_version"])
+            self._sessions.pop(session_id, None)
+            self._sessions[session_id] = session
+            self._accessed[session_id] = monotonic()
+            self._trim_cache()
             return session
 
     def invalidate_cached_history(self, session_id: str, history_version: int) -> None:
@@ -84,7 +110,9 @@ class SessionStoreRepository:
                 storage_url=getattr(metadata, "storage_url", "") or "",
             )
         with self._cache_lock:
+            self._documents.pop(metadata.document_id, None)
             self._documents[metadata.document_id] = metadata
+            self._trim_cache()
 
     def check_embedding_compatibility(
         self, document_ids: List[str], embedding_space: str
@@ -131,12 +159,26 @@ class SessionStoreRepository:
         with self._cache_lock:
             return list(self._documents.values())
 
-    def get_history_messages(self, session_id: str) -> List[Dict[str, Any]]:
-        """Use SQL for signed-in history and versioned memory for guest history."""
+    def get_history_messages(
+        self, session_id: str, reply_to_id: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Load bounded SQL context, with a legacy in-process guest fallback."""
         with get_db_connection() as conn:
             row = active_session(conn, session_id)
         self.invalidate_cached_history(session_id, row["history_version"])
-        db_messages = chat_history_service.get_session_messages(session_id)
+        from fastapi import HTTPException
+
+        try:
+            db_messages = chat_history_service.get_session_messages(
+                session_id,
+                limit=getattr(settings, "MODEL_HISTORY_MESSAGES", 40),
+                through=reply_to_id,
+                content_limit=8_000,
+            )
+        except HTTPException as error:
+            if reply_to_id and error.status_code == 404:
+                return []
+            raise
         if not row["user_id"].startswith("guest_") or db_messages:
             return [
                 {
@@ -204,7 +246,10 @@ class SessionStoreRepository:
                 else (reply_to if isinstance(reply_to, dict) else dict(reply_to))
             )
         with self._cache_lock:
+            # Persisted SQL holds full messages; this is only a lightweight cache.
+            msg_dict["content"] = content[:8_000]
             session.messages.append(msg_dict)
+            del session.messages[: -getattr(settings, "MODEL_HISTORY_MESSAGES", 40)]
 
     def remove_document(self, document_id: str):
         from app.services.storage_service import storage_service

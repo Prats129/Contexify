@@ -1872,6 +1872,7 @@ function appCallbacks(platform, apiService) {
           "handleClearMessages",
           "handleDeleteSession",
           "selectSession",
+          "loadHistoryPage",
         ]
       : [
           "sortMobileSessions",
@@ -1893,6 +1894,7 @@ function appCallbacks(platform, apiService) {
           "handleStopGeneration",
           "handleDeleteSession",
           "selectSession",
+          "loadHistoryPage",
         ];
   const declarations = new Map();
   function visit(node) {
@@ -2030,6 +2032,10 @@ function appCallbacks(platform, apiService) {
     operationError: null,
     historyError: null,
     isLoadingHistory: false,
+    historyLoadingDirection: null,
+    historyLatestRevision: 0,
+    hasOlderHistory: false,
+    hasNewerHistory: false,
     isClearingHistory: false,
   });
   const workspace = new storeExports.ConversationStore(initial);
@@ -2043,6 +2049,7 @@ function appCallbacks(platform, apiService) {
     cancelled++;
   };
   context.conversationStore = workspace;
+  context.mergeHistoryWindow = storeExports.mergeHistoryWindow;
   context.setTimeout = (callback) => callback();
   context.setActiveSessionId = (sessionId) => {
     workspace.select(sessionId);
@@ -2828,3 +2835,379 @@ for (const platform of ["frontend", "mobile"]) {
     assert.equal(fixture.state.isTemporaryChat, false);
   });
 }
+
+for (const platform of ["frontend", "mobile"]) {
+  test(`${platform}: history loading prepends older messages and preserves drafts`, async () => {
+    const calls = [];
+    let fail = false;
+    const fixture = appCallbacks(platform, {
+      getSessionHistory: async (sessionId, cursor) => {
+        calls.push({ sessionId, cursor });
+        if (fail) throw new Error("fixture failure");
+        return {
+          session: {},
+          messages: [{ id: "older-message" }],
+          documents: [],
+          has_older: true,
+          has_newer: true,
+        };
+      },
+    });
+    fixture.state.messages = [{ id: "first" }, { id: "last" }];
+    const draft = fixture.state.inputQuery;
+    assert.equal(await fixture.callbacks.loadHistoryPage("older"), true);
+    assert.equal(calls[0].cursor.before, "first");
+    assert.deepEqual(
+      Array.from(fixture.state.messages, (m) => m.id),
+      ["older-message", "first", "last"],
+    );
+    assert.equal(fixture.state.hasOlderHistory, true);
+    assert.equal(fixture.state.hasNewerHistory, false);
+    assert.equal(fixture.state.inputQuery, draft);
+    await fixture.callbacks.loadHistoryPage("newer");
+    assert.equal(calls[1].cursor.after, "last");
+    await fixture.callbacks.loadHistoryPage("target", "canonical-old-id");
+    assert.equal(calls[2].cursor.around, "canonical-old-id");
+    fail = true;
+    const before = fixture.state.messages;
+    assert.equal(await fixture.callbacks.loadHistoryPage("older"), false);
+    assert.equal(fixture.state.messages, before);
+    assert.equal(fixture.state.isLoadingHistory, false);
+    assert.ok(fixture.state.historyError);
+  });
+
+  test(`${platform}: history loading shows the requested direction and clears on success or failure`, async () => {
+    for (const direction of ["older", "newer", "latest", "target"]) {
+      for (const fail of [false, true]) {
+        let finish;
+        const fixture = appCallbacks(platform, {
+          getSessionHistory: () =>
+            new Promise((resolve, reject) => {
+              finish = () =>
+                fail
+                  ? reject(new Error("fixture failure"))
+                  : resolve({
+                      session: {},
+                      messages: [{ id: "saved" }],
+                      documents: [],
+                      has_older: true,
+                      has_newer: true,
+                    });
+            }),
+        });
+        fixture.state.messages = [{ id: "current" }];
+        const pending = fixture.callbacks.loadHistoryPage(direction, "saved");
+        assert.equal(fixture.state.isLoadingHistory, true);
+        assert.equal(fixture.state.historyLoadingDirection, direction);
+        finish();
+        assert.equal(await pending, !fail);
+        assert.equal(fixture.state.isLoadingHistory, false);
+        assert.equal(fixture.state.historyLoadingDirection, null);
+        if (fail) assert.equal(fixture.state.messages[0].id, "current");
+      }
+    }
+  });
+
+  test(`${platform}: centered reply windows replace the loaded range and scroll from both boundaries`, async () => {
+    const calls = [];
+    const fixture = appCallbacks(platform, {
+      getSessionHistory: async (sessionId, cursor) => {
+        calls.push(cursor);
+        const start = cursor.around ? 10 : cursor.before ? 5 : 21;
+        const end = cursor.around ? 21 : cursor.before ? 10 : 26;
+        return {
+          session: { id: sessionId },
+          messages: Array.from({ length: end - start }, (_, i) => ({
+            id: `saved-${start + i}`,
+            role: "user",
+            content: `Turn ${start + i}`,
+          })),
+          documents: [],
+          has_older: true,
+          has_newer: true,
+        };
+      },
+    });
+    fixture.state.messages = [{ id: "unrelated-latest" }];
+    const draft = fixture.state.inputQuery;
+    assert.equal(
+      await fixture.callbacks.loadHistoryPage("target", "saved-15"),
+      true,
+    );
+    assert.equal(fixture.state.messages.length, 11);
+    assert.equal(fixture.state.messages[5].id, "saved-15");
+    assert.equal(fixture.state.hasOlderHistory, true);
+    assert.equal(fixture.state.hasNewerHistory, true);
+    await fixture.callbacks.loadHistoryPage("older");
+    await fixture.callbacks.loadHistoryPage("newer");
+    assert.equal(calls[1].before, "saved-10");
+    assert.equal(calls[2].after, "saved-20");
+    assert.deepEqual(
+      Array.from(fixture.state.messages, (message) => message.id),
+      Array.from({ length: 21 }, (_, i) => `saved-${i + 5}`),
+    );
+    assert.equal(fixture.state.inputQuery, draft);
+  });
+
+  test(`${platform}: late page results cannot overwrite a switched or cleared conversation`, async () => {
+    let finish;
+    const fixture = appCallbacks(platform, {
+      getSessionHistory: () => new Promise((resolve) => (finish = resolve)),
+    });
+    fixture.state.messages = [{ id: "first" }];
+    const origin = fixture.workspace.active;
+    const pending = fixture.callbacks.loadHistoryPage("older");
+    fixture.workspace.select("other-chat");
+    fixture.state.messages = [{ id: "other-message" }];
+    finish({
+      session: {},
+      messages: [{ id: "old-message" }],
+      documents: [],
+      has_older: true,
+    });
+    assert.equal(await pending, false);
+    assert.equal(fixture.state.messages[0].id, "other-message");
+    assert.equal(origin.state.messages[0].id, "old-message");
+    assert.equal(origin.state.messages[1].id, "first");
+    fixture.workspace.select("fixture-session");
+    const stale = fixture.callbacks.loadHistoryPage("older");
+    origin.historyRequest++;
+    fixture.workspace.patch(origin, { messages: [] });
+    finish({
+      session: {},
+      messages: [{ id: "must-not-return" }],
+      documents: [],
+    });
+    assert.equal(await stale, false);
+    assert.equal(origin.state.messages.length, 0);
+  });
+
+  test(`${platform}: pagination does not replace streaming or unsaved local content`, async () => {
+    const fixture = appCallbacks(platform, {
+      getSessionHistory: () => assert.fail("Must keep protected messages"),
+    });
+    fixture.state.messages = [{ id: "local" }];
+    fixture.state.isSending = true;
+    assert.equal(await fixture.callbacks.loadHistoryPage("older"), false);
+    fixture.state.isSending = false;
+    fixture.workspace.active.preserveHistory = true;
+    assert.equal(await fixture.callbacks.loadHistoryPage("latest"), false);
+    assert.equal(fixture.state.messages[0].id, "local");
+  });
+
+  test(`${platform}: idle conversation eviction protects active streams, uploads and drafts`, () => {
+    const fixture = appCallbacks(platform, {});
+    const Store = fixture.workspace.constructor;
+    const store = new Store(
+      () => ({ draft: "" }),
+      (entry) => !entry.state.draft,
+      2,
+    );
+    const draft = store.select("draft");
+    store.patch(draft, { draft: "keep" });
+    const streaming = store.select("streaming");
+    streaming.cancel = () =>
+      assert.fail("Cache eviction must not cancel a stream");
+    const uploading = store.select("uploading");
+    uploading.uploads = 1;
+    const idle = [];
+    for (let i = 0; i < 10; i++) idle.push(store.select(`saved-${i}`));
+    assert.equal(idle.filter((entry) => store.live(entry)).length, 3);
+    assert.equal(store.live(draft), true);
+    assert.equal(store.live(streaming), true);
+    assert.equal(store.live(uploading), true);
+    store.patch(idle[0], { draft: "late mutation" });
+    assert.equal(store.active.state.draft, "");
+  });
+}
+
+for (const platform of ["frontend", "mobile"]) {
+  test(`${platform}: history API preserves pagination flags and encodes canonical cursors`, async () => {
+    const fixture = client(platform, (url) =>
+      response(
+        url.endsWith("/user/login")
+          ? credentials("signed")
+          : {
+              session: { id: "fixture-session" },
+              messages: [{ id: "old", content: "Full saved content" }],
+              documents: [],
+              has_older: true,
+              has_newer: true,
+            },
+      ),
+    );
+    await fixture.api.login("fixture", "password");
+    const history = await fixture.api.getSessionHistory("fixture-session", {
+      before: "id with & separator",
+    });
+    const url = new URL(fixture.requests.at(-1).url, "https://fixture.invalid");
+    assert.equal(url.searchParams.get("limit"), "50");
+    assert.equal(url.searchParams.get("before"), "id with & separator");
+    assert.equal(history.has_older, true);
+    assert.equal(history.has_newer, true);
+    assert.equal(history.messages[0].content, "Full saved content");
+    await fixture.api.getSessionHistory("fixture-session", {
+      around: "target with & separator",
+    });
+    const centeredUrl = new URL(
+      fixture.requests.at(-1).url,
+      "https://fixture.invalid",
+    );
+    assert.equal(
+      centeredUrl.searchParams.get("around"),
+      "target with & separator",
+    );
+    assert.equal(centeredUrl.searchParams.has("through"), false);
+  });
+
+  test(`${platform}: sending from an old page restores latest history before appending a new turn`, async () => {
+    const calls = [];
+    let handlers;
+    const fixture = appCallbacks(platform, {
+      getSessionHistory: async (id, cursor) => {
+        calls.push(cursor);
+        return {
+          session: { id },
+          messages: Array.from({ length: 100 }, (_, i) => ({
+            id: `saved-${i}`,
+            role: "user",
+            content: `Turn ${i}`,
+          })),
+          documents: [],
+          has_older: true,
+          has_newer: false,
+        };
+      },
+      streamChat: (...args) => {
+        handlers = args[3];
+        return () => {};
+      },
+    });
+    fixture.context.currentUser = profile;
+    fixture.context.currentUserRef.current = profile;
+    fixture.context.isSendingRef.current = false;
+    fixture.state.messages = [{ id: "old-page" }];
+    fixture.state.hasNewerHistory = true;
+    fixture.state.pendingDocumentIds = [];
+    fixture.state.attachedMedia = [];
+    await fixture.callbacks.handleSendMessage();
+    assert.equal(Object.keys(calls[0]).length, 0);
+    assert.equal(fixture.state.messages[0].id, "saved-0");
+    assert.equal(fixture.state.hasNewerHistory, false);
+    assert.ok(handlers);
+    if (platform === "frontend") handlers.onDone();
+    else handlers.onComplete();
+    assert.equal(fixture.state.messages.length, 102);
+    assert.equal(fixture.state.hasOlderHistory, true);
+    assert.equal(fixture.state.messages.at(-1).role, "assistant");
+  });
+}
+
+for (const platform of ["frontend", "mobile"]) {
+  test(`${platform}: a 52-message chat merges the first two into the latest fifty`, async () => {
+    const fixture = appCallbacks(platform, {
+      getSessionHistory: async () => ({
+        session: {},
+        documents: [],
+        messages: [{ id: "0" }, { id: "1" }],
+        has_older: false,
+        has_newer: true,
+      }),
+    });
+    fixture.state.messages = Array.from({ length: 50 }, (_, i) => ({
+      id: String(i + 2),
+    }));
+    fixture.state.hasOlderHistory = true;
+    await fixture.callbacks.loadHistoryPage("older");
+    assert.deepEqual(
+      Array.from(fixture.state.messages, (m) => m.id),
+      Array.from({ length: 52 }, (_, i) => String(i)),
+    );
+    assert.equal(fixture.state.hasOlderHistory, false);
+    assert.equal(fixture.state.hasNewerHistory, false);
+  });
+
+  test(`${platform}: long-history windows deduplicate overlaps and reload both trimmed edges`, () => {
+    const fixture = appCallbacks(platform, {});
+    const merge = fixture.context.mergeHistoryWindow;
+    const batch = (start, end) =>
+      Array.from({ length: end - start }, (_, i) => ({
+        id: String(start + i),
+      }));
+    const original = {
+      messages: batch(200, 400),
+      hasOlderHistory: true,
+      hasNewerHistory: false,
+    };
+    const older = merge(
+      original,
+      { messages: batch(150, 210), has_older: true, has_newer: true },
+      "older",
+    );
+    assert.equal(older.messages.length, 200);
+    assert.equal(older.messages[0].id, "150");
+    assert.equal(older.messages.at(-1).id, "349");
+    assert.equal(older.hasNewerHistory, true);
+    assert.equal(original.messages[0].id, "200");
+    const newer = merge(
+      older,
+      { messages: batch(340, 400), has_older: true, has_newer: false },
+      "newer",
+    );
+    assert.equal(newer.messages.length, 200);
+    assert.equal(newer.messages[0].id, "200");
+    assert.equal(newer.messages.at(-1).id, "399");
+    assert.equal(newer.hasOlderHistory, true);
+    assert.equal(newer.hasNewerHistory, false);
+    assert.equal(new Set(newer.messages.map((m) => m.id)).size, 200);
+  });
+}
+
+test("web: late automatic title synchronization preserves a manual rename", () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, "../frontend/src/hooks/useChatSessions.ts"),
+    "utf8",
+  );
+  const parsed = ts.createSourceFile(
+    "useChatSessions.ts",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+  );
+  let declaration;
+  function visit(node) {
+    if (
+      ts.isVariableDeclaration(node) &&
+      node.name.getText(parsed) === "updateSessionTitle"
+    )
+      declaration = `const ${node.getText(parsed)};`;
+    ts.forEachChild(node, visit);
+  }
+  visit(parsed);
+  assert.ok(declaration);
+  let sessions = [{ id: "chat", title: "New Conversation" }];
+  const context = {
+    exports: {},
+    useCallback: (run) => run,
+    setSessions: (update) => {
+      sessions = update(sessions);
+    },
+  };
+  vm.runInNewContext(
+    ts.transpileModule(`${declaration} exports.update=updateSessionTitle;`, {
+      compilerOptions: {
+        target: ts.ScriptTarget.ES2020,
+        module: ts.ModuleKind.CommonJS,
+      },
+    }).outputText,
+    context,
+  );
+  context.exports.update("chat", "Generated title", "New Conversation");
+  assert.equal(sessions[0].title, "Generated title");
+  context.exports.update("chat", "My manual title");
+  context.exports.update("chat", "Stale title", "Generated title");
+  assert.equal(sessions[0].title, "My manual title");
+  context.exports.update("chat", "New Conversation");
+  context.exports.update("chat", "Stale title", "Generated title");
+  assert.equal(sessions[0].title, "New Conversation");
+});

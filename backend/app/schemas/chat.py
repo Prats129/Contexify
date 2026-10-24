@@ -67,7 +67,9 @@ class MessageReplyReference(BaseModel):
         description="Role of referenced message ('user' | 'assistant')",
     )
     content: str = Field(
-        default="", description="Snippet or text of the referenced message"
+        default="",
+        max_length=8_000,
+        description="Snippet or text of the referenced message",
     )
     sender_name: Optional[str] = Field(
         default=None, description="Optional display name of the original sender"
@@ -97,13 +99,17 @@ class ChatRequest(BaseModel):
     user_id: Optional[str] = Field(
         default=None, description="Optional ID of authenticated user"
     )
-    message: Optional[str] = Field(default="", description="User question or query")
+    message: Optional[str] = Field(
+        default="", max_length=32_000, description="User question or query"
+    )
     query: Optional[str] = Field(
-        default="", description="Alternative field for user query"
+        default="", max_length=32_000, description="Alternative field for user query"
     )
     mode: Optional[ChatMode] = Field(default=ChatMode.AUTO)
     attachments: Optional[List[MediaAttachment]] = Field(
-        default_factory=list, description="Attached media such as images or documents"
+        default_factory=list,
+        max_length=16,
+        description="Attached media such as images or documents",
     )
     reply_to: Optional[MessageReplyReference] = Field(
         default=None,

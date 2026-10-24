@@ -117,9 +117,13 @@ class LLMService:
             return ""
 
         formatted_lines = []
-        for msg in recent:
+        remaining_chars = 32_000
+        for msg in reversed(recent):
             role = "User" if msg.get("role") == "user" else "Assistant"
-            content = msg.get("content", "").strip()
+            content = msg.get("content", "").strip()[: min(8_000, remaining_chars)]
+            remaining_chars -= len(content)
+            if not content:
+                continue
             atts = msg.get("attachments") or []
             att_desc = ""
             if atts:
@@ -144,7 +148,7 @@ class LLMService:
 
         return (
             "CONVERSATION HISTORY (Previous turns in this chat):\n"
-            + "\n".join(formatted_lines)
+            + "\n".join(reversed(formatted_lines))
             + "\n\n"
         )
 

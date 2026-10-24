@@ -2,13 +2,14 @@ import tempfile
 import uuid
 from functools import partial
 from pathlib import Path
+from threading import BoundedSemaphore
 from typing import List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 
 from app.core.concurrency import run_blocking
 from app.core.config import settings
-from app.core.errors import EmbeddingDimensionError, EmbeddingError
+from app.core.errors import DocumentLimitError, EmbeddingDimensionError, EmbeddingError
 from app.core.logging import logger
 from app.core.security import (
     Principal,
@@ -37,6 +38,9 @@ from app.services.storage_service import storage_service
 from app.services.upload_lifecycle import rollback_failed_upload
 
 router = APIRouter()
+_upload_slots = BoundedSemaphore(
+    getattr(settings, "DOCUMENT_MAX_CONCURRENT_INGESTIONS", 2)
+)
 
 ALLOWED_EXTENSIONS = {".pdf", ".txt", ".md", ".csv", ".json", ".log"}
 
@@ -122,10 +126,10 @@ def _process_document_upload(
     )
 
     try:
-        # Reject unsafe PDFs before persisting the raw file or indexing anything.
+        # Validate extracted text before persisting the raw file or indexing.
         pages = (
             rag_service.extract_text_from_file(temp_file_path)
-            if temp_file_path.suffix == ".pdf"
+            if temp_file_path.suffix in ALLOWED_EXTENSIONS
             else None
         )
         # Keep the attempt alive in the worker until storage/indexing actually
@@ -149,6 +153,8 @@ def _process_document_upload(
         )
     except HTTPException:
         raise
+    except DocumentLimitError as e:
+        raise HTTPException(413, str(e)) from None
     except PDFProcessingError as e:
         raise HTTPException(e.status_code, str(e)) from None
     except (EmbeddingDimensionError, EmbeddingError) as e:
@@ -187,29 +193,33 @@ async def upload_document(
             detail=f"Unsupported file type '{ext}'. Allowed formats: {', '.join(ALLOWED_EXTENSIONS)}",
         )
 
-    # Read file content once for disk caching and object storage upload
+    if not _upload_slots.acquire(blocking=False):
+        raise HTTPException(503, "Document processing is busy. Please retry shortly.")
     try:
-        content = (
-            await file.read(settings.PDF_MAX_FILE_SIZE_BYTES + 1)
+        max_size = (
+            settings.PDF_MAX_FILE_SIZE_BYTES
             if ext == ".pdf"
-            else await file.read()
+            else getattr(settings, "DOCUMENT_MAX_FILE_SIZE_BYTES", 25 * 1024 * 1024)
         )
-    except Exception as e:
-        logger.exception(f"Failed to read uploaded file: {e}")
-        raise HTTPException(status_code=500, detail="Failed to read uploaded file.")
+        try:
+            content = await file.read(max_size + 1)
+        except Exception:
+            logger.exception("Failed to read uploaded document")
+            raise HTTPException(500, "Failed to read uploaded file.") from None
+        if len(content) > max_size:
+            raise HTTPException(413, "Document exceeds the upload size limit.")
 
-    if ext == ".pdf" and len(content) > settings.PDF_MAX_FILE_SIZE_BYTES:
-        raise HTTPException(413, "PDF exceeds the upload size limit.")
-
-    return await run_blocking(
-        _process_document_upload,
-        content,
-        filename,
-        session_id,
-        user_id,
-        file.content_type,
-        principal,
-    )
+        return await run_blocking(
+            _process_document_upload,
+            content,
+            filename,
+            session_id,
+            user_id,
+            file.content_type,
+            principal,
+        )
+    finally:
+        _upload_slots.release()
 
 
 @router.get("/list", response_model=DocumentListResponse)

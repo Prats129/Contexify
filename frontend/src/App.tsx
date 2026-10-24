@@ -5,7 +5,10 @@ import React, {
   useRef,
   useSyncExternalStore,
 } from "react";
-import { ConversationStore } from "./services/conversation_store";
+import {
+  ConversationStore,
+  mergeHistoryWindow,
+} from "./services/conversation_store";
 import { apiService } from "./services/api";
 import { Sidebar } from "./components/Sidebar/Sidebar";
 import { ChatWorkspace } from "./components/Chat/ChatWorkspace";
@@ -103,24 +106,45 @@ export const App: React.FC = () => {
 
   const [conversationStore] = useState(
     () =>
-      new ConversationStore(() => ({
-        isTemporaryChat: false,
-        currentMode: "AUTO" as ChatMode,
-        documents: [] as DocumentMetadata[],
-        pendingDocumentIds: [] as string[],
-        attachedMedia: [] as MediaAttachment[],
-        messages: [] as Message[],
-        replyingTo: null as MessageReplyReference | null,
-        isSending: false,
-        isClearingHistory: false,
-        streamingMessage: null as StreamingMessageState | null,
-        isUploading: false,
-        isLoadingHistory: false,
-        historyError: null as string | null,
-        operationError: null as string | null,
-        inputQuery: "",
-        uploadStatusText: "",
-      })),
+      new ConversationStore(
+        () => ({
+          isTemporaryChat: false,
+          currentMode: "AUTO" as ChatMode,
+          documents: [] as DocumentMetadata[],
+          pendingDocumentIds: [] as string[],
+          attachedMedia: [] as MediaAttachment[],
+          messages: [] as Message[],
+          replyingTo: null as MessageReplyReference | null,
+          isSending: false,
+          isClearingHistory: false,
+          streamingMessage: null as StreamingMessageState | null,
+          isUploading: false,
+          isLoadingHistory: false,
+          historyLoadingDirection: null as
+            | "older"
+            | "newer"
+            | "latest"
+            | "target"
+            | null,
+          historyLatestRevision: 0,
+          hasOlderHistory: false,
+          hasNewerHistory: false,
+          historyError: null as string | null,
+          operationError: null as string | null,
+          inputQuery: "",
+          uploadStatusText: "",
+        }),
+        (entry) =>
+          !entry.state.isSending &&
+          !entry.state.isUploading &&
+          !entry.state.isLoadingHistory &&
+          !entry.state.isClearingHistory &&
+          !entry.state.inputQuery &&
+          !entry.state.replyingTo &&
+          !entry.state.attachedMedia.length &&
+          !entry.state.pendingDocumentIds.length &&
+          !entry.state.operationError,
+      ),
   );
   useSyncExternalStore(
     conversationStore.subscribe,
@@ -154,6 +178,7 @@ export const App: React.FC = () => {
     uploadStatusText,
     operationError,
     isLoadingHistory,
+    historyLoadingDirection,
     historyError,
   } = conversation.state;
   const setIsTemporaryChat = conversationStore.setter(
@@ -316,11 +341,12 @@ export const App: React.FC = () => {
       if (typeof window !== "undefined" && window.innerWidth < 768)
         setIsSidebarOpen(false);
       if (pushUrl) updateUrlForSession(sessionId, isUnauthenticated);
-      if (!currentUser?.id || isUnauthenticated) return;
-      localStorage.setItem("contexify_active_session", sessionId);
+      if (currentUser?.id && !isUnauthenticated)
+        localStorage.setItem("contexify_active_session", sessionId);
       if (entry.state.isSending || entry.preserveHistory) return;
       conversationStore.patch(entry, {
         isLoadingHistory: true,
+        historyLoadingDirection: "latest",
         historyError: null,
       });
       try {
@@ -356,7 +382,13 @@ export const App: React.FC = () => {
           ...(entry.state.messages === before.messages &&
           !entry.state.isSending &&
           !entry.preserveHistory
-            ? { messages: history.messages || [] }
+            ? {
+                messages: history.messages || [],
+                historyLatestRevision:
+                  (entry.state.historyLatestRevision ?? 0) + 1,
+                hasOlderHistory: Boolean(history.has_older),
+                hasNewerHistory: Boolean(history.has_newer),
+              }
             : {}),
         });
       } catch (error) {
@@ -383,11 +415,86 @@ export const App: React.FC = () => {
         console.error("Failed to load session history:", error);
       } finally {
         if (conversationStore.live(entry) && request === entry.historyRequest)
-          conversationStore.patch(entry, { isLoadingHistory: false });
+          conversationStore.patch(entry, {
+            isLoadingHistory: false,
+            historyLoadingDirection: null,
+          });
       }
     },
     [currentUser, conversationStore, setActiveSessionId, showAlert],
   );
+
+  const loadHistoryPage = async (
+    direction: "older" | "newer" | "latest" | "target",
+    targetId?: string,
+  ): Promise<boolean> => {
+    const entry = conversationStore.active;
+    if (
+      !entry.sessionId ||
+      entry.state.isSending ||
+      entry.state.isLoadingHistory ||
+      entry.preserveHistory
+    )
+      return false;
+    const authVersion = authVersionRef.current;
+    const current = entry.state.messages;
+    if (direction === "target" && !targetId) return false;
+    if ((direction === "older" || direction === "newer") && !current.length)
+      return false;
+    const request = ++entry.historyRequest;
+    const cursor =
+      direction === "target"
+        ? { around: targetId }
+        : direction === "older"
+          ? { before: current[0]?.id }
+          : direction === "newer"
+            ? { after: current[current.length - 1]?.id }
+            : {};
+    conversationStore.patch(entry, {
+      isLoadingHistory: true,
+      historyLoadingDirection: direction,
+      historyError: null,
+    });
+    try {
+      const history = await apiService.getSessionHistory(
+        entry.sessionId,
+        cursor,
+      );
+      if (
+        authVersion !== authVersionRef.current ||
+        !conversationStore.live(entry) ||
+        request !== entry.historyRequest
+      )
+        return false;
+      conversationStore.patch(entry, {
+        ...mergeHistoryWindow(entry.state, history, direction),
+        ...(direction === "latest"
+          ? {
+              historyLatestRevision:
+                (entry.state.historyLatestRevision ?? 0) + 1,
+            }
+          : {}),
+      });
+      return conversationStore.active === entry;
+    } catch {
+      if (
+        authVersion === authVersionRef.current &&
+        conversationStore.live(entry) &&
+        request === entry.historyRequest
+      )
+        conversationStore.patch(entry, {
+          historyError:
+            "Could not load more messages. Your current messages have been kept. Scroll again to retry.",
+        });
+      return false;
+    } finally {
+      if (conversationStore.live(entry) && request === entry.historyRequest)
+        conversationStore.patch(entry, {
+          isLoadingHistory: false,
+          historyLoadingDirection: null,
+        });
+    }
+  };
 
   // --- 2. User Initialization (Guest vs Logged In) ---
   useEffect(() => {
@@ -555,7 +662,7 @@ export const App: React.FC = () => {
       setReplyingTo({
         id: msg.id || `msg-${Date.now()}`,
         role: msg.role,
-        content: msg.content,
+        content: msg.content.slice(0, 4_000),
       });
     },
     [setReplyingTo],
@@ -847,6 +954,10 @@ export const App: React.FC = () => {
       });
       conversation.preserveHistory = false;
       setMessages([]);
+      conversationStore.patch(conversation, {
+        hasOlderHistory: false,
+        hasNewerHistory: false,
+      });
       setStreamingMessage(null);
       setReplyingTo(null);
     } catch (e: unknown) {
@@ -936,6 +1047,14 @@ export const App: React.FC = () => {
     )
       return;
 
+    if (conversation.state.hasNewerHistory) {
+      if (
+        !(await loadHistoryPage("latest")) ||
+        conversationStore.active !== conversation ||
+        authVersion !== authVersionRef.current
+      )
+        return;
+    }
     setIsSending(true);
     const abortController = new AbortController();
     conversation.cancel = () => abortController.abort();
@@ -1188,7 +1307,6 @@ export const App: React.FC = () => {
           conversation.cancel = null;
           setIsSending(false);
 
-          conversation.preserveHistory ||= !userToUse;
           const finishedAssistantMsg: Message = {
             id: assistantMessageId,
             session_id: targetSessionId,
@@ -1200,19 +1318,33 @@ export const App: React.FC = () => {
           };
 
           // Append to state
-          setMessages((prev) => [...prev, finishedAssistantMsg]);
+          setMessages((prev) => {
+            const completed = [...prev, finishedAssistantMsg];
+            if (completed.length > 200 && !conversation.preserveHistory) {
+              conversationStore.patch(conversation, { hasOlderHistory: true });
+              return completed.slice(-200);
+            }
+            return completed;
+          });
           setStreamingMessage(null);
 
           // If logged-in user, refresh active session title if it was generated
           if (currentUser?.id && targetSessionId) {
             try {
+              const expectedTitle = sessions.find(
+                (session) => session.id === targetSessionId,
+              )?.title;
               const hist = await apiService.getSessionHistory(targetSessionId);
               if (
                 authVersion === authVersionRef.current &&
                 conversationStore.live(conversation) &&
                 hist?.session?.title
               ) {
-                updateSessionTitle(targetSessionId, hist.session.title);
+                updateSessionTitle(
+                  targetSessionId,
+                  hist.session.title,
+                  expectedTitle ?? "New Conversation",
+                );
               }
             } catch (err) {
               console.error("Failed to sync session title:", err);
@@ -1243,6 +1375,10 @@ export const App: React.FC = () => {
     setUploadStatusText("");
     setStreamingMessage(null);
     setMessages([]);
+    conversationStore.patch(conversation, {
+      hasOlderHistory: false,
+      hasNewerHistory: false,
+    });
     setDocuments([]);
     setPendingDocumentIds([]);
     setAttachedMedia([]);
@@ -1425,6 +1561,16 @@ export const App: React.FC = () => {
       />
 
       <ChatWorkspace
+        historyLatestRevision={conversation.state.historyLatestRevision}
+        hasOlderHistory={conversation.state.hasOlderHistory}
+        hasNewerHistory={conversation.state.hasNewerHistory}
+        historyLoadingDirection={
+          isLoadingHistory ? historyLoadingDirection : null
+        }
+        historyNavigationDisabled={
+          isLoadingHistory || isSending || conversation.preserveHistory
+        }
+        onHistoryPage={loadHistoryPage}
         conversationError={operationError || historyError}
         isBusy={isLoadingHistory || isClearingHistory}
         key={conversation.viewId}

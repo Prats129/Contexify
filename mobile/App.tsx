@@ -11,6 +11,7 @@ import {
   Text,
   StyleSheet,
   FlatList,
+  ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
   TouchableOpacity,
@@ -36,7 +37,10 @@ import {
   type AccentColor,
   type ThemeMode,
 } from "./src/theme/colors";
-import { ConversationStore } from "./src/services/conversation_store";
+import {
+  ConversationStore,
+  mergeHistoryWindow,
+} from "./src/services/conversation_store";
 import { apiService } from "./src/services/api";
 import type {
   User,
@@ -104,23 +108,44 @@ export default function App() {
   }, [currentUser]);
   const [conversationStore] = useState(
     () =>
-      new ConversationStore(() => ({
-        isTemporaryChat: false,
-        currentMode: "AUTO" as ChatMode,
-        documents: [] as DocumentMetadata[],
-        pendingDocumentIds: [] as string[],
-        attachedMedia: [] as MediaAttachment[],
-        messages: [] as Message[],
-        replyingTo: null as MessageReplyReference | null,
-        isSending: false,
-        isClearingHistory: false,
-        streamingMessage: null as StreamingMessageState | null,
-        isUploading: false,
-        isLoadingHistory: false,
-        historyError: null as string | null,
-        operationError: null as string | null,
-        query: "",
-      })),
+      new ConversationStore(
+        () => ({
+          isTemporaryChat: false,
+          currentMode: "AUTO" as ChatMode,
+          documents: [] as DocumentMetadata[],
+          pendingDocumentIds: [] as string[],
+          attachedMedia: [] as MediaAttachment[],
+          messages: [] as Message[],
+          replyingTo: null as MessageReplyReference | null,
+          isSending: false,
+          isClearingHistory: false,
+          streamingMessage: null as StreamingMessageState | null,
+          isUploading: false,
+          isLoadingHistory: false,
+          historyLoadingDirection: null as
+            | "older"
+            | "newer"
+            | "latest"
+            | "target"
+            | null,
+          historyLatestRevision: 0,
+          hasOlderHistory: false,
+          hasNewerHistory: false,
+          historyError: null as string | null,
+          operationError: null as string | null,
+          query: "",
+        }),
+        (entry) =>
+          !entry.state.isSending &&
+          !entry.state.isUploading &&
+          !entry.state.isLoadingHistory &&
+          !entry.state.isClearingHistory &&
+          !entry.state.query &&
+          !entry.state.replyingTo &&
+          !entry.state.attachedMedia.length &&
+          !entry.state.pendingDocumentIds.length &&
+          !entry.state.operationError,
+      ),
   );
   useSyncExternalStore(
     conversationStore.subscribe,
@@ -152,6 +177,7 @@ export default function App() {
     query,
     operationError,
     isLoadingHistory,
+    historyLoadingDirection,
     historyError,
   } = conversation.state;
   const setIsTemporaryChat = conversationStore.setter(
@@ -350,6 +376,19 @@ export default function App() {
 
   const flatListRef = useRef<FlatList<Message>>(null);
   const isAtBottomRef = useRef(true);
+  const historyGestureRef = useRef({
+    viewId: -1,
+    interacted: false,
+    positioned: false,
+    latestRevision: 0,
+  });
+  const historyEdgeLoadingRef = useRef<number | null>(null);
+  const pendingJumpRef = useRef<{
+    id: string;
+    viewId: number;
+    attempts: number;
+  } | null>(null);
+  const jumpRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const showScrollToBottomRef = useRef(false);
   const scrollBtnAnim = useRef(new Animated.Value(0)).current;
@@ -664,6 +703,7 @@ export default function App() {
     if (entry.state.isSending || entry.preserveHistory) return;
     conversationStore.patch(entry, {
       isLoadingHistory: true,
+      historyLoadingDirection: "latest",
       historyError: null,
     });
     try {
@@ -697,7 +737,13 @@ export default function App() {
         ...(entry.state.messages === before.messages &&
         !entry.state.isSending &&
         !entry.preserveHistory
-          ? { messages: Array.isArray(hist?.messages) ? hist.messages : [] }
+          ? {
+              messages: Array.isArray(hist?.messages) ? hist.messages : [],
+              historyLatestRevision:
+                (entry.state.historyLatestRevision ?? 0) + 1,
+              hasOlderHistory: Boolean(hist.has_older),
+              hasNewerHistory: Boolean(hist.has_newer),
+            }
           : {}),
       });
     } catch {
@@ -722,8 +768,121 @@ export default function App() {
       }
     } finally {
       if (conversationStore.live(entry) && request === entry.historyRequest)
-        conversationStore.patch(entry, { isLoadingHistory: false });
+        conversationStore.patch(entry, {
+          isLoadingHistory: false,
+          historyLoadingDirection: null,
+        });
     }
+  };
+
+  const loadHistoryPage = async (
+    direction: "older" | "newer" | "latest" | "target",
+    targetId?: string,
+  ): Promise<boolean> => {
+    const entry = conversationStore.active;
+    if (
+      !entry.sessionId ||
+      entry.state.isSending ||
+      entry.state.isLoadingHistory ||
+      entry.preserveHistory
+    )
+      return false;
+    const authVersion = authVersionRef.current;
+    const current = entry.state.messages;
+    if (direction === "target" && !targetId) return false;
+    if ((direction === "older" || direction === "newer") && !current.length)
+      return false;
+    const request = ++entry.historyRequest;
+    const cursor =
+      direction === "target"
+        ? { around: targetId }
+        : direction === "older"
+          ? { before: current[0]?.id }
+          : direction === "newer"
+            ? { after: current[current.length - 1]?.id }
+            : {};
+    conversationStore.patch(entry, {
+      isLoadingHistory: true,
+      historyLoadingDirection: direction,
+      historyError: null,
+    });
+    try {
+      const history = await apiService.getSessionHistory(
+        entry.sessionId,
+        cursor,
+      );
+      if (
+        authVersion !== authVersionRef.current ||
+        !conversationStore.live(entry) ||
+        request !== entry.historyRequest
+      )
+        return false;
+      conversationStore.patch(entry, {
+        ...mergeHistoryWindow(entry.state, history, direction),
+        ...(direction === "latest"
+          ? {
+              historyLatestRevision:
+                (entry.state.historyLatestRevision ?? 0) + 1,
+            }
+          : {}),
+      });
+      return conversationStore.active === entry;
+    } catch {
+      if (
+        authVersion === authVersionRef.current &&
+        conversationStore.live(entry) &&
+        request === entry.historyRequest
+      )
+        conversationStore.patch(entry, {
+          historyError:
+            "Could not load more messages. Your current messages have been kept. Scroll again to retry.",
+        });
+      return false;
+    } finally {
+      if (conversationStore.live(entry) && request === entry.historyRequest)
+        conversationStore.patch(entry, {
+          isLoadingHistory: false,
+          historyLoadingDirection: null,
+        });
+    }
+  };
+
+  const handleHistoryScroll = (
+    event: NativeSyntheticEvent<NativeScrollEvent>,
+  ) => {
+    const gesture = historyGestureRef.current;
+    if (gesture.viewId !== conversation.viewId) return;
+    if (!gesture.interacted && !conversation.state.hasNewerHistory) {
+      isAtBottomRef.current = true;
+      return;
+    }
+    handleScroll(event);
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    if (conversation.state.hasNewerHistory) {
+      isAtBottomRef.current = false;
+      showScrollToBottomRef.current = true;
+      setShowScrollToBottom(true);
+    }
+    if (
+      !gesture.interacted ||
+      historyEdgeLoadingRef.current === conversation.viewId ||
+      conversation.state.isLoadingHistory
+    )
+      return;
+    const direction =
+      contentOffset.y < 120 && conversation.state.hasOlderHistory
+        ? "older"
+        : contentSize.height - contentOffset.y - layoutMeasurement.height <
+              120 && conversation.state.hasNewerHistory
+          ? "newer"
+          : null;
+    if (!direction) return;
+    historyEdgeLoadingRef.current = conversation.viewId;
+    isAtBottomRef.current = false;
+    void loadHistoryPage(direction).finally(() => {
+      if (historyEdgeLoadingRef.current === conversation.viewId)
+        historyEdgeLoadingRef.current = null;
+    });
   };
 
   const handleToggleTemporaryChat = () => {
@@ -757,7 +916,7 @@ export default function App() {
       setReplyingTo({
         id: msg.id || `msg_${Date.now()}`,
         role: msg.role,
-        content: msg.content,
+        content: msg.content.slice(0, 4_000),
       });
     },
     [setReplyingTo],
@@ -765,17 +924,59 @@ export default function App() {
 
   useEffect(() => {
     return () => {
-      if (highlightTimerRef.current) {
-        clearTimeout(highlightTimerRef.current);
-      }
+      if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+      if (jumpRetryTimerRef.current) clearTimeout(jumpRetryTimerRef.current);
+      pendingJumpRef.current = null;
     };
   }, [setReplyingTo]);
 
+  const scrollToPendingMessage = () => {
+    const pending = pendingJumpRef.current;
+    if (!pending || pending.viewId !== conversationStore.active.viewId) return;
+    const index = conversationStore.active.state.messages.findIndex(
+      (message) => message.id === pending.id,
+    );
+    if (index < 0 || pending.attempts >= 5) {
+      pendingJumpRef.current = null;
+      setOperationError(
+        "Could not scroll to the referenced message. Please tap the reply again.",
+      );
+      return;
+    }
+    pending.attempts++;
+    flatListRef.current?.scrollToIndex({
+      index,
+      animated: true,
+      viewPosition: 0.5,
+    });
+  };
+
   const handleJumpToMessage = useCallback(
-    (targetMessageId: string) => {
+    async (targetMessageId: string) => {
       if (!targetMessageId) return;
       const cleanTargetId = targetMessageId.replace(/^msg[-_]/, "");
-      const index = messages.findIndex(
+      isAtBottomRef.current = false;
+      historyGestureRef.current.interacted = false;
+      let targetMessages = messages;
+      const loadedIndex = messages.findIndex(
+        (m) => m.id === cleanTargetId || m.id === targetMessageId,
+      );
+      if (
+        loadedIndex < 0 ||
+        (conversation.state.hasOlderHistory && loadedIndex < 5) ||
+        (conversation.state.hasNewerHistory &&
+          messages.length - loadedIndex - 1 < 5)
+      ) {
+        if (
+          !(await loadHistoryPage("target", cleanTargetId)) ||
+          conversationStore.active !== conversation
+        )
+          return;
+        targetMessages = conversation.state.messages;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        if (conversationStore.active !== conversation) return;
+      }
+      const index = targetMessages.findIndex(
         (m) =>
           m.id === targetMessageId ||
           m.id === cleanTargetId ||
@@ -785,20 +986,14 @@ export default function App() {
       if (index >= 0 && flatListRef.current) {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
         isAtBottomRef.current = false;
-        try {
-          flatListRef.current.scrollToIndex({
-            index,
-            animated: true,
-            viewPosition: 0.5,
-          });
-        } catch {
-          flatListRef.current.scrollToOffset({
-            offset: Math.max(0, index * 95),
-            animated: true,
-          });
-        }
+        pendingJumpRef.current = {
+          id: targetMessages[index].id,
+          viewId: conversation.viewId,
+          attempts: 0,
+        };
+        scrollToPendingMessage();
 
-        const foundId = messages[index].id;
+        const foundId = targetMessages[index].id;
         if (highlightTimerRef.current) {
           clearTimeout(highlightTimerRef.current);
         }
@@ -922,6 +1117,10 @@ export default function App() {
               });
               conversation.preserveHistory = false;
               setMessages([]);
+              conversationStore.patch(conversation, {
+                hasOlderHistory: false,
+                hasNewerHistory: false,
+              });
               setStreamingMessage(null);
               setReplyingTo(null);
               if (sessionId !== activeSessionIdRef.current) return;
@@ -964,6 +1163,14 @@ export default function App() {
     )
       return;
 
+    if (conversation.state.hasNewerHistory) {
+      if (
+        !(await loadHistoryPage("latest")) ||
+        conversationStore.active !== conversation ||
+        authVersion !== authVersionRef.current
+      )
+        return;
+    }
     isSendingRef.current = true;
     setIsSending(true);
     setQuery("");
@@ -1194,7 +1401,6 @@ export default function App() {
                 Haptics.NotificationFeedbackType.Success,
               );
 
-            conversation.preserveHistory ||= !userToUse;
             const aiMsg: Message = {
               id: assistantMessageId,
               session_id: sessionId!,
@@ -1208,7 +1414,16 @@ export default function App() {
               attachments: streamedMedia.length > 0 ? streamedMedia : undefined,
               created_at: assistantCreatedAt,
             };
-            setMessages((prev) => [...prev, aiMsg]);
+            setMessages((prev) => {
+              const completed = [...prev, aiMsg];
+              if (completed.length > 200 && !conversation.preserveHistory) {
+                conversationStore.patch(conversation, {
+                  hasOlderHistory: true,
+                });
+                return completed.slice(-200);
+              }
+              return completed;
+            });
           });
         },
         onError: (errMsg) => {
@@ -2017,17 +2232,64 @@ export default function App() {
                     Platform.OS === "ios" ? "interactive" : "none"
                   }
                   keyboardShouldPersistTaps="handled"
-                  onScroll={handleScroll}
+                  onScroll={handleHistoryScroll}
                   scrollEventThrottle={16}
                   onScrollToIndexFailed={(info) => {
+                    const pending = pendingJumpRef.current;
+                    if (!pending || pending.viewId !== conversation.viewId)
+                      return;
+                    if (pending.attempts >= 5) {
+                      pendingJumpRef.current = null;
+                      setOperationError(
+                        "Could not scroll to the referenced message. Please tap the reply again.",
+                      );
+                      return;
+                    }
                     flatListRef.current?.scrollToOffset({
                       offset: Math.max(0, info.averageItemLength * info.index),
-                      animated: true,
+                      animated: false,
                     });
+                    if (jumpRetryTimerRef.current)
+                      clearTimeout(jumpRetryTimerRef.current);
+                    jumpRetryTimerRef.current = setTimeout(
+                      scrollToPendingMessage,
+                      100,
+                    );
+                  }}
+                  maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+                  onScrollBeginDrag={(event) => {
+                    historyGestureRef.current = {
+                      viewId: conversation.viewId,
+                      interacted: true,
+                      positioned: true,
+                      latestRevision:
+                        conversation.state.historyLatestRevision ?? 0,
+                    };
+                    handleHistoryScroll(event);
                   }}
                   onContentSizeChange={() => {
-                    if (isAtBottomRef.current) {
-                      flatListRef.current?.scrollToEnd({ animated: true });
+                    const gesture = historyGestureRef.current;
+                    const initial =
+                      gesture.viewId !== conversation.viewId ||
+                      !gesture.positioned ||
+                      gesture.latestRevision !==
+                        (conversation.state.historyLatestRevision ?? 0);
+                    if (!messages.length) return;
+                    if (initial) {
+                      historyGestureRef.current = {
+                        viewId: conversation.viewId,
+                        interacted: false,
+                        positioned: true,
+                        latestRevision:
+                          conversation.state.historyLatestRevision ?? 0,
+                      };
+                      isAtBottomRef.current = true;
+                    }
+                    if (initial || isAtBottomRef.current) {
+                      flatListRef.current?.scrollToEnd({
+                        animated:
+                          !initial && historyGestureRef.current.interacted,
+                      });
                     }
                   }}
                   showsVerticalScrollIndicator={false}
@@ -2048,6 +2310,37 @@ export default function App() {
                     ) : null
                   }
                 />
+              )}
+
+              {isLoadingHistory && (
+                <View
+                  pointerEvents="none"
+                  accessibilityRole="progressbar"
+                  accessibilityLabel="Loading messages"
+                  accessibilityLiveRegion="polite"
+                  style={{
+                    position: "absolute",
+                    alignSelf: "center",
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 8,
+                    ...(historyLoadingDirection === "newer" ||
+                    historyLoadingDirection === "latest"
+                      ? { bottom: 52 }
+                      : { top: 8 }),
+                    paddingHorizontal: 12,
+                    paddingVertical: 8,
+                    borderRadius: 20,
+                    backgroundColor: theme.bgCard,
+                    borderWidth: StyleSheet.hairlineWidth,
+                    borderColor: theme.textMuted,
+                  }}
+                >
+                  <ActivityIndicator size="small" color={theme.textMuted} />
+                  <Text style={{ color: theme.textMuted, fontSize: 12 }}>
+                    Loading messages...
+                  </Text>
+                </View>
               )}
 
               {/* Scroll to Bottom / Jump to Latest Message Floating Button */}
@@ -2085,7 +2378,17 @@ export default function App() {
                           : "rgba(0,0,0,0.08)",
                       },
                     ]}
-                    onPress={handleScrollToBottom}
+                    onPress={async () => {
+                      historyGestureRef.current.interacted = false;
+                      isAtBottomRef.current = true;
+                      if (
+                        conversation.state.hasNewerHistory &&
+                        !(await loadHistoryPage("latest"))
+                      )
+                        return;
+                      if (conversationStore.active === conversation)
+                        handleScrollToBottom();
+                    }}
                     activeOpacity={0.85}
                     accessibilityLabel="Scroll to latest message"
                     accessibilityRole="button"

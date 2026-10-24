@@ -190,14 +190,17 @@ class ChatHistoryService:
             )
             return cursor.rowcount > 0
 
-    def update_session_title(self, session_id: str, title: str) -> bool:
+    def update_session_title(
+        self, session_id: str, title: str, *, only_if_default: bool = False
+    ) -> bool:
         now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                "UPDATE chat_sessions SET title = ?, updated_at = ? WHERE id = ?",
-                (title, now, session_id),
-            )
+            query = "UPDATE chat_sessions SET title = ?, updated_at = ? WHERE id = ?"
+            if only_if_default:
+                # Check during the write so a concurrent manual rename wins.
+                query += " AND (title = 'New Conversation' OR title = '')"
+            cursor.execute(query, (title, now, session_id))
             return cursor.rowcount > 0
 
     def update_session_mode(self, session_id: str, mode: ChatMode) -> bool:
@@ -324,28 +327,27 @@ class ChatHistoryService:
                         "ON CONFLICT DO NOTHING",
                         (session_id, attachment.id),
                     )
-            if not db_session["user_id"].startswith("guest_"):
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    INSERT INTO messages (id, session_id, role, content, citations_json, attachments_json, reply_to_json, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        message_id,
-                        session_id,
-                        role,
-                        content,
-                        citations_json,
-                        attachments_json,
-                        reply_to_json,
-                        now,
-                    ),
-                )
-                cursor.execute(
-                    "UPDATE chat_sessions SET updated_at = ? WHERE id = ?",
-                    (now, session_id),
-                )
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO messages (id, session_id, role, content, citations_json, attachments_json, reply_to_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    message_id,
+                    session_id,
+                    role,
+                    content,
+                    citations_json,
+                    attachments_json,
+                    reply_to_json,
+                    now,
+                ),
+            )
+            cursor.execute(
+                "UPDATE chat_sessions SET updated_at = ? WHERE id = ?",
+                (now, session_id),
+            )
 
         citations_obj = None
         if citations:
@@ -364,19 +366,58 @@ class ChatHistoryService:
             created_at=now,
         )
 
-    def get_session_messages(self, session_id: str) -> List[MessageResponse]:
+    def get_session_messages(
+        self,
+        session_id: str,
+        *,
+        limit: Optional[int] = None,
+        before: Optional[str] = None,
+        after: Optional[str] = None,
+        through: Optional[str] = None,
+        content_limit: Optional[int] = None,
+    ) -> List[MessageResponse]:
+        """Read a stable chronological window; cursors always belong to this chat."""
         with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT id, session_id, role, content, citations_json, attachments_json, reply_to_json, created_at
-                FROM messages
-                WHERE session_id = ?
-                ORDER BY created_at ASC
-                """,
-                (session_id,),
+            conditions = ["session_id = ?"]
+            params: List[Any] = [session_id]
+            if sum(bool(value) for value in (before, after, through)) > 1:
+                raise HTTPException(400, "Use only one history cursor.")
+            anchor_id = before or after or through
+            if anchor_id:
+                anchor = conn.execute(
+                    "SELECT created_at,id FROM messages WHERE session_id=? AND id=?",
+                    (session_id, anchor_id),
+                ).fetchone()
+                if not anchor:
+                    raise HTTPException(
+                        404,
+                        "The referenced message is no longer available in this chat.",
+                    )
+                comparison = ">" if after else ("<=" if through else "<")
+                conditions.append(f"(created_at,id) {comparison} (?,?)")
+                params.extend((anchor["created_at"], anchor["id"]))
+            descending = limit is not None and not after
+            content_column = (
+                "content" if content_limit is None else "substr(content,1,?) AS content"
             )
-            rows = cursor.fetchall()
+            query = (
+                f"SELECT id, session_id, role, {content_column}, citations_json, attachments_json, reply_to_json, created_at "
+                "FROM messages WHERE "
+                + " AND ".join(conditions)
+                + (
+                    " ORDER BY created_at DESC,id DESC"
+                    if descending
+                    else " ORDER BY created_at ASC,id ASC"
+                )
+            )
+            if limit is not None:
+                query += " LIMIT ?"
+                params.append(max(1, min(limit, 200)))
+            if content_limit is not None:
+                params.insert(0, max(1, content_limit))
+            rows = conn.execute(query, params).fetchall()
+            if descending:
+                rows = list(reversed(rows))
 
             messages = []
             for row in rows:
@@ -540,14 +581,57 @@ class ChatHistoryService:
             cursor.execute("DELETE FROM documents WHERE id = ?", (document_id,))
             return cursor.rowcount > 0
 
-    def get_session_history(self, session_id: str) -> Optional[SessionHistoryResponse]:
+    def get_session_history(
+        self,
+        session_id: str,
+        *,
+        limit: Optional[int] = None,
+        before: Optional[str] = None,
+        after: Optional[str] = None,
+        through: Optional[str] = None,
+        around: Optional[str] = None,
+    ) -> Optional[SessionHistoryResponse]:
         session = self.get_session(session_id)
         if not session:
             return None
-        messages = self.get_session_messages(session_id)
-        documents = self.list_session_documents(session_id)
+        if around is not None:
+            if not around or any(
+                cursor is not None for cursor in (before, after, through)
+            ):
+                raise HTTPException(
+                    status_code=400, detail="Use only one history cursor."
+                )
+            # Reply navigation includes the target and up to five neighbors on each side.
+            messages = self.get_session_messages(session_id, limit=6, through=around)
+            messages += self.get_session_messages(session_id, limit=5, after=around)
+        else:
+            messages = self.get_session_messages(
+                session_id, limit=limit, before=before, after=after, through=through
+            )
+        older = newer = False
+        if messages:
+            with get_db_connection() as conn:
+                first, last = messages[0], messages[-1]
+                older = (
+                    conn.execute(
+                        "SELECT 1 FROM messages WHERE session_id=? AND (created_at,id)<(?,?) LIMIT 1",
+                        (session_id, first.created_at, first.id),
+                    ).fetchone()
+                    is not None
+                )
+                newer = (
+                    conn.execute(
+                        "SELECT 1 FROM messages WHERE session_id=? AND (created_at,id)>(?,?) LIMIT 1",
+                        (session_id, last.created_at, last.id),
+                    ).fetchone()
+                    is not None
+                )
         return SessionHistoryResponse(
-            session=session, messages=messages, documents=documents
+            session=session,
+            messages=messages,
+            documents=self.list_session_documents(session_id),
+            has_older=older,
+            has_newer=newer,
         )
 
     def purge_expired_temporary_sessions(self) -> int:

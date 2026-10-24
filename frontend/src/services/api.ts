@@ -556,9 +556,18 @@ export const apiService = {
     return await response.json();
   },
 
-  async getSessionHistory(sessionId: string): Promise<SessionHistoryResponse> {
+  async getSessionHistory(
+    sessionId: string,
+    cursor: {
+      before?: string;
+      after?: string;
+      through?: string;
+      around?: string;
+    } = {},
+  ): Promise<SessionHistoryResponse> {
+    const query = new URLSearchParams({ limit: "50", ...cursor });
     const response = await authenticatedFetch(
-      `${API_BASE_URL}/session/${encodeURIComponent(sessionId)}/history`,
+      `${API_BASE_URL}/session/${encodeURIComponent(sessionId)}/history?${query}`,
     );
     if (!response.ok) {
       throw new Error("Failed to fetch session history");

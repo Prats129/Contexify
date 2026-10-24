@@ -41,3 +41,7 @@ class WebSearchError(RuntimeError):
         super().__init__(
             "Web search is temporarily unavailable. I could not verify current information. Please try again later."
         )
+
+
+class DocumentLimitError(ValueError):
+    """A document exceeds bounded ingestion capacity."""

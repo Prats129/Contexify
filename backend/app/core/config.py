@@ -17,6 +17,15 @@ class Settings(BaseSettings):
     # Security & CORS
     CORS_ORIGINS: list[str] = ["*"]
 
+    MODEL_HISTORY_MESSAGES: int = Field(default=40, ge=10, le=200)
+    SESSION_CACHE_MAX_ENTRIES: int = Field(default=128, ge=1, le=4096)
+    DOCUMENT_CACHE_MAX_ENTRIES: int = Field(default=512, ge=1, le=16384)
+    SESSION_CACHE_TTL_SECONDS: int = Field(default=1800, ge=1)
+    DOCUMENT_MAX_FILE_SIZE_BYTES: int = Field(default=25 * 1024 * 1024, ge=1)
+    DOCUMENT_MAX_TEXT_CHARS: int = Field(default=2_000_000, ge=1)
+    DOCUMENT_MAX_CONCURRENT_INGESTIONS: int = Field(default=2, ge=1, le=16)
+    DOCUMENT_MAX_CHUNKS: int = Field(default=5000, ge=1, le=20000)
+
     # RAG Settings
     CHUNK_SIZE: int = 800
     CHUNK_OVERLAP: int = 150

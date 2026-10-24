@@ -610,7 +610,9 @@ class ChatOrchestrator:
 
         # 0. Retrieve Pre-existing Conversation History for this chat thread
         chat_history = await run_blocking(
-            session_store_repo.get_history_messages, session_id
+            session_store_repo.get_history_messages,
+            session_id,
+            reply_to_id=request.reply_to.id if request.reply_to else None,
         )
 
         # 1. Persist User Prompt to database & in-memory store with attachments and reply reference
@@ -638,7 +640,10 @@ class ChatOrchestrator:
             if len(summary_title) > 35:
                 summary_title = summary_title[:32] + "..."
             await run_blocking(
-                chat_history_service.update_session_title, session_id, summary_title
+                chat_history_service.update_session_title,
+                session_id,
+                summary_title,
+                only_if_default=True,
             )
 
         query = request.message or ""

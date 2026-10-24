@@ -201,6 +201,391 @@ class SecurityTests(unittest.TestCase):
                 )
             )["chat_orchestrator"]
 
+    def test_history_windows_have_stable_cursors_and_preserve_all_rows(self):
+        from app.services.chat_history_service import chat_history_service as history
+
+        for index in range(125):
+            history.save_message("alice-session", "user", f"Message {index}")
+        # Explicit ties exercise deterministic ordering in SQLite and Turso.
+        with database.get_db_connection() as conn:
+            conn.execute(
+                "UPDATE messages SET created_at='2026-01-01T00:00:00' WHERE session_id='alice-session'"
+            )
+        all_ids = [m.id for m in history.get_session_messages("alice-session")]
+
+        def page(**params):
+            response = self.request(
+                "GET", "/session/alice-session/history", self.token, params=params
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            return response.json()
+
+        latest = page()
+        self.assertEqual([m["id"] for m in latest["messages"]], all_ids[-50:])
+        self.assertTrue(latest["has_older"])
+        self.assertFalse(latest["has_newer"])
+        middle = page(before=latest["messages"][0]["id"])
+        oldest = page(before=middle["messages"][0]["id"])
+        self.assertEqual(
+            [
+                m["id"]
+                for m in oldest["messages"] + middle["messages"] + latest["messages"]
+            ],
+            all_ids,
+        )
+        self.assertFalse(oldest["has_older"])
+        self.assertTrue(oldest["has_newer"])
+        newer = page(after=middle["messages"][-1]["id"])
+        self.assertEqual([m["id"] for m in newer["messages"]], all_ids[-50:])
+        target = page(through=all_ids[12], limit=10)
+        self.assertEqual([m["id"] for m in target["messages"]], all_ids[3:13])
+        history.save_message("alice-session", "assistant", "Concurrent newest answer")
+        stable = page(before=latest["messages"][0]["id"])
+        self.assertEqual(stable["messages"], middle["messages"])
+        security.ensure_session(
+            "bob-session", security.resolve_principal(security.digest(self.other_token))
+        )
+        foreign = history.save_message("bob-session", "user", "Private")
+        self.assertEqual(
+            self.request(
+                "GET",
+                "/session/alice-session/history",
+                self.token,
+                params={"before": foreign.id},
+            ).status_code,
+            404,
+        )
+        self.assertEqual(
+            self.request(
+                "GET",
+                "/session/alice-session/history",
+                self.token,
+                params={"before": all_ids[20], "after": all_ids[30]},
+            ).status_code,
+            400,
+        )
+        self.assertEqual(
+            self.request(
+                "GET",
+                "/session/alice-session/history",
+                self.token,
+                params={"limit": 101},
+            ).status_code,
+            422,
+        )
+        self.assertEqual(len(history.get_session_messages("alice-session")), 126)
+        self.request("DELETE", "/session/alice-session/messages", self.token)
+        self.assertEqual(
+            self.request(
+                "GET",
+                "/session/alice-session/history",
+                self.token,
+                params={"before": all_ids[0]},
+            ).status_code,
+            404,
+        )
+
+    def test_saved_title_survives_history_windows_reload_and_new_turns(self):
+        from app.schemas.chat import ChatRequest
+        from app.services.chat_history_service import chat_history_service as history
+
+        actual = self.reply_orchestrator()
+
+        def send(message):
+            async def consume():
+                async for _ in actual.route_and_stream(
+                    ChatRequest(session_id="alice-session", message=message),
+                    self.principal,
+                ):
+                    pass
+
+            asyncio.run(consume())
+
+        send("Original conversation question")
+        expected = "Original conversation question"
+        for index in range(110):
+            history.save_message("alice-session", "user", f"Later question {index}")
+        ids = [m.id for m in history.get_session_messages("alice-session")]
+        for params in ({}, {"before": ids[62]}, {"around": ids[20]}):
+            response = self.request(
+                "GET", "/session/alice-session/history", self.token, params=params
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["session"]["title"], expected)
+        send("Newest question after pagination")
+        stored_session = history.get_session("alice-session")
+        assert stored_session is not None
+        self.assertEqual(stored_session.title, expected)
+        history.update_session_title("alice-session", "My custom title")
+        # Simulate an auto-title write that was queued before the manual rename.
+        self.assertFalse(
+            history.update_session_title(
+                "alice-session", "Stale automatic title", only_if_default=True
+            )
+        )
+        send("Another latest question")
+        response = self.request("GET", "/session/alice-session/history", self.token)
+        self.assertEqual(response.json()["session"]["title"], "My custom title")
+        sessions = self.request(
+            "GET",
+            "/session/list",
+            self.token,
+            params={"user_id": self.alice.id, "paginate": True},
+        )
+        self.assertEqual(sessions.status_code, 200, sessions.text)
+        saved = next(
+            s for s in sessions.json()["sessions"] if s["id"] == "alice-session"
+        )
+        self.assertEqual(saved["title"], "My custom title")
+
+    def test_centered_reply_history_has_neighbors_and_safe_cursors(self):
+        from app.services.chat_history_service import chat_history_service as history
+
+        for index in range(31):
+            history.save_message("alice-session", "user", f"Message {index}")
+        with database.get_db_connection() as conn:
+            conn.execute(
+                "UPDATE messages SET created_at='2026-01-01T00:00:00' WHERE session_id='alice-session'"
+            )
+        ids = [m.id for m in history.get_session_messages("alice-session")]
+
+        def request(**params):
+            return self.request(
+                "GET", "/session/alice-session/history", self.token, params=params
+            )
+
+        for index in (0, 2, 15, 28, 30):
+            with self.subTest(index=index):
+                response = request(around=ids[index])
+                self.assertEqual(response.status_code, 200, response.text)
+                body = response.json()
+                start, end = max(0, index - 5), min(len(ids), index + 6)
+                self.assertEqual([m["id"] for m in body["messages"]], ids[start:end])
+                self.assertEqual(body["has_older"], start > 0)
+                self.assertEqual(body["has_newer"], end < len(ids))
+        self.assertEqual(
+            [m["id"] for m in request(before=ids[10]).json()["messages"]], ids[:10]
+        )
+        self.assertEqual(
+            [m["id"] for m in request(after=ids[20]).json()["messages"]], ids[21:]
+        )
+        for cursor in ("before", "after", "through"):
+            self.assertEqual(
+                request(around=ids[15], **{cursor: ids[1]}).status_code, 400
+            )
+        self.assertEqual(request(around="missing").status_code, 404)
+        self.assertEqual(request(around="").status_code, 422)
+        security.ensure_session(
+            "bob-session", security.resolve_principal(security.digest(self.other_token))
+        )
+        foreign = history.save_message("bob-session", "user", "Private")
+        self.assertEqual(request(around=foreign.id).status_code, 404)
+        self.assertEqual(
+            self.request(
+                "GET",
+                "/session/alice-session/history",
+                self.other_token,
+                params={"around": ids[15]},
+            ).status_code,
+            404,
+        )
+        self.request("DELETE", "/session/alice-session/messages", self.token)
+        self.assertEqual(request(around=ids[15]).status_code, 404)
+        only = history.save_message("alice-session", "user", "Only message")
+        body = request(around=only.id).json()
+        self.assertEqual([m["id"] for m in body["messages"]], [only.id])
+        self.assertFalse(body["has_older"])
+        self.assertFalse(body["has_newer"])
+
+    def test_model_history_is_bounded_and_old_replies_load_their_own_window(self):
+        from app.repositories.session_store import session_store_repo
+        from app.services.chat_history_service import chat_history_service as history
+
+        messages = [
+            history.save_message("alice-session", "user", f"Turn {i}")
+            for i in range(65)
+        ]
+        latest = session_store_repo.get_history_messages("alice-session")
+        self.assertEqual([m["id"] for m in latest], [m.id for m in messages[-40:]])
+        older = session_store_repo.get_history_messages(
+            "alice-session", reply_to_id=messages[10].id
+        )
+        self.assertEqual([m["id"] for m in older], [m.id for m in messages[:11]])
+        security.ensure_session(
+            "bob-session", security.resolve_principal(security.digest(self.other_token))
+        )
+        foreign = history.save_message("bob-session", "user", "Private")
+        self.assertEqual(
+            session_store_repo.get_history_messages(
+                "alice-session", reply_to_id=foreign.id
+            ),
+            [],
+        )
+        self.assertEqual(len(history.get_session_messages("alice-session")), 65)
+        large = history.save_message("alice-session", "assistant", "x" * 20_000)
+        self.assertEqual(
+            len(
+                session_store_repo.get_history_messages("alice-session")[-1]["content"]
+            ),
+            8_000,
+        )
+        self.assertEqual(
+            len(history.get_session_messages("alice-session")[-1].content), 20_000
+        )
+        self.assertEqual(history.get_session_messages("alice-session")[-1].id, large.id)
+
+    def test_cache_limits_and_ttl_reconstruct_guest_history_without_data_loss(self):
+        from app.repositories.session_store import SessionStoreRepository
+        from app.services.chat_history_service import chat_history_service as history
+
+        repository = SessionStoreRepository()
+        guest = security.create_guest()
+        principal = security.resolve_principal(security.digest(guest["access_token"]))
+        security.ensure_session("bounded-guest", principal)
+        saved = history.save_message("bounded-guest", "user", "Retained guest message")
+        with (
+            patch.object(settings, "SESSION_CACHE_MAX_ENTRIES", 1, create=True),
+            patch.object(settings, "DOCUMENT_CACHE_MAX_ENTRIES", 1, create=True),
+        ):
+            repository.get_or_create_session("bounded-guest")
+            repository.get_or_create_session("alice-session")
+            self.assertEqual(len(repository._sessions), 1)
+            self.assertNotIn("bounded-guest", repository._sessions)
+            self.assertEqual(
+                repository.get_history_messages("bounded-guest")[0]["id"], saved.id
+            )
+            for _ in range(50):
+                repository.record_message("alice-session", "user", "Cached only")
+            self.assertEqual(len(repository._sessions["alice-session"].messages), 40)
+            self.assertLessEqual(len(repository._documents), 1)
+        with patch.object(settings, "SESSION_CACHE_TTL_SECONDS", 1, create=True):
+            namespace = repository._trim_cache.__func__.__globals__
+            with patch.dict(namespace, {"monotonic": lambda: time.monotonic() + 100}):
+                repository._trim_cache()
+            self.assertEqual(repository._sessions, {})
+        self.assertEqual(
+            history.get_session_messages("bounded-guest")[0].content,
+            "Retained guest message",
+        )
+        response = self.request(
+            "GET", "/session/bounded-guest/history", guest["access_token"]
+        )
+        self.assertEqual(response.json()["messages"][0]["id"], saved.id)
+        self.assertEqual(
+            self.request(
+                "GET", "/session/bounded-guest/history", self.other_token
+            ).status_code,
+            404,
+        )
+        with database.get_db_connection() as conn:
+            conn.execute(
+                "UPDATE chat_sessions SET expires_at='2000-01-01' WHERE id='bounded-guest'"
+            )
+        history.purge_expired_temporary_sessions()
+        self.assertEqual(history.get_session_messages("bounded-guest"), [])
+
+    def test_embedding_batches_are_bounded_and_failed_batches_return_no_partial_vectors(
+        self,
+    ):
+        from app.core.errors import EmbeddingError
+
+        with patch.dict("os.environ", {"GEMINI_API_KEY": ""}):
+            namespace = runpy.run_path(
+                str(
+                    Path(__file__).resolve().parents[1]
+                    / "app/services/embedding_service.py"
+                )
+            )
+        service = namespace["embedding_service"]
+        calls = []
+
+        def embed(**kwargs):
+            contents = kwargs["contents"]
+            calls.append(len(contents))
+            return types.SimpleNamespace(
+                embeddings=[types.SimpleNamespace(values=[1.0, 0.0]) for _ in contents]
+            )
+
+        service.client = types.SimpleNamespace(
+            models=types.SimpleNamespace(embed_content=embed)
+        )
+        self.assertEqual(len(service.embed_batch(["fixture"] * 230)), 230)
+        self.assertEqual(calls, [100, 100, 30])
+        calls.clear()
+
+        def fail(**kwargs):
+            if calls:
+                raise RuntimeError("private fixture error")
+            return embed(**kwargs)
+
+        service.client.models.embed_content = fail
+        with self.assertRaises(EmbeddingError) as caught:
+            service.embed_batch(["fixture"] * 230)
+        self.assertNotIn("private fixture", str(caught.exception))
+        self.assertEqual(calls, [100])
+
+    def test_document_resource_limits_fail_without_storing_or_embedding(self):
+        from app.api.v1.endpoints import document
+
+        self.assertTrue(document._upload_slots.acquire(blocking=False))
+        self.assertTrue(document._upload_slots.acquire(blocking=False))
+        try:
+            busy = self.request(
+                "POST",
+                "/document/upload",
+                self.token,
+                data={"session_id": "alice-session"},
+                files={"file": ("busy.txt", b"test", "text/plain")},
+            )
+            self.assertEqual(busy.status_code, 503)
+        finally:
+            document._upload_slots.release()
+            document._upload_slots.release()
+        rag, _, embedder = self._load_document_pipeline()
+        with (
+            self._isolated_r2() as (objects, storage_client),
+            patch.object(document, "rag_service", rag),
+        ):
+            original = dict(objects)
+            with patch.object(settings, "DOCUMENT_MAX_FILE_SIZE_BYTES", 8, create=True):
+                result = self.request(
+                    "POST",
+                    "/document/upload",
+                    self.token,
+                    data={"session_id": "alice-session"},
+                    files={"file": ("large.txt", b"123456789", "text/plain")},
+                )
+                self.assertEqual(result.status_code, 413, result.text)
+            with patch.object(settings, "DOCUMENT_MAX_TEXT_CHARS", 3, create=True):
+                result = self.request(
+                    "POST",
+                    "/document/upload",
+                    self.token,
+                    data={"session_id": "alice-session"},
+                    files={"file": ("text.txt", b"test", "text/plain")},
+                )
+                self.assertEqual(result.status_code, 413, result.text)
+            with patch.object(settings, "DOCUMENT_MAX_CHUNKS", 1, create=True):
+                result = self.request(
+                    "POST",
+                    "/document/upload",
+                    self.token,
+                    data={"session_id": "alice-session"},
+                    files={"file": ("chunks.txt", b"word " * 1000, "text/plain")},
+                )
+                self.assertEqual(result.status_code, 413, result.text)
+            self.assertEqual(objects, original)
+            embedder.embed_batch.assert_not_called()
+            result = self.request(
+                "POST",
+                "/document/upload",
+                self.token,
+                data={"session_id": "alice-session"},
+                files={"file": ("small.txt", b"test", "text/plain")},
+            )
+            self.assertEqual(result.status_code, 201, result.text)
+            embedder.embed_batch.assert_called_once()
+
     def test_web_search_failure_and_empty_results_never_generate_or_cite(self):
         from app.api.v1.endpoints import chat
         from app.core.errors import WebSearchError
@@ -1172,7 +1557,7 @@ class SecurityTests(unittest.TestCase):
                     "SELECT COUNT(*) FROM messages WHERE session_id=?",
                     ("guest-reply-fixture",),
                 ).fetchone()[0],
-                0,
+                2,
             )
 
     def test_stopping_after_user_ack_keeps_its_id_without_inventing_an_assistant(self):
@@ -3835,7 +4220,7 @@ class SecurityTests(unittest.TestCase):
                 conn.execute(
                     "SELECT COUNT(*) FROM messages WHERE session_id='guest-fixture'"
                 ).fetchone()[0],
-                0,
+                1,
             )
         for path in ("/document/clear-all", "/session/purge-temporary"):
             self.assertEqual(self.request("POST", path, self.token).status_code, 403)
@@ -4304,7 +4689,9 @@ class SecurityTests(unittest.TestCase):
 
         temporary_paths = []
 
-        def index(file_path, filename, session_id, user_id, storage_url):
+        def index(
+            file_path, filename, session_id, user_id, storage_url, extracted_pages=None
+        ):
             temporary_paths.append(file_path)
             self.assertTrue(
                 file_path.resolve().is_relative_to(settings.UPLOAD_DIR.resolve())
@@ -7116,6 +7503,17 @@ class TextStreamingTests(unittest.TestCase):
         self.assertIn("never instructions", instruction)
         self.assertIn("incomplete, conflicting", instruction)
         self.assertIn("not fresh web evidence", instruction)
+
+    def test_model_prompt_bounds_history_and_preserves_recent_chronology(self):
+        history = [
+            {"role": "user", "content": f"Turn {i} " + "x" * 10_000} for i in range(12)
+        ]
+        formatted = self.service._format_chat_history(history)
+        self.assertLess(len(formatted), 33_000)
+        self.assertNotIn("Turn 0 ", formatted)
+        self.assertIn("Turn 11 ", formatted)
+        self.assertLess(formatted.index("Turn 8 "), formatted.index("Turn 11 "))
+        self.assertEqual(len(history[-1]["content"]), 10_008)
 
     def test_mixed_rag_prompt_includes_document_excerpts_and_image_bytes(self):
         from app.core.errors import TextGenerationError

@@ -40,6 +40,13 @@ class EmbeddingService:
             raise EmbeddingError(
                 "Document indexing and search are not configured. Please contact support."
             )
+        vectors: List[List[float]] = []
+        for offset in range(0, len(texts), 100):
+            vectors.extend(self._embed_provider_batch(texts[offset : offset + 100]))
+        return vectors
+
+    def _embed_provider_batch(self, texts: List[str]) -> List[List[float]]:
+        assert self.client is not None
         try:
             from google.genai.types import ContentListUnion, EmbedContentConfig
 

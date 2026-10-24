@@ -698,9 +698,18 @@ export const apiService = {
     };
   },
 
-  async getSessionHistory(sessionId: string): Promise<SessionHistoryResponse> {
+  async getSessionHistory(
+    sessionId: string,
+    cursor: {
+      before?: string;
+      after?: string;
+      through?: string;
+      around?: string;
+    } = {},
+  ): Promise<SessionHistoryResponse> {
+    const query = new URLSearchParams({ limit: "50", ...cursor });
     const url = await getEndpoint(
-      `/session/${encodeURIComponent(sessionId)}/history`,
+      `/session/${encodeURIComponent(sessionId)}/history?${query}`,
     );
     const res = await authenticatedFetch(url);
     if (!res.ok) throw new Error("Could not load this chat. Please try again.");
@@ -725,6 +734,8 @@ export const apiService = {
     });
     return {
       session: data.session,
+      has_older: Boolean(data.has_older),
+      has_newer: Boolean(data.has_newer),
       messages,
       documents: data.documents,
     };
