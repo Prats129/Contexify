@@ -6,6 +6,145 @@ const path = require("node:path");
 const vm = require("node:vm");
 const ts = require("../frontend/node_modules/typescript");
 
+for (const platform of ["frontend", "mobile"]) {
+  test(`${platform}: extracted conversation hook preserves drafts and binds setters to their conversation`, () => {
+    const slots = [];
+    let cursor = 0;
+    const react = {
+      useState(initial) {
+        const index = cursor++;
+        if (!(index in slots))
+          slots[index] = typeof initial === "function" ? initial() : initial;
+        return [
+          slots[index],
+          (value) => {
+            slots[index] = value;
+          },
+        ];
+      },
+      useRef(initial) {
+        const index = cursor++;
+        if (!(index in slots)) slots[index] = { current: initial };
+        return slots[index];
+      },
+      useCallback(callback) {
+        return callback;
+      },
+      useSyncExternalStore() {},
+    };
+    const compile = (filename, require) => {
+      const exports = {};
+      const code = ts.transpileModule(fs.readFileSync(filename, "utf8"), {
+        compilerOptions: {
+          module: ts.ModuleKind.CommonJS,
+          target: ts.ScriptTarget.ES2020,
+        },
+      }).outputText;
+      vm.runInNewContext(code, { exports, require });
+      return exports;
+    };
+    const directory = path.join(__dirname, "..", platform, "src");
+    const store = compile(
+      path.join(directory, "services/conversation_store.ts"),
+    );
+    const hook = compile(
+      path.join(directory, "hooks/useConversationState.ts"),
+      (name) => {
+        if (name === "react") return react;
+        if (name === "../services/conversation_store") return store;
+        throw new Error(`Unexpected hook dependency: ${name}`);
+      },
+    );
+    const render = () => {
+      cursor = 0;
+      return hook.useConversationState();
+    };
+    const first = render();
+    const setDraft =
+      platform === "frontend" ? first.setInputQuery : first.setQuery;
+    setDraft("Unsent draft");
+    first.setAttachedMedia([
+      { id: "fixture-image", url: "/fixture.png", file_type: "image" },
+    ]);
+    const again = render();
+    assert.equal(again.conversationStore, first.conversationStore);
+    assert.equal(again.inputQuery ?? again.query, "Unsent draft");
+    assert.equal(again.attachedMedia.length, 1);
+    first.setActiveSessionId("another-chat");
+    const second = render();
+    assert.equal(second.activeSessionId, "another-chat");
+    assert.equal(second.activeSessionIdRef.current, "another-chat");
+    assert.equal(second.inputQuery ?? second.query, "");
+    assert.equal(second.attachedMedia.length, 0);
+    setDraft("Late draft update");
+    assert.equal(
+      first.conversation.state.inputQuery ?? first.conversation.state.query,
+      "Late draft update",
+    );
+    assert.equal(
+      second.conversation.state.inputQuery ?? second.conversation.state.query,
+      "",
+    );
+  });
+}
+
+test("password strength presentation stays consistent across web and native", () => {
+  const evaluate = (platform) => {
+    const file =
+      platform === "frontend"
+        ? "Modals/PasswordStrengthMeter.tsx"
+        : "PasswordStrengthMeter.tsx";
+    const filename = path.join(
+      __dirname,
+      "..",
+      platform,
+      "src/components",
+      file,
+    );
+    const exports = {};
+    const code = ts.transpileModule(fs.readFileSync(filename, "utf8"), {
+      compilerOptions: {
+        module: ts.ModuleKind.CommonJS,
+        target: ts.ScriptTarget.ES2020,
+        jsx: ts.JsxEmit.React,
+      },
+    }).outputText;
+    vm.runInNewContext(code, {
+      exports,
+      require(name) {
+        if (name === "react") return {};
+        if (name === "react-native")
+          return { StyleSheet: { create: (value) => value } };
+        if (name === "react-icons/lu" || name === "@expo/vector-icons")
+          return {};
+        throw new Error(`Unexpected password dependency: ${name}`);
+      },
+    });
+    return exports.checkPasswordStrength;
+  };
+  const web = evaluate("frontend");
+  const native = evaluate("mobile");
+  for (const [password, context, valid] of [
+    ["", undefined, false],
+    ["short", undefined, false],
+    ["abcdefgh1!", undefined, false],
+    ["ABCDEFGH1!", undefined, false],
+    ["Abcdefghi!", undefined, false],
+    ["Abcdefghi1", undefined, false],
+    ["Violet!234", undefined, true],
+    ["Violet!234", { username: "violet" }, false],
+    ["Violet!234", { email: "violet@example.invalid" }, false],
+    ["Violet!234", { displayName: "Violet Bloom" }, false],
+  ]) {
+    const result = web(password, context);
+    assert.equal(result.isValid, valid);
+    assert.deepEqual(
+      JSON.parse(JSON.stringify(native(password, context))),
+      JSON.parse(JSON.stringify(result)),
+    );
+  }
+});
+
 test("file pickers offer backend-supported formats and preserve selected assets", async () => {
   const read = (relative) =>
     fs.readFileSync(path.join(__dirname, "..", relative), "utf8");
@@ -1465,6 +1604,26 @@ function client(platform, handleRequest, environment = {}) {
       removeItem: (key) => storage.delete(key),
     },
     require: (name) => {
+      if (name === "./auth_transport") {
+        const filename = path.join(
+          __dirname,
+          "..",
+          platform,
+          "src/services/auth_transport.ts",
+        );
+        const module = { exports: {} };
+        const code = ts.transpileModule(fs.readFileSync(filename, "utf8"), {
+          compilerOptions: {
+            module: ts.ModuleKind.CommonJS,
+            target: ts.ScriptTarget.ES2020,
+          },
+        }).outputText;
+        vm.runInNewContext(
+          `(function(exports) { ${code}\n})`,
+          context,
+        )(module.exports);
+        return module.exports;
+      }
       if (name === "@react-native-async-storage/async-storage")
         return {
           default: asyncStorage,

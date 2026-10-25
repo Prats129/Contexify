@@ -765,7 +765,7 @@ class SecurityTests(unittest.TestCase):
                     message=query,
                     attachments=attachments,
                 )
-                route, scope = actual._choose_route(
+                route, scope = actual.routing.choose_route(
                     request, ChatMode(mode), ["document"], history
                 )
                 self.assertEqual(route.value, expected)
@@ -790,7 +790,7 @@ class SecurityTests(unittest.TestCase):
             "Create an image of a Python function",
         ):
             with self.subTest(image_query=query):
-                self.assertTrue(actual._is_image_gen_intent(query))
+                self.assertTrue(actual.routing.is_image_gen_intent(query))
         for query in (
             "Can you create a Python function?",
             "Could you create a SQL query?",
@@ -810,14 +810,14 @@ class SecurityTests(unittest.TestCase):
             "Tell a story about an artist who draws pictures",
         ):
             with self.subTest(non_image_query=query):
-                self.assertFalse(actual._is_image_gen_intent(query))
+                self.assertFalse(actual.routing.is_image_gen_intent(query))
         for query in (
             "stockpile inventory",
             "research methods",
             "What does this score function do?",
             "What happened in 2025?",
         ):
-            self.assertFalse(actual._needs_web_search(query), query)
+            self.assertFalse(actual.routing.needs_web_search(query), query)
 
     def test_routing_auto_documents_do_not_capture_new_topics_or_explicit_web_replies(
         self,
@@ -858,13 +858,13 @@ class SecurityTests(unittest.TestCase):
                     if reply_id
                     else None,
                 )
-                route, _ = actual._choose_route(
+                route, _ = actual.routing.choose_route(
                     request, ChatMode.AUTO, ["document"], history
                 )
                 self.assertEqual(route, expected)
         # A reply to an unrelated message must not inherit older document evidence.
         history += [{"id": "general", "role": "user", "content": "Explain gravity"}]
-        route, _ = actual._choose_route(
+        route, _ = actual.routing.choose_route(
             ChatRequest(
                 message="Why?",
                 reply_to={
@@ -1173,7 +1173,7 @@ class SecurityTests(unittest.TestCase):
         )
         history = session_store_repo.get_history_messages("routing-guest")
         self.assertEqual(history[-1]["citations"][0]["document_id"], "guest-document")
-        route, scope = actual._choose_route(
+        route, scope = actual.routing.choose_route(
             ChatRequest(message="Why?"), ChatMode.AUTO, ["guest-document"], history
         )
         self.assertEqual(route, ChatMode.DOCUMENT_RAG)
@@ -2671,8 +2671,12 @@ class SecurityTests(unittest.TestCase):
             with (
                 self.subTest(needs_web=needs_web),
                 patch.object(chat, "chat_orchestrator", actual),
-                patch.object(actual, "_is_conversational_query", return_value=False),
-                patch.object(actual, "_needs_web_search", return_value=needs_web),
+                patch.object(
+                    actual.routing, "is_conversational_query", return_value=False
+                ),
+                patch.object(
+                    actual.routing, "needs_web_search", return_value=needs_web
+                ),
             ):
                 response = self.request(
                     "POST",

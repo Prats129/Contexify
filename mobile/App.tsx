@@ -1,9 +1,9 @@
+import { useConversationState } from "./src/hooks/useConversationState";
 import React, {
   useState,
   useEffect,
   useRef,
   useCallback,
-  useSyncExternalStore,
   useMemo,
 } from "react";
 import {
@@ -37,10 +37,7 @@ import {
   type AccentColor,
   type ThemeMode,
 } from "./src/theme/colors";
-import {
-  ConversationStore,
-  mergeHistoryWindow,
-} from "./src/services/conversation_store";
+import { mergeHistoryWindow } from "./src/services/conversation_store";
 import { apiService } from "./src/services/api";
 import type {
   User,
@@ -106,64 +103,12 @@ export default function App() {
   useEffect(() => {
     currentUserRef.current = currentUser;
   }, [currentUser]);
-  const [conversationStore] = useState(
-    () =>
-      new ConversationStore(
-        () => ({
-          isTemporaryChat: false,
-          currentMode: "AUTO" as ChatMode,
-          documents: [] as DocumentMetadata[],
-          pendingDocumentIds: [] as string[],
-          attachedMedia: [] as MediaAttachment[],
-          messages: [] as Message[],
-          replyingTo: null as MessageReplyReference | null,
-          isSending: false,
-          isClearingHistory: false,
-          streamingMessage: null as StreamingMessageState | null,
-          isUploading: false,
-          isLoadingHistory: false,
-          historyLoadingDirection: null as
-            | "older"
-            | "newer"
-            | "latest"
-            | "target"
-            | null,
-          historyLatestRevision: 0,
-          hasOlderHistory: false,
-          hasNewerHistory: false,
-          historyError: null as string | null,
-          operationError: null as string | null,
-          query: "",
-        }),
-        (entry) =>
-          !entry.state.isSending &&
-          !entry.state.isUploading &&
-          !entry.state.isLoadingHistory &&
-          !entry.state.isClearingHistory &&
-          !entry.state.query &&
-          !entry.state.replyingTo &&
-          !entry.state.attachedMedia.length &&
-          !entry.state.pendingDocumentIds.length &&
-          !entry.state.operationError,
-      ),
-  );
-  useSyncExternalStore(
-    conversationStore.subscribe,
-    conversationStore.getSnapshot,
-    conversationStore.getSnapshot,
-  );
-  const conversation = conversationStore.active;
-  const activeSessionId = conversation.sessionId;
-  const activeSessionIdRef = useRef(activeSessionId);
-  activeSessionIdRef.current = activeSessionId;
-  const setActiveSessionId = useCallback(
-    (sessionId: string | null) => {
-      conversationStore.select(sessionId);
-      activeSessionIdRef.current = sessionId;
-    },
-    [conversationStore],
-  );
   const {
+    conversationStore,
+    conversation,
+    activeSessionId,
+    activeSessionIdRef,
+    setActiveSessionId,
     isTemporaryChat,
     currentMode,
     documents,
@@ -179,34 +124,19 @@ export default function App() {
     isLoadingHistory,
     historyLoadingDirection,
     historyError,
-  } = conversation.state;
-  const setIsTemporaryChat = conversationStore.setter(
-    conversation,
-    "isTemporaryChat",
-  );
-  const setCurrentMode = conversationStore.setter(conversation, "currentMode");
-  const setDocuments = conversationStore.setter(conversation, "documents");
-  const setPendingDocumentIds = conversationStore.setter(
-    conversation,
-    "pendingDocumentIds",
-  );
-  const setAttachedMedia = conversationStore.setter(
-    conversation,
-    "attachedMedia",
-  );
-  const setMessages = conversationStore.setter(conversation, "messages");
-  const setReplyingTo = conversationStore.setter(conversation, "replyingTo");
-  const setIsSending = conversationStore.setter(conversation, "isSending");
-  const setStreamingMessage = conversationStore.setter(
-    conversation,
-    "streamingMessage",
-  );
-  const setIsUploading = conversationStore.setter(conversation, "isUploading");
-  const setOperationError = conversationStore.setter(
-    conversation,
-    "operationError",
-  );
-  const setQuery = conversationStore.setter(conversation, "query");
+    setIsTemporaryChat,
+    setCurrentMode,
+    setDocuments,
+    setPendingDocumentIds,
+    setAttachedMedia,
+    setMessages,
+    setReplyingTo,
+    setIsSending,
+    setStreamingMessage,
+    setIsUploading,
+    setOperationError,
+    setQuery,
+  } = useConversationState();
 
   const [clearedChats, setClearedChats] = useState<Record<string, string>>({});
   const isClearingChat = conversation.state.isClearingHistory;
@@ -857,10 +787,17 @@ export default function App() {
       // A reply jump explicitly releases bottom intent without a drag gesture.
       if (!isAtBottomRef.current) return;
       isAtBottomRef.current = true;
-      const { contentSize, layoutMeasurement, contentOffset } = event.nativeEvent;
-      const endOffset = Math.max(0, contentSize.height - layoutMeasurement.height);
+      const { contentSize, layoutMeasurement, contentOffset } =
+        event.nativeEvent;
+      const endOffset = Math.max(
+        0,
+        contentSize.height - layoutMeasurement.height,
+      );
       if (Math.abs(endOffset - contentOffset.y) > 2)
-        flatListRef.current?.scrollToOffset({ offset: endOffset, animated: false });
+        flatListRef.current?.scrollToOffset({
+          offset: endOffset,
+          animated: false,
+        });
       return;
     }
     handleScroll(event);
@@ -2269,7 +2206,10 @@ export default function App() {
                       : undefined
                   }
                   onLayout={() => {
-                    if (isAtBottomRef.current && !conversation.state.hasNewerHistory)
+                    if (
+                      isAtBottomRef.current &&
+                      !conversation.state.hasNewerHistory
+                    )
                       flatListRef.current?.scrollToEnd({ animated: false });
                   }}
                   onScrollBeginDrag={(event) => {

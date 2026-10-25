@@ -544,7 +544,7 @@ export const MessageList: React.FC<MessageListProps> = ({
                 attachments={msg.attachments}
                 isHighlighted={activeHighlightedId === msg.id}
                 userAvatarUrl={currentUser?.avatar_url}
-                userAvatarColor={currentUser?.avatar_color}
+                userAvatarColor={currentUser?.avatar_color ?? undefined}
                 userDisplayName={
                   currentUser?.display_name || currentUser?.username
                 }

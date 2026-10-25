@@ -263,6 +263,7 @@ The following regression suites use disposable databases/files, mocked providers
 
 ```powershell
 backend/venv/Scripts/python.exe -B backend/tests/test_configuration.py
+backend/venv/Scripts/python.exe -B backend/tests/test_api_contracts.py
 backend/venv/Scripts/python.exe -B backend/tests/test_auth_security.py
 node tests/auth_clients.test.cjs
 node tests/chat_history_scroll.test.cjs
@@ -282,6 +283,10 @@ These suites verify application behavior and mocked client events. They do not e
 `backend/requirements.in` lists direct Python dependencies; `backend/requirements.txt` locks the complete dependency graph and download hashes. After intentionally editing `.in`, regenerate with the command recorded in the `.txt` header (uv 0.13.5 was used for the checked lock), then verify a clean install and the regressions. Do not hand-edit the generated hash list.
 
 Use `npm install` in the relevant package when intentionally changing JavaScript dependencies, and commit its manifest and lockfile together. Normal setup uses `npm ci`, which replaces that package's installed dependencies with the locked versions and fails on manifest/lock inconsistencies.
+
+### Updating API contracts
+
+Backend Pydantic schemas are the source for both clients' generated `src/types/api-contracts.ts` files. After changing a schema, run `npm run contracts:generate`, then `npm run contracts:check` and both client type checks. These root commands use the Windows backend venv; on macOS/Linux, run `backend/venv/bin/python -B scripts/generate_api_contracts.py` (add `--check` to verify). The generator imports schemas only, without starting the app or accessing configured services. Keep optimistic message state and platform-specific callbacks in each client's `src/types/index.ts`.
 
 ## Docker
 
