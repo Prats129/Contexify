@@ -7,13 +7,13 @@ from fastapi.responses import StreamingResponse
 from starlette.types import Send
 
 from app.core.concurrency import run_blocking
+from app.core.rate_limits import require_ai_budget
 from app.core.security import (
     Principal,
     check_asset,
     check_user_claim,
     ensure_session,
     present_attachment,
-    require_principal,
 )
 from app.schemas.chat import ChatMode, ChatRequest, MediaAttachment
 from app.services.orchestrator import chat_orchestrator
@@ -63,7 +63,7 @@ def _authorize_request(request: ChatRequest, principal: Principal) -> None:
 
 @router.post("/stream")
 async def chat_stream(
-    request: ChatRequest, principal: Principal = Depends(require_principal)
+    request: ChatRequest, principal: Principal = Depends(require_ai_budget)
 ):
     """
     Server-Sent Events (SSE) streaming chat endpoint.

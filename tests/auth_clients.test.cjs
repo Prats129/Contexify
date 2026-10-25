@@ -1682,6 +1682,109 @@ const credentials = (token) => ({
 });
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
+for (const platform of ["frontend", "mobile"]) {
+  const retryMessage = "Too many requests. Please try again in 30 seconds.";
+
+  test(`${platform}: throttled sign-in and Google challenge show retry guidance without automatic retries`, async () => {
+    let limited = true;
+    const fixture = client(platform, () =>
+      limited
+        ? response({ detail: retryMessage }, 429)
+        : response(credentials("manual-retry-token")),
+    );
+    await assert.rejects(
+      fixture.api.login("fixture", "password"),
+      /Too many requests.*30 seconds/,
+    );
+    assert.equal(fixture.requests.length, 1);
+    assert.equal(await fixture.api.hasUserSession(), false);
+    await assert.rejects(
+      fixture.api.getGoogleNonce(),
+      /Too many requests.*30 seconds/,
+    );
+    assert.equal(fixture.requests.length, 2);
+    limited = false;
+    await fixture.api.login("fixture", "password");
+    assert.equal(await fixture.api.hasUserSession(), true);
+  });
+
+  test(`${platform}: guest throttling preserves the error and releases bootstrap for manual retry`, async () => {
+    let limited = true;
+    const fixture = client(platform, (url) => {
+      if (url.endsWith("/user/guest"))
+        return limited
+          ? response({ detail: retryMessage }, 429)
+          : response(credentials("guest-retry-token"));
+      return response({ items: [], total: 0 });
+    });
+    await assert.rejects(
+      fixture.api.getAssets(),
+      /Too many requests.*30 seconds/,
+    );
+    assert.equal(fixture.requests.length, 1);
+    assert.equal(fixture.storage.has("contexify_auth_session"), false);
+    limited = false;
+    await fixture.api.getAssets();
+    assert.equal(
+      fixture.requests.filter((request) => request.url.endsWith("/user/guest"))
+        .length,
+      2,
+    );
+    assert.equal(fixture.requests.length, 3);
+  });
+
+  test(`${platform}: throttled chat reports one readable error without signing out or replaying the turn`, async () => {
+    const fixture = client(platform, (url) => {
+      if (url.endsWith("/user/login"))
+        return response(credentials("signed-token"));
+      if (url.endsWith("/chat/stream"))
+        return response({ detail: retryMessage }, 429);
+      return response(profile);
+    });
+    await fixture.api.login("fixture", "password");
+    const events = [];
+    const handlers = {
+      onError: (message) => events.push(["error", message]),
+      onToken: (text) => events.push(["token", text]),
+      onCitations() {},
+      onDone: () => events.push(["complete"]),
+      onComplete: () => events.push(["complete"]),
+    };
+    if (platform === "frontend") {
+      await fixture.api.streamChat(
+        "fixture-session",
+        "Keep my question",
+        "AUTO",
+        handlers,
+      );
+      assert.equal(
+        fixture.requests.filter((request) =>
+          request.url.endsWith("/chat/stream"),
+        ).length,
+        1,
+      );
+    } else {
+      fixture.api.streamChat(
+        "fixture-session",
+        "Keep my question",
+        "AUTO",
+        handlers,
+      );
+      await until(() => fixture.uploads.at(-1)?.sent);
+      const xhr = fixture.uploads.at(-1);
+      xhr.status = 429;
+      xhr.responseText = JSON.stringify({ detail: retryMessage });
+      xhr.onprogress();
+      xhr.onload();
+      xhr.onload();
+      assert.equal(fixture.uploads.length, 1);
+    }
+    assert.deepEqual(events, [["error", retryMessage]]);
+    assert.equal(await fixture.api.hasUserSession(), true);
+    await fixture.api.getCurrentUser(profile.id);
+  });
+}
+
 test("mobile: stalled login times out even if native fetch ignores abort, without accepting a late login", async () => {
   let release;
   let timeout;

@@ -5,11 +5,17 @@ from fastapi import (
     Form,
     HTTPException,
     Query,
+    Request,
     UploadFile,
     status,
 )
 
 from app.core.concurrency import run_blocking
+from app.core.rate_limits import (
+    require_auth_budget,
+    require_guest_budget,
+    require_login_budget,
+)
 from app.core.security import (
     Principal,
     check_user_claim,
@@ -49,14 +55,18 @@ def authenticated_response(user):
     return AuthResponse(**present_user(user, principal).model_dump(), **credentials)
 
 
-@router.get("/auth/google/challenge")
+@router.get("/auth/google/challenge", dependencies=[Depends(require_auth_budget)])
 def google_challenge():
     import secrets
 
     return {"nonce": secrets.token_urlsafe(32)}
 
 
-@router.post("/guest", response_model=GuestAuthResponse)
+@router.post(
+    "/guest",
+    response_model=GuestAuthResponse,
+    dependencies=[Depends(require_guest_budget)],
+)
 def guest_session():
     return create_guest()
 
@@ -74,7 +84,10 @@ def logout(principal: Principal = Depends(require_principal)):
 
 
 @router.post(
-    "/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED
+    "/register",
+    response_model=AuthResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_auth_budget)],
 )
 def register(req: UserRegisterRequest):
     """
@@ -84,15 +97,19 @@ def register(req: UserRegisterRequest):
 
 
 @router.post("/login", response_model=AuthResponse, status_code=status.HTTP_200_OK)
-def login(req: UserLoginRequest):
+def login(req: UserLoginRequest, request: Request):
     """
     Authenticate an existing user using username/email and password.
     """
+    require_login_budget(request, req.username_or_email)
     return authenticated_response(user_service.authenticate_user(req))
 
 
 @router.post(
-    "/auth/google", response_model=AuthResponse, status_code=status.HTTP_200_OK
+    "/auth/google",
+    response_model=AuthResponse,
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_auth_budget)],
 )
 async def auth_google(req: GoogleAuthRequest):
     """
@@ -104,7 +121,10 @@ async def auth_google(req: GoogleAuthRequest):
 
 
 @router.post(
-    "/otp/send", response_model=SendOtpResponse, status_code=status.HTTP_200_OK
+    "/otp/send",
+    response_model=SendOtpResponse,
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_auth_budget)],
 )
 async def send_otp(req: SendOtpRequest):
     """
@@ -113,7 +133,12 @@ async def send_otp(req: SendOtpRequest):
     return await user_service.send_login_otp(req.email_or_username)
 
 
-@router.post("/otp/verify", response_model=AuthResponse, status_code=status.HTTP_200_OK)
+@router.post(
+    "/otp/verify",
+    response_model=AuthResponse,
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_auth_budget)],
+)
 def verify_otp(req: VerifyOtpLoginRequest):
     """
     Verify 6-digit OTP code and sign in the user.
@@ -127,6 +152,7 @@ def verify_otp(req: VerifyOtpLoginRequest):
     "/password-reset/send",
     response_model=SendOtpResponse,
     status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_auth_budget)],
 )
 async def send_password_reset_otp(req: SendOtpRequest):
     """
@@ -135,7 +161,11 @@ async def send_password_reset_otp(req: SendOtpRequest):
     return await user_service.send_password_reset_otp(req.email_or_username)
 
 
-@router.post("/password-reset/verify", status_code=status.HTTP_200_OK)
+@router.post(
+    "/password-reset/verify",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_auth_budget)],
+)
 def verify_password_reset_otp(req: ResetPasswordWithOtpRequest):
     """
     Verify 6-digit OTP code and reset the user's password directly without requiring login.

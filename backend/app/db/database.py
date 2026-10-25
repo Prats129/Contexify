@@ -497,6 +497,17 @@ def init_db():
             "CREATE INDEX IF NOT EXISTS idx_otp_email_requested ON email_otps(email, requested_at)"
         )
 
+        # Durable, shared request admission limits (contains hashed subjects only).
+        cursor.execute("""CREATE TABLE IF NOT EXISTS rate_limit_buckets (
+            bucket_key TEXT PRIMARY KEY,
+            tokens REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            expires_at REAL NOT NULL
+        )""")
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_rate_limit_expiry ON rate_limit_buckets(expires_at)"
+        )
+
         # Indexes for fast querying
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON chat_sessions(user_id);"

@@ -60,7 +60,14 @@ export function createAuthTransport(authHost: () => Promise<string>) {
         const response = await fetch(`${host}/api/v1/user/guest`, {
           method: "POST",
         });
-        if (!response.ok) throw new Error("Unable to start a guest session.");
+        if (!response.ok) {
+          const error = await response.json().catch(() => null);
+          throw new Error(
+            typeof error?.detail === "string"
+              ? error.detail
+              : "Unable to start a guest session.",
+          );
+        }
         const data = await response.json();
         if (generation !== authGeneration) {
           const current = await readAuth();

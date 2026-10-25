@@ -55,6 +55,15 @@ settings = types.SimpleNamespace(
     OTP_EXPIRY_SECONDS=180,
     OTP_RESEND_COOLDOWN_SECONDS=30,
     OTP_MAX_SENDS_PER_HOUR=5,
+    RATE_LIMIT_AUTH_PER_MINUTE=100000,
+    RATE_LIMIT_LOGIN_PER_15_MINUTES=100000,
+    RATE_LIMIT_GUEST_PER_HOUR=100000,
+    RATE_LIMIT_AI_PER_MINUTE=100000,
+    RATE_LIMIT_AI_PER_DAY=100000,
+    RATE_LIMIT_GUEST_AI_PER_MINUTE=100000,
+    RATE_LIMIT_GUEST_AI_PER_DAY=100000,
+    RATE_LIMIT_AI_IP_PER_MINUTE=100000,
+    RATE_LIMIT_AI_GLOBAL_PER_DAY=100000,
     is_cloudflare_r2_configured=False,
     CLOUDFLARE_R2_PUBLIC_URL="",
     CLOUDFLARE_R2_BUCKET_NAME="fixture",
@@ -136,6 +145,338 @@ from app.services.user_service import hash_password, user_service
 
 
 class SecurityTests(unittest.TestCase):
+    def test_rate_buckets_refill_persist_and_admit_multiple_limits_atomically(self):
+        from fastapi import HTTPException
+
+        from app.core import rate_limits
+
+        budget = rate_limits.Budget("fixture", "private@example.invalid", 2, 60)
+        other = rate_limits.Budget("other", "192.0.2.1", 2, 60)
+        with patch.object(rate_limits, "time", return_value=10000) as clock:
+            rate_limits.consume_budgets([budget])
+            rate_limits.consume_budgets([budget])
+            with self.assertRaises(HTTPException) as error:
+                rate_limits.consume_budgets([other, budget])
+            self.assertEqual(error.exception.status_code, 429)
+            assert error.exception.headers is not None
+            self.assertEqual(error.exception.headers["Retry-After"], "30")
+            with database.get_db_connection() as conn:
+                rows = conn.execute(
+                    "SELECT bucket_key FROM rate_limit_buckets"
+                ).fetchall()
+            self.assertEqual(len(rows), 1)
+            self.assertNotIn("private@", rows[0]["bucket_key"])
+            self.assertNotIn("192.0.2", rows[0]["bucket_key"])
+            database.init_db()
+            # Reloading application code must not reset admission counters.
+            reloaded = runpy.run_path(
+                str(Path(__file__).resolve().parents[1] / "app/core/rate_limits.py")
+            )
+            with patch.dict(
+                reloaded["consume_budgets"].__globals__, {"time": lambda: 10000}
+            ):
+                with self.assertRaises(HTTPException):
+                    reloaded["consume_budgets"]([budget])
+            clock.return_value = 10030
+            rate_limits.consume_budgets([budget])
+            with self.assertRaises(HTTPException):
+                rate_limits.consume_budgets([budget])
+            clock.return_value = 10090
+            rate_limits.consume_budgets([other])
+            with database.get_db_connection() as conn:
+                self.assertEqual(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM rate_limit_buckets WHERE bucket_key LIKE 'fixture:%'"
+                    ).fetchone()[0],
+                    0,
+                )
+            rate_limits.consume_budgets([budget])
+            rate_limits.consume_budgets([budget])
+
+    def test_rate_buckets_handle_concurrency_clock_rollback_and_database_failure(self):
+        from fastapi import HTTPException
+
+        from app.core import rate_limits
+
+        budget = rate_limits.Budget("concurrent", "fixture", 3, 60)
+
+        def admit(_):
+            try:
+                rate_limits.consume_budgets([budget])
+                return 200
+            except HTTPException as error:
+                return error.status_code
+
+        with patch.object(rate_limits, "time", return_value=10000):
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                results = list(pool.map(admit, range(12)))
+        self.assertEqual(results.count(200), 3)
+        self.assertEqual(results.count(429), 9)
+        backwards = rate_limits.Budget("backwards", "fixture", 2, 60)
+        with patch.object(rate_limits, "time", return_value=20000) as clock:
+            rate_limits.consume_budgets([backwards])
+            clock.return_value = 19900
+            rate_limits.consume_budgets([backwards])
+            clock.return_value = 20000
+            with self.assertRaises(HTTPException):
+                rate_limits.consume_budgets([backwards])
+        with patch.object(
+            rate_limits,
+            "get_db_connection",
+            side_effect=RuntimeError("private database error"),
+        ):
+            with self.assertRaises(HTTPException) as error:
+                rate_limits.consume_budgets([budget])
+            self.assertEqual(error.exception.status_code, 503)
+            self.assertNotIn("private", error.exception.detail)
+
+    def test_rate_limits_use_peer_ip_ignore_spoofed_headers_and_group_ipv6(self):
+        from fastapi import HTTPException, Request
+
+        from app.core import rate_limits
+
+        def request(host, forwarded="203.0.113.1"):
+            return Request(
+                {
+                    "type": "http",
+                    "client": (host, 1234),
+                    "headers": [(b"x-forwarded-for", forwarded.encode())],
+                }
+            )
+
+        self.assertEqual(
+            rate_limits.client_address(request("::ffff:192.0.2.1")), "192.0.2.1"
+        )
+        self.assertEqual(
+            rate_limits.client_address(request("2001:db8::1")),
+            rate_limits.client_address(request("2001:db8::2")),
+        )
+        with (
+            patch.object(settings, "RATE_LIMIT_AUTH_PER_MINUTE", 1),
+            patch.object(rate_limits, "time", return_value=10000),
+        ):
+            rate_limits.require_auth_budget(request("192.0.2.1"))
+            with self.assertRaises(HTTPException):
+                rate_limits.require_auth_budget(request("192.0.2.1", "203.0.113.2"))
+            rate_limits.require_auth_budget(request("192.0.2.2"))
+        with self.assertRaises(HTTPException):
+            rate_limits.client_address(Request({"type": "http", "headers": []}))
+
+    def test_rate_login_limits_normalize_accounts_across_ips_and_recover(self):
+        from fastapi import HTTPException, Request
+
+        from app.core import rate_limits
+
+        payload = {"username_or_email": "alice", "password": "wrong"}
+        with (
+            patch.object(settings, "RATE_LIMIT_LOGIN_PER_15_MINUTES", 1),
+            patch.object(rate_limits, "time", return_value=10000) as clock,
+        ):
+            self.assertEqual(
+                self.request("POST", "/user/login", json=payload).status_code, 401
+            )
+            with patch.object(user_service, "authenticate_user") as authenticate:
+                response = self.request(
+                    "POST",
+                    "/user/login",
+                    json={**payload, "username_or_email": " ALICE "},
+                )
+                self.assertEqual(response.status_code, 429, response.text)
+                self.assertEqual(response.headers["retry-after"], "900")
+                self.assertEqual(response.headers["cache-control"], "no-store")
+                authenticate.assert_not_called()
+            response = self.request(
+                "POST",
+                "/user/login",
+                json={**payload, "username_or_email": "alice@example.invalid"},
+            )
+            self.assertEqual(response.status_code, 429, response.text)
+            with self.assertRaises(HTTPException):
+                rate_limits.require_login_budget(
+                    Request(
+                        {"type": "http", "client": ("192.0.2.55", 1), "headers": []}
+                    ),
+                    "ALICE",
+                )
+            # Existing authenticated sessions continue to work while login is throttled.
+            self.assertEqual(
+                self.request("GET", "/user/me", self.token).status_code, 200
+            )
+            clock.return_value = 10900
+            response = self.request(
+                "POST", "/user/login", json={**payload, "password": "Durable!482Strong"}
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+
+    def test_rate_public_auth_and_guest_limits_prevent_extra_side_effects(self):
+        from app.core import rate_limits
+
+        with (
+            patch.object(settings, "RATE_LIMIT_AUTH_PER_MINUTE", 1),
+            patch.object(rate_limits, "time", return_value=10000),
+        ):
+            self.assertEqual(
+                self.request("GET", "/user/auth/google/challenge").status_code, 200
+            )
+            with patch.object(
+                user_service, "send_login_otp", new_callable=AsyncMock
+            ) as send:
+                response = self.request(
+                    "POST", "/user/otp/send", json={"email_or_username": "alice"}
+                )
+                self.assertEqual(response.status_code, 429, response.text)
+                send.assert_not_called()
+        with (
+            patch.object(settings, "RATE_LIMIT_GUEST_PER_HOUR", 1),
+            patch.object(rate_limits, "time", return_value=20000),
+        ):
+            response = self.request("POST", "/user/guest")
+            self.assertEqual(response.status_code, 200, response.text)
+            with database.get_db_connection() as conn:
+                before = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+            self.assertEqual(self.request("POST", "/user/guest").status_code, 429)
+            with database.get_db_connection() as conn:
+                self.assertEqual(
+                    conn.execute("SELECT COUNT(*) FROM users").fetchone()[0], before
+                )
+
+    def test_rate_ai_limits_share_user_budget_across_tokens_and_document_uploads(self):
+        from app.api.v1.endpoints import document
+        from app.core import rate_limits
+
+        with (
+            patch.object(settings, "RATE_LIMIT_AI_PER_MINUTE", 1),
+            patch.object(rate_limits, "time", return_value=10000),
+        ):
+            response = self.request(
+                "POST",
+                "/chat/stream",
+                self.token,
+                json={"session_id": "alice-session", "message": "Keep this message"},
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            with database.get_db_connection() as conn:
+                before = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+            token = security.issue_credentials(self.alice.id)["access_token"]
+            with patch.object(fixture_orchestrator, "route_and_stream") as generate:
+                response = self.request(
+                    "POST",
+                    "/chat/stream",
+                    token,
+                    json={
+                        "session_id": "must-not-be-created",
+                        "message": "Not admitted",
+                    },
+                )
+                self.assertEqual(response.status_code, 429, response.text)
+                self.assertIn("Too many requests", response.json()["detail"])
+                generate.assert_not_called()
+            with patch.object(document, "_process_document_upload") as process:
+                response = self.request(
+                    "POST",
+                    "/document/upload",
+                    token,
+                    data={"session_id": "alice-session"},
+                    files={"file": ("test.txt", b"test", "text/plain")},
+                )
+                self.assertEqual(response.status_code, 429, response.text)
+                process.assert_not_called()
+            with database.get_db_connection() as conn:
+                self.assertEqual(
+                    conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0], before
+                )
+                self.assertIsNone(
+                    conn.execute(
+                        "SELECT 1 FROM chat_sessions WHERE id='must-not-be-created'"
+                    ).fetchone()
+                )
+                self.assertEqual(
+                    conn.execute(
+                        "SELECT content FROM messages WHERE session_id='alice-session'"
+                    ).fetchone()[0],
+                    "Keep this message",
+                )
+
+    def test_rate_ai_guest_ip_and_application_budgets_are_independent_and_shared(self):
+        from fastapi import HTTPException, Request
+
+        from app.core import rate_limits
+
+        request = Request({"type": "http", "client": ("192.0.2.1", 1), "headers": []})
+        guest = security.Principal("guest_fixture", "fixture", True)
+        alice = security.Principal(self.alice.id, "fixture")
+        bob = security.Principal(self.bob.id, "fixture")
+        with (
+            patch.object(settings, "RATE_LIMIT_GUEST_AI_PER_MINUTE", 1),
+            patch.object(rate_limits, "time", return_value=10000),
+        ):
+            rate_limits.require_ai_budget(request, guest)
+            with self.assertRaises(HTTPException):
+                rate_limits.require_ai_budget(request, guest)
+            rate_limits.require_ai_budget(request, alice)
+        with (
+            patch.object(settings, "RATE_LIMIT_AI_IP_PER_MINUTE", 1),
+            patch.object(rate_limits, "time", return_value=20000),
+        ):
+            rate_limits.require_ai_budget(request, alice)
+            with self.assertRaises(HTTPException):
+                rate_limits.require_ai_budget(request, bob)
+        with (
+            patch.object(settings, "RATE_LIMIT_AI_GLOBAL_PER_DAY", 1),
+            patch.object(rate_limits, "time", return_value=100000),
+        ):
+            rate_limits.require_ai_budget(request, alice)
+            remote = Request(
+                {"type": "http", "client": ("192.0.2.2", 1), "headers": []}
+            )
+            with self.assertRaises(HTTPException) as error:
+                rate_limits.require_ai_budget(remote, bob)
+            assert error.exception.headers is not None
+            self.assertEqual(error.exception.headers["Retry-After"], "86400")
+
+    def test_rate_ai_daily_user_limits_refill(self):
+        from fastapi import HTTPException, Request
+
+        from app.core import rate_limits
+
+        request = Request({"type": "http", "client": ("192.0.2.1", 1), "headers": []})
+        for guest in (False, True):
+            principal = security.Principal(
+                "guest_fixture" if guest else self.alice.id, "fixture", guest
+            )
+            name = "RATE_LIMIT_GUEST_AI_PER_DAY" if guest else "RATE_LIMIT_AI_PER_DAY"
+            with (
+                patch.object(settings, name, 1),
+                patch.object(rate_limits, "time", return_value=10000) as clock,
+            ):
+                rate_limits.require_ai_budget(request, principal)
+                with self.assertRaises(HTTPException) as error:
+                    rate_limits.require_ai_budget(request, principal)
+                assert error.exception.headers is not None
+                self.assertEqual(error.exception.headers["Retry-After"], "86400")
+                clock.return_value = 96400
+                rate_limits.require_ai_budget(request, principal)
+
+    def test_rate_guest_ai_cannot_reset_daily_allowance_by_creating_another_guest(self):
+        from fastapi import HTTPException, Request
+
+        from app.core import rate_limits
+
+        request = Request({"type": "http", "client": ("192.0.2.1", 1), "headers": []})
+        first = security.Principal("guest_one", "fixture", True)
+        second = security.Principal("guest_two", "fixture", True)
+        with (
+            patch.object(settings, "RATE_LIMIT_GUEST_AI_PER_DAY", 1),
+            patch.object(rate_limits, "time", return_value=10000),
+        ):
+            rate_limits.require_ai_budget(request, first)
+            with self.assertRaises(HTTPException) as error:
+                rate_limits.require_ai_budget(request, second)
+            self.assertEqual(error.exception.status_code, 429)
+            rate_limits.require_ai_budget(
+                request, security.Principal(self.alice.id, "fixture")
+            )
+
     def reply_orchestrator(self, fail=False):
         """Real routing/persistence with providers replaced by deterministic fixtures."""
         from app.services.media_service import media_service

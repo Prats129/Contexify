@@ -70,6 +70,18 @@ class ConfigurationTests(unittest.TestCase):
         self.assertFalse(config.is_cloudflare_r2_configured)
         self.assertFalse(config.CHROMA_PERSIST_DIR.exists())
 
+    def test_request_budgets_are_configurable_and_cannot_be_disabled_with_zero(self):
+        names = [
+            name for name in Settings.model_fields if name.startswith("RATE_LIMIT_")
+        ]
+        self.assertEqual(len(names), 9)
+        for name in names:
+            with self.subTest(name=name):
+                self.assertEqual(getattr(self.config(**{name: 7}), name), 7)
+                for value in (0, -1):
+                    with self.assertRaises(ValidationError):
+                        self.config(**{name: value})
+
     def test_cloud_credentials_are_required_without_exposing_values(self):
         for field in (
             "TURSO_DATABASE_URL",

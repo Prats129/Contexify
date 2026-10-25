@@ -163,6 +163,17 @@ class Settings(BaseSettings):
     OTP_MAX_ATTEMPTS: int = 3
     OTP_MAX_SENDS_PER_HOUR: int = Field(default=5, ge=1)
 
+    # Shared token-bucket capacities; each refills over the named period.
+    RATE_LIMIT_AUTH_PER_MINUTE: int = Field(default=30, ge=1)
+    RATE_LIMIT_LOGIN_PER_15_MINUTES: int = Field(default=10, ge=1)
+    RATE_LIMIT_GUEST_PER_HOUR: int = Field(default=10, ge=1)
+    RATE_LIMIT_AI_PER_MINUTE: int = Field(default=20, ge=1)
+    RATE_LIMIT_AI_PER_DAY: int = Field(default=200, ge=1)
+    RATE_LIMIT_GUEST_AI_PER_MINUTE: int = Field(default=5, ge=1)
+    RATE_LIMIT_GUEST_AI_PER_DAY: int = Field(default=20, ge=1)
+    RATE_LIMIT_AI_IP_PER_MINUTE: int = Field(default=60, ge=1)
+    RATE_LIMIT_AI_GLOBAL_PER_DAY: int = Field(default=1000, ge=1)
+
     # Temporary Chat Retention Settings
     TEMPORARY_CHAT_RETENTION_DAYS: int = (
         3  # Temporary conversations automatically purged after 3 days

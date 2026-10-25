@@ -209,7 +209,12 @@ export const apiService = {
     const response = await authenticatedFetch(
       await getEndpoint("/user/auth/google/challenge"),
     );
-    if (!response.ok) throw new Error("Unable to start Google Sign-In.");
+    if (!response.ok) {
+      const error = await response.json().catch(() => null);
+      throw new Error(
+        extractErrorMessage(error, "Unable to start Google Sign-In."),
+      );
+    }
     return (await response.json()).nonce as string;
   },
   onSessionExpired: auth.onSessionExpired,

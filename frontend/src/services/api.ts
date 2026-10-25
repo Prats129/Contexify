@@ -70,7 +70,12 @@ export const apiService = {
     const response = await authenticatedFetch(
       `${API_BASE_URL}/user/auth/google/challenge`,
     );
-    if (!response.ok) throw new Error("Unable to start Google Sign-In.");
+    if (!response.ok) {
+      const error = await response.json().catch(() => null);
+      throw new Error(
+        extractErrorMessage(error, "Unable to start Google Sign-In."),
+      );
+    }
     return (await response.json()).nonce as string;
   },
   onSessionExpired: auth.onSessionExpired,
@@ -710,8 +715,12 @@ export const apiService = {
         signal,
       });
       if (signal?.aborted) return;
-      if (!response.ok)
-        throw new Error(`Server returned HTTP ${response.status}`);
+      if (!response.ok) {
+        const error = await response.json().catch(() => null);
+        throw new Error(
+          extractErrorMessage(error, `Server returned HTTP ${response.status}`),
+        );
+      }
       if (!response.body) throw new Error("Response body is null");
       reader = response.body.getReader();
       signal?.addEventListener("abort", cancelReader);

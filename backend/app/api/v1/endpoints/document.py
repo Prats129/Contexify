@@ -20,6 +20,7 @@ from app.core.concurrency import run_blocking
 from app.core.config import settings
 from app.core.errors import DocumentLimitError, EmbeddingDimensionError, EmbeddingError
 from app.core.logging import logger
+from app.core.rate_limits import require_ai_budget
 from app.core.security import (
     Principal,
     check_asset,
@@ -186,7 +187,7 @@ async def upload_document(
     session_id: str = Form(...),
     user_id: Optional[str] = Form(None),
     is_temporary: bool = Form(False),
-    principal: Principal = Depends(require_principal),
+    principal: Principal = Depends(require_ai_budget),
 ):
     """
     Upload and index a document (PDF, TXT, MD, CSV, JSON, LOG) into the RAG vector knowledge base.
