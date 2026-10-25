@@ -94,7 +94,9 @@ logger.propagate = False
 module("app.core.logging", logger=logger)
 module("app.services.email_service", email_service=Mock())
 vectors = Mock()
-vectors.get_document_chunks.return_value = []
+vectors.get_document_chunks.return_value = [
+    {"chunk_id": "document_chunk_0", "chunk_index": 0, "page_number": 1, "text": "test"}
+]
 module("app.repositories.vector_store", vector_store_repo=vectors)
 module("app.services.rag_service", rag_service=Mock())
 module("app.services.image_gen_service", image_gen_service=Mock(aclose=AsyncMock()))
@@ -2937,6 +2939,275 @@ class SecurityTests(unittest.TestCase):
                     )
                 )["rag_service"]
         return rag, repository, embedder
+
+    def test_document_chunk_listing_follows_sdk_pages_beyond_1000_in_numeric_order(
+        self,
+    ):
+        from pinecone.index import Index
+        from pinecone.models.vectors.responses import (
+            FetchResponse,
+            ListItem,
+            ListResponse,
+            Pagination,
+        )
+        from pinecone.models.vectors.vector import Vector
+
+        _, repository, _ = self._load_document_pipeline()
+        repository.use_pinecone = True
+        index = repository.index = Mock()
+        ids = sorted(f"document_chunk_{i}" for i in range(1207))
+        pages = [ids[i : i + 100] for i in range(0, len(ids), 100)]
+        index.list_paginated.side_effect = [
+            ListResponse(
+                vectors=[ListItem(id=cid) for cid in page],
+                pagination=Pagination(next=f"page-{i + 1}")
+                if i < len(pages) - 1
+                else None,
+            )
+            for i, page in enumerate(pages)
+        ]
+        # Exercise the installed SDK's actual paginator and response models,
+        # without constructing a client or making any provider requests.
+        index.list.side_effect = lambda **kwargs: Index.list(index, **kwargs)
+
+        def fetch(*, ids):
+            return FetchResponse(
+                vectors={
+                    cid: Vector(
+                        id=cid,
+                        values=[1.0, 0.0, 0.0],
+                        metadata={
+                            "document_id": "document",
+                            "chunk_index": float(cid.rsplit("_", 1)[1]),
+                            "page_number": 1,
+                            "text": cid,
+                        },
+                    )
+                    for cid in reversed(ids)
+                }
+            )
+
+        index.fetch.side_effect = fetch
+        result = repository.get_document_chunks("document")
+        self.assertEqual([c["chunk_index"] for c in result], list(range(1207)))
+        self.assertEqual(
+            [c["text"] for c in result], [f"document_chunk_{i}" for i in range(1207)]
+        )
+        index.list.assert_called_once_with(prefix="document_chunk_", limit=100)
+        self.assertEqual(index.list_paginated.call_count, len(pages))
+        self.assertEqual(
+            [c.kwargs["pagination_token"] for c in index.list_paginated.call_args_list],
+            [None] + [f"page-{i}" for i in range(1, len(pages))],
+        )
+        self.assertEqual(index.fetch.call_args_list, [call(ids=page) for page in pages])
+        index.query.assert_not_called()
+        index.upsert.assert_not_called()
+        index.delete.assert_not_called()
+
+    def test_document_chunk_listing_rejects_missing_or_foreign_or_invalid_records(self):
+        from app.core.errors import EmbeddingError
+
+        _, repository, _ = self._load_document_pipeline()
+        repository.use_pinecone = True
+        cid = "document_chunk_0"
+        meta = {"document_id": "document", "chunk_index": 0, "text": "test"}
+        for changes in (
+            {"document_id": "another-document"},
+            {"chunk_index": 1},
+            {"chunk_index": -1},
+            {"chunk_index": 0.5},
+            {"chunk_index": float("nan")},
+            {"chunk_index": True},
+            {"chunk_index": None},
+            {"text": None},
+        ):
+            with self.subTest(changes=changes):
+                repository.index = Mock()
+                repository.index.list.return_value = [
+                    types.SimpleNamespace(vectors=[types.SimpleNamespace(id=cid)])
+                ]
+                repository.index.fetch.return_value = types.SimpleNamespace(
+                    vectors={
+                        cid: types.SimpleNamespace(id=cid, metadata={**meta, **changes})
+                    }
+                )
+                with self.assertRaisesRegex(EmbeddingError, "temporarily unavailable"):
+                    repository.get_document_chunks("document")
+        for records in (
+            {},
+            {
+                "foreign_chunk_0": types.SimpleNamespace(
+                    id="foreign_chunk_0", metadata=meta
+                )
+            },
+        ):
+            repository.index.fetch.return_value = types.SimpleNamespace(vectors=records)
+            with self.assertRaises(EmbeddingError):
+                repository.get_document_chunks("document")
+        repository.index.list.return_value = [
+            types.SimpleNamespace(vectors=[types.SimpleNamespace(id="foreign_chunk_0")])
+        ]
+        repository.index.fetch.reset_mock()
+        with self.assertRaises(EmbeddingError):
+            repository.get_document_chunks("document")
+        repository.index.fetch.assert_not_called()
+
+    def test_document_chunk_listing_never_returns_partial_results_after_provider_failure(
+        self,
+    ):
+        from app.core.errors import EmbeddingError
+
+        _, repository, _ = self._load_document_pipeline()
+        repository.index = Mock()
+        for cloud in (False, True):
+            repository.use_pinecone = cloud
+            operation = repository.index.list if cloud else repository.collection.get
+            operation.side_effect = RuntimeError("private provider diagnostic")
+            with self.subTest(cloud=cloud), self.assertRaises(EmbeddingError) as error:
+                repository.get_document_chunks("document")
+            self.assertNotIn("private", str(error.exception))
+        repository.index.list.side_effect = None
+        page = types.SimpleNamespace(
+            vectors=[types.SimpleNamespace(id="document_chunk_0")]
+        )
+
+        def failing_pages():
+            yield page
+            raise RuntimeError("second page failed")
+
+        repository.index.list.return_value = failing_pages()
+        repository.index.fetch.return_value = types.SimpleNamespace(
+            vectors={
+                "document_chunk_0": types.SimpleNamespace(
+                    id="document_chunk_0",
+                    metadata={
+                        "document_id": "document",
+                        "chunk_index": 0,
+                        "text": "test",
+                    },
+                )
+            }
+        )
+        with self.assertRaises(EmbeddingError):
+            repository.get_document_chunks("document")
+        repository.index.list.return_value = [page]
+        repository.index.fetch.side_effect = RuntimeError("fetch failed")
+        with self.assertRaises(EmbeddingError):
+            repository.get_document_chunks("document")
+
+    def test_document_chunk_listing_empty_and_local_results_remain_supported(self):
+        _, repository, _ = self._load_document_pipeline()
+        repository.collection.get.return_value = {
+            "ids": ["document_chunk_1", "document_chunk_0"],
+            "documents": ["second", "first"],
+            "metadatas": [
+                {"chunk_index": 1, "page_number": 2},
+                {"chunk_index": 0, "page_number": 1},
+            ],
+        }
+        result = repository.get_document_chunks("document")
+        self.assertEqual([c["text"] for c in result], ["first", "second"])
+        self.assertEqual([c["page_number"] for c in result], [1, 2])
+        repository.collection.get.assert_called_once_with(
+            where={"document_id": "document"}, include=["documents", "metadatas"]
+        )
+        repository.collection.get.return_value = {"ids": []}
+        self.assertEqual(repository.get_document_chunks("document"), [])
+        repository.use_pinecone = True
+        repository.index = Mock()
+        repository.index.list.return_value = []
+        self.assertEqual(repository.get_document_chunks("document"), [])
+        repository.index.fetch.assert_not_called()
+
+    def test_document_chunk_endpoint_returns_complete_preview_on_both_backends(self):
+        from app.api.v1.endpoints import document
+
+        _, repository, _ = self._load_document_pipeline()
+        cid = "document_chunk_0"
+        page = types.SimpleNamespace(vectors=[types.SimpleNamespace(id=cid)])
+        repository.index = Mock()
+        # Overlapping pages must not duplicate a chunk in the response.
+        repository.index.list.return_value = [page, page]
+        repository.index.fetch.return_value = types.SimpleNamespace(
+            vectors={
+                cid: types.SimpleNamespace(
+                    id=cid,
+                    metadata={
+                        "document_id": "document",
+                        "chunk_index": 0,
+                        "page_number": 1,
+                        "text": "test",
+                    },
+                )
+            }
+        )
+        repository.collection.get.return_value = {
+            "ids": [cid],
+            "documents": ["test"],
+            "metadatas": [{"chunk_index": 0, "page_number": 1}],
+        }
+        for cloud in (False, True):
+            repository.use_pinecone = cloud
+            with (
+                self.subTest(cloud=cloud),
+                patch.object(document, "vector_store_repo", repository),
+            ):
+                response = self.request("GET", "/document/document/chunks", self.token)
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(
+                    response.json(),
+                    {
+                        "document_id": "document",
+                        "filename": "fixture.txt",
+                        "total_chunks": 1,
+                        "chunks": [
+                            {
+                                "chunk_id": cid,
+                                "chunk_index": 0,
+                                "page_number": 1,
+                                "text": "test",
+                            }
+                        ],
+                    },
+                )
+                # A nonempty but partial preview is also a failure.
+                with patch.object(
+                    document.session_store_repo,
+                    "get_document_metadata",
+                    return_value=types.SimpleNamespace(total_chunks=2),
+                ):
+                    response = self.request(
+                        "GET", "/document/document/chunks", self.token
+                    )
+                    self.assertEqual(response.status_code, 503, response.text)
+        self.assertEqual(repository.index.fetch.call_count, 2)
+
+    def test_document_chunk_endpoint_reports_unavailable_or_incomplete_preview(self):
+        from app.api.v1.endpoints import document
+        from app.core.errors import EmbeddingError
+
+        _, repository, _ = self._load_document_pipeline()
+        with patch.object(document, "vector_store_repo", repository):
+            repository.collection.get.side_effect = RuntimeError("private diagnostic")
+            response = self.request("GET", "/document/document/chunks", self.token)
+            self.assertEqual(response.status_code, 503, response.text)
+            self.assertIn("temporarily unavailable", response.json()["detail"])
+            self.assertNotIn("private", response.text)
+            repository.collection.get.side_effect = None
+            repository.collection.get.return_value = {"ids": []}
+            response = self.request("GET", "/document/document/chunks", self.token)
+            self.assertEqual(response.status_code, 503, response.text)
+        with patch.object(
+            vectors,
+            "get_document_chunks",
+            side_effect=EmbeddingError(
+                "Document preview is temporarily unavailable. Please try again later."
+            ),
+        ) as read:
+            for token in (None, self.other_token):
+                response = self.request("GET", "/document/document/chunks", token)
+                self.assertIn(response.status_code, (401, 403, 404))
+            read.assert_not_called()
 
     def test_embedding_provenance_migration_preserves_legacy_files_and_rows(self):
         previous_clears = vectors.clear_all.call_count

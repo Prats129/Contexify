@@ -233,25 +233,52 @@ class VectorStoreRepository:
         chunks: List[Dict[str, Any]] = []
         try:
             if self.use_pinecone:
-                dummy_vector = [0.0] * 768
-                results = self.index.query(
-                    vector=dummy_vector,
-                    top_k=1000,
-                    filter={"document_id": {"$eq": document_id}},
-                    include_metadata=True,
-                )
-                chunks = []
-                for match in results.get("matches", []):
-                    meta = match.get("metadata", {})
-                    chunks.append(
-                        {
-                            "chunk_id": match.get("id"),
-                            "chunk_index": meta.get("chunk_index", 0),
-                            "page_number": meta.get("page_number"),
-                            "text": meta.get("text", ""),
-                        }
-                    )
-                chunks.sort(key=lambda x: x.get("chunk_index", 0))
+                # Ingestion uses this exact prefix. Listing follows every page;
+                # unlike similarity queries it needs no embedding or top_k cap.
+                prefix = f"{document_id}_chunk_"
+                seen = set()
+                for page in self.index.list(prefix=prefix, limit=100):
+                    ids = []
+                    for item in page.vectors:
+                        cid = item.id
+                        if not isinstance(cid, str) or not cid.startswith(prefix):
+                            raise ValueError("Unexpected document chunk ID")
+                        if cid not in seen:
+                            ids.append(cid)
+                            seen.add(cid)
+                    if not ids:
+                        continue
+                    records = self.index.fetch(ids=ids).vectors
+                    # Missing records (including eventual-consistency gaps) must
+                    # not turn a partial preview into a successful response.
+                    if set(records) != set(ids):
+                        raise ValueError("Incomplete document chunk fetch")
+                    for cid in ids:
+                        record = records[cid]
+                        meta = record.metadata or {}
+                        chunk_index = meta.get("chunk_index")
+                        if (
+                            record.id != cid
+                            or meta.get("document_id") != document_id
+                            or not isinstance(chunk_index, (int, float))
+                            or isinstance(chunk_index, bool)
+                            or not math.isfinite(chunk_index)
+                            or chunk_index < 0
+                            or chunk_index != int(chunk_index)
+                            or cid != f"{prefix}{int(chunk_index)}"
+                            or not isinstance(meta.get("text"), str)
+                        ):
+                            raise ValueError("Invalid document chunk metadata")
+                        chunks.append(
+                            {
+                                "chunk_id": cid,
+                                "chunk_index": int(chunk_index),
+                                "page_number": meta.get("page_number"),
+                                "text": meta["text"],
+                            }
+                        )
+                # Pinecone lists IDs lexically: chunk_10 precedes chunk_2.
+                chunks.sort(key=lambda x: x["chunk_index"])
                 return chunks
             else:
                 results = self.collection.get(
@@ -279,7 +306,9 @@ class VectorStoreRepository:
             logger.exception(
                 f"Failed to get chunks for document '{document_id}': {str(e)}"
             )
-            return []
+            raise EmbeddingError(
+                "Document preview is temporarily unavailable. Please try again later."
+            ) from None
 
     def delete_document(self, document_id: str, *, raise_on_error: bool = False):
         """Delete all vectors belonging to a specific document."""

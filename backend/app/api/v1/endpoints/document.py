@@ -261,7 +261,16 @@ def get_document_chunks(
     """
     check_asset(document_id, principal, "document")
     metadata = session_store_repo.get_document_metadata(document_id)
-    raw_chunks = vector_store_repo.get_document_chunks(document_id)
+    try:
+        raw_chunks = vector_store_repo.get_document_chunks(document_id)
+        if metadata and len(raw_chunks) != metadata.total_chunks:
+            raise EmbeddingError(
+                "Document preview is temporarily unavailable. Please try again later."
+            )
+    except EmbeddingError as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)
+        ) from None
     filename = metadata.filename if metadata else "Document"
 
     chunk_items = [
