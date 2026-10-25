@@ -336,52 +336,19 @@ class MediaService:
 
             return items, total
 
-    def delete_asset(self, asset_id: str) -> bool:
-        """
-        Delete a unified asset (from media_assets or documents).
-        Deletes physical file from Cloudflare R2 / disk and Chroma vectors if document.
-        """
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            # 1. Check media_assets
-            cursor.execute(
-                "SELECT id, file_url, file_path FROM media_assets WHERE id = ?",
-                (asset_id,),
-            )
-            media_row = cursor.fetchone()
-            if media_row:
-                url = media_row["file_url"]
-                path = media_row["file_path"]
-                cursor.execute("DELETE FROM media_assets WHERE id = ?", (asset_id,))
-                storage_service.delete_file(url)
-                if path and path != url:
-                    storage_service.delete_file(path)
-                return True
+    def delete_asset(
+        self, asset_id: str, *, kind: Optional[str] = None, cleanup_now: bool = True
+    ) -> bool:
+        """Remove an owned asset logically while retaining durable cleanup intent."""
+        from app.services.asset_lifecycle import request_asset_deletion
 
-            # 2. Check documents
-            cursor.execute(
-                "SELECT id, session_id, storage_url FROM documents WHERE id = ?",
-                (asset_id,),
-            )
-            doc_row = cursor.fetchone()
-            if doc_row:
-                from app.repositories.session_store import session_store_repo
-                from app.repositories.vector_store import vector_store_repo
-
-                storage_url = doc_row["storage_url"]
-                if storage_url:
-                    storage_service.delete_file(storage_url)
-                try:
-                    vector_store_repo.delete_document(asset_id)
-                except Exception as e:
-                    logger.warning(
-                        f"Error purging vectors for document {asset_id}: {e}",
-                        exc_info=True,
-                    )
-                session_store_repo.remove_document(asset_id)
-                return True
-
-        return False
+        if kind is None:
+            with get_db_connection() as conn:
+                is_media = conn.execute(
+                    "SELECT 1 FROM media_assets WHERE id=?", (asset_id,)
+                ).fetchone()
+            kind = "media" if is_media else "document"
+        return request_asset_deletion(asset_id, kind, cleanup_now=cleanup_now)
 
 
 media_service = MediaService()

@@ -22,7 +22,7 @@ from email.message import Message
 from email.parser import BytesParser
 from email.policy import default as email_policy
 from pathlib import Path
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, call, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 fixture = tempfile.TemporaryDirectory(prefix="contexify-auth-")
@@ -200,6 +200,515 @@ class SecurityTests(unittest.TestCase):
                     Path(__file__).resolve().parents[1] / "app/services/orchestrator.py"
                 )
             )["chat_orchestrator"]
+
+    def test_explicit_asset_local_deletion_revokes_access_and_preserves_other_files(
+        self,
+    ):
+        from app.services.storage_service import storage_service
+
+        other = settings.UPLOAD_IMAGE_DIR / "unrelated.png"
+        other.write_bytes(b"unrelated fixture")
+        ticket = security.download_url("image", self.principal)
+        with patch.object(
+            storage_service,
+            "delete_owned_file",
+            wraps=storage_service.delete_owned_file,
+        ) as remove:
+            response = self.request("DELETE", "/media/assets/image", self.token)
+        self.assertEqual(response.status_code, 200, response.text)
+        remove.assert_called_once_with("media/uploads/fixture.png", backend="local")
+        self.assertFalse((settings.UPLOAD_IMAGE_DIR / "fixture.png").exists())
+        self.assertTrue(other.exists())
+        self.assertTrue((root / "documents/alice-session/fixture.txt").exists())
+        self.assertEqual(
+            self.request("GET", ticket.removeprefix("/api/v1")).status_code, 401
+        )
+        self.assertEqual(
+            self.request("DELETE", "/media/assets/image", self.token).status_code, 404
+        )
+        with database.get_db_connection() as conn:
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM asset_deletions").fetchone()[0], 0
+            )
+
+    def test_explicit_asset_r2_failure_retries_after_restart_and_chat_deletion(self):
+        import importlib
+
+        from app.services import asset_lifecycle, session_lifecycle
+        from app.services.storage_service import storage_service
+
+        key = "media/uploads/fixture.png"
+        session_lifecycle.register_resource("alice-session", "r2", key)
+        objects = {key, "media/uploads/unrelated.png"}
+        client = Mock()
+        client.delete_object.side_effect = RuntimeError("fixture R2 unavailable")
+        with (
+            patch.object(storage_service, "_initialized", True),
+            patch.object(storage_service, "_s3_client", client),
+        ):
+            response = self.request("DELETE", "/media/assets/image", self.token)
+            self.assertEqual(response.status_code, 200, response.text)
+            with database.get_db_connection() as conn:
+                job = conn.execute("SELECT * FROM asset_deletions").fetchone()
+                self.assertEqual(json.loads(job["resources_json"]), [["r2", key]])
+                self.assertIsNone(
+                    conn.execute(
+                        "SELECT 1 FROM media_assets WHERE id='image'"
+                    ).fetchone()
+                )
+            self.assertFalse((settings.UPLOAD_IMAGE_DIR / "fixture.png").exists())
+            self.assertIn(key, objects)
+            # Normal-chat deletion cannot erase the independent retry record.
+            self.assertEqual(
+                self.request(
+                    "DELETE", "/session/alice-session", self.token
+                ).status_code,
+                200,
+            )
+            importlib.reload(asset_lifecycle)
+            client.delete_object.side_effect = lambda **kwargs: objects.discard(
+                kwargs["Key"]
+            )
+            session_lifecycle.purge_expired_sessions()
+        self.assertNotIn(key, objects)
+        self.assertIn("media/uploads/unrelated.png", objects)
+        self.assertTrue((root / "documents/alice-session/fixture.txt").exists())
+        with database.get_db_connection() as conn:
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM asset_deletions").fetchone()[0], 0
+            )
+
+    def test_explicit_asset_response_is_sent_before_external_cleanup(self):
+        from app.services.storage_service import storage_service
+
+        delivered = False
+        original = storage_service.delete_owned_file
+
+        def remove(*args, **kwargs):
+            self.assertTrue(
+                delivered, "Storage cleanup must not delay the delete response"
+            )
+            return original(*args, **kwargs)
+
+        async def send(message):
+            nonlocal delivered
+            if message["type"] == "http.response.body" and not message.get("more_body"):
+                with database.get_db_connection() as conn:
+                    self.assertIsNotNone(
+                        conn.execute("SELECT 1 FROM asset_deletions").fetchone()
+                    )
+                    self.assertIsNone(
+                        conn.execute(
+                            "SELECT 1 FROM media_assets WHERE id='image'"
+                        ).fetchone()
+                    )
+                self.assertTrue((settings.UPLOAD_IMAGE_DIR / "fixture.png").exists())
+                delivered = True
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0", "spec_version": "2.3"},
+            "http_version": "1.1",
+            "scheme": "http",
+            "method": "DELETE",
+            "path": "/api/v1/media/assets/image",
+            "raw_path": b"/api/v1/media/assets/image",
+            "query_string": b"",
+            "root_path": "",
+            "headers": [(b"authorization", f"Bearer {self.token}".encode())],
+            "client": ("127.0.0.1", 12345),
+            "server": ("fixture.invalid", 80),
+        }
+        with patch.object(
+            storage_service, "delete_owned_file", side_effect=remove
+        ) as cleanup:
+            asyncio.run(app(scope, receive, send))
+        self.assertTrue(delivered)
+        cleanup.assert_called_once()
+        self.assertFalse((settings.UPLOAD_IMAGE_DIR / "fixture.png").exists())
+
+    def test_explicit_asset_document_vector_failure_keeps_retry_without_stale_references(
+        self,
+    ):
+        from app.repositories.session_store import session_store_repo
+        from app.services.asset_lifecycle import purge_deleted_assets
+
+        security.ensure_session("reference-chat", self.principal)
+        with database.get_db_connection(write=True) as conn:
+            conn.execute(
+                "INSERT INTO session_documents VALUES ('reference-chat','document')"
+            )
+        cached = session_store_repo.get_or_create_session("reference-chat")
+        self.assertIn("document", cached.document_ids)
+        ticket = security.download_url("document", self.principal, "document")
+        with patch.object(
+            vectors,
+            "delete_document",
+            side_effect=RuntimeError("fixture vector outage"),
+        ):
+            response = self.request(
+                "DELETE", "/document/document?session_id=alice-session", self.token
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertNotIn("document", cached.document_ids)
+        self.assertFalse((root / "documents/alice-session/fixture.txt").exists())
+        self.assertEqual(
+            self.request("GET", ticket.removeprefix("/api/v1")).status_code, 401
+        )
+        with database.get_db_connection() as conn:
+            self.assertEqual(
+                json.loads(
+                    conn.execute(
+                        "SELECT resources_json FROM asset_deletions"
+                    ).fetchone()[0]
+                ),
+                [["vector", "document"]],
+            )
+            self.assertEqual(
+                conn.execute(
+                    "SELECT COUNT(*) FROM session_documents WHERE document_id='document'"
+                ).fetchone()[0],
+                0,
+            )
+        with patch.object(vectors, "delete_document") as delete_vectors:
+            self.assertEqual(purge_deleted_assets(), 1)
+        delete_vectors.assert_called_once_with("document", raise_on_error=True)
+
+    def test_explicit_asset_enqueue_and_metadata_removal_are_atomic(self):
+        from app.services import asset_lifecycle
+        from app.services.storage_service import storage_service
+
+        real_connection = database.get_db_connection
+
+        @contextmanager
+        def failing_connection(**kwargs):
+            with real_connection(**kwargs) as connection:
+
+                class Proxy:
+                    def execute(self, sql, *args):
+                        if sql.startswith("DELETE FROM media_assets"):
+                            raise RuntimeError("fixture SQL failure")
+                        return connection.execute(sql, *args)
+
+                yield Proxy()
+
+        with (
+            patch.object(asset_lifecycle, "get_db_connection", failing_connection),
+            patch.object(storage_service, "delete_owned_file") as remove,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "fixture SQL failure"):
+                asset_lifecycle.request_asset_deletion("image", "media")
+        remove.assert_not_called()
+        with real_connection() as conn:
+            self.assertIsNotNone(
+                conn.execute("SELECT 1 FROM media_assets WHERE id='image'").fetchone()
+            )
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM asset_deletions").fetchone()[0], 0
+            )
+        self.assertTrue((settings.UPLOAD_IMAGE_DIR / "fixture.png").exists())
+
+    def test_explicit_asset_shared_legacy_key_is_preserved_until_last_owner_deletes(
+        self,
+    ):
+        from app.services.chat_history_service import chat_history_service
+
+        owner = security.resolve_principal(security.digest(self.other_token))
+        security.ensure_session("bob-session", owner)
+        chat_history_service.save_document(
+            "shared-document",
+            self.bob.id,
+            "bob-session",
+            "shared.txt",
+            "txt",
+            7,
+            1,
+            storage_url="documents/alice-session/fixture.txt",
+        )
+        # The shared reference must also be found beyond the first metadata page.
+        with database.get_db_connection(write=True) as conn:
+            for index in range(201):
+                conn.execute(
+                    "INSERT INTO documents (id,user_id,session_id,filename,file_type,file_size_bytes,total_chunks,created_at) "
+                    "VALUES (?,?,'alice-session','unrelated.txt','txt',0,0,?)",
+                    (f"filler-{index:04}", self.alice.id, "2026-01-01T00:00:00"),
+                )
+        with patch.object(vectors, "delete_document") as delete_vectors:
+            response = self.request("DELETE", "/media/assets/document", self.token)
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertTrue((root / "documents/alice-session/fixture.txt").exists())
+            self.assertIsNotNone(
+                security.check_asset("shared-document", owner, "document")
+            )
+            self.assertEqual(
+                self.request(
+                    "DELETE", "/media/assets/shared-document", self.other_token
+                ).status_code,
+                200,
+            )
+        self.assertEqual(
+            delete_vectors.call_args_list,
+            [
+                call("document", raise_on_error=True),
+                call("shared-document", raise_on_error=True),
+            ],
+        )
+        self.assertFalse((root / "documents/alice-session/fixture.txt").exists())
+        self.assertTrue((settings.UPLOAD_IMAGE_DIR / "fixture.png").exists())
+
+    def test_explicit_asset_generated_image_and_global_pdf_deletion_are_scoped(self):
+        from app.services.asset_lifecycle import purge_deleted_assets
+        from app.services.chat_history_service import chat_history_service
+        from app.services.media_service import media_service
+
+        generated = media_service.save_generated_image(
+            self.image_fixture(), "fixture prompt", "alice-session", self.alice.id
+        )
+        with database.get_db_connection() as conn:
+            generated_key = conn.execute(
+                "SELECT file_path FROM media_assets WHERE id=?", (generated.id,)
+            ).fetchone()[0]
+        self.assertEqual(
+            self.request(
+                "DELETE", f"/media/assets/{generated.id}", self.token
+            ).status_code,
+            200,
+        )
+        self.assertFalse((root / generated_key).exists())
+        pdf_key = "documents/alice-session/synthetic.pdf"
+        (root / pdf_key).write_bytes(b"synthetic deletion fixture")
+        chat_history_service.save_document(
+            "pdf-document",
+            self.alice.id,
+            "alice-session",
+            "fixture.pdf",
+            "pdf",
+            26,
+            1,
+            storage_url=pdf_key,
+        )
+        with patch.object(
+            vectors,
+            "delete_document",
+            side_effect=RuntimeError("fixture vector outage"),
+        ):
+            self.assertEqual(
+                self.request(
+                    "DELETE", "/media/assets/pdf-document", self.token
+                ).status_code,
+                200,
+            )
+        self.assertFalse((root / pdf_key).exists())
+        with patch.object(vectors, "delete_document") as remove:
+            self.assertEqual(purge_deleted_assets(), 1)
+        remove.assert_called_once_with("pdf-document", raise_on_error=True)
+        self.assertTrue((settings.UPLOAD_IMAGE_DIR / "fixture.png").exists())
+        self.assertTrue((root / "documents/alice-session/fixture.txt").exists())
+
+    def test_explicit_asset_pending_r2_intent_survives_unconfigured_storage(self):
+        from app.services.asset_lifecycle import purge_deleted_assets
+        from app.services.storage_service import storage_service
+
+        client = Mock()
+        client.delete_object.side_effect = RuntimeError("fixture R2 outage")
+        with (
+            patch.object(storage_service, "_initialized", True),
+            patch.object(storage_service, "_s3_client", client),
+        ):
+            self.assertEqual(
+                self.request("DELETE", "/media/assets/image", self.token).status_code,
+                200,
+            )
+        self.assertEqual(purge_deleted_assets(), 0)
+        with database.get_db_connection() as conn:
+            self.assertEqual(
+                json.loads(
+                    conn.execute(
+                        "SELECT resources_json FROM asset_deletions"
+                    ).fetchone()[0]
+                ),
+                [["r2", "media/uploads/fixture.png"]],
+            )
+        client.delete_object.side_effect = None
+        client.reset_mock()
+        with (
+            patch.object(storage_service, "_initialized", True),
+            patch.object(storage_service, "_s3_client", client),
+        ):
+            self.assertEqual(purge_deleted_assets(), 1)
+        client.delete_object.assert_called_once_with(
+            Bucket="fixture", Key="media/uploads/fixture.png"
+        )
+
+    def test_explicit_asset_delete_race_cannot_switch_to_another_owners_asset_kind(
+        self,
+    ):
+        from app.services.asset_lifecycle import purge_deleted_assets
+        from app.services.chat_history_service import chat_history_service
+        from app.services.media_service import media_service
+
+        owner = security.resolve_principal(security.digest(self.other_token))
+        security.ensure_session("bob-session", owner)
+        chat_history_service.save_document(
+            "image",
+            self.bob.id,
+            "bob-session",
+            "private.txt",
+            "txt",
+            7,
+            1,
+            storage_url="documents/bob-session/private.txt",
+        )
+        original = media_service.delete_asset
+
+        def concurrent_delete(asset_id, **kwargs):
+            # Another authorized request deletes the media after this request's
+            # ownership check. The document table happens to contain the same ID.
+            self.assertTrue(original(asset_id, kind="media", cleanup_now=False))
+            return original(asset_id, **kwargs)
+
+        with patch.object(media_service, "delete_asset", side_effect=concurrent_delete):
+            response = self.request("DELETE", "/media/assets/image", self.token)
+        self.assertEqual(response.status_code, 404)
+        with patch.object(vectors, "delete_document") as remove:
+            purge_deleted_assets()
+        remove.assert_not_called()
+        self.assertEqual(
+            security.check_asset("image", owner, "document")["filename"], "private.txt"
+        )
+
+    def test_explicit_asset_cleanup_has_a_single_claim_and_recovers_expired_leases(
+        self,
+    ):
+        import threading
+
+        from app.services.asset_lifecycle import cleanup_asset, purge_deleted_assets
+        from app.services.storage_service import storage_service
+
+        with patch.object(
+            storage_service,
+            "delete_owned_file",
+            side_effect=RuntimeError("fixture outage"),
+        ):
+            self.assertEqual(
+                self.request("DELETE", "/media/assets/image", self.token).status_code,
+                200,
+            )
+        entered, release = threading.Event(), threading.Event()
+        original = storage_service.delete_owned_file
+
+        def slow_remove(*args, **kwargs):
+            entered.set()
+            if not release.wait(10):
+                raise RuntimeError("fixture timed out")
+            return original(*args, **kwargs)
+
+        with (
+            patch.object(
+                storage_service, "delete_owned_file", side_effect=slow_remove
+            ) as remove,
+            ThreadPoolExecutor(max_workers=1) as pool,
+        ):
+            future = pool.submit(cleanup_asset, "image", "media")
+            try:
+                self.assertTrue(entered.wait(5))
+                self.assertFalse(cleanup_asset("image", "media"))
+            finally:
+                release.set()
+            self.assertTrue(future.result(timeout=10))
+            remove.assert_called_once()
+        # A worker that died after claiming a different job must not strand it.
+        with patch.object(
+            vectors, "delete_document", side_effect=RuntimeError("fixture outage")
+        ):
+            self.assertEqual(
+                self.request(
+                    "DELETE", "/media/assets/document", self.token
+                ).status_code,
+                200,
+            )
+        with database.get_db_connection(write=True) as conn:
+            conn.execute(
+                "UPDATE asset_deletions SET claim_token='crashed-worker',lease_expires_at=?",
+                (time.time() - 1,),
+            )
+        with patch.object(vectors, "delete_document"):
+            self.assertEqual(purge_deleted_assets(), 1)
+
+    def test_explicit_asset_failed_progress_commit_is_safe_to_retry(self):
+        from app.services import asset_lifecycle
+        from app.services.storage_service import storage_service
+
+        with patch.object(
+            storage_service,
+            "delete_owned_file",
+            side_effect=RuntimeError("fixture outage"),
+        ):
+            self.assertEqual(
+                self.request("DELETE", "/media/assets/image", self.token).status_code,
+                200,
+            )
+        real_connection = database.get_db_connection
+
+        @contextmanager
+        def failing_connection(**kwargs):
+            with real_connection(**kwargs) as connection:
+
+                class Proxy:
+                    def execute(self, sql, *args):
+                        if sql.startswith("UPDATE asset_deletions SET resources_json"):
+                            raise RuntimeError("fixture acknowledgement failure")
+                        return connection.execute(sql, *args)
+
+                yield Proxy()
+
+        with patch.object(asset_lifecycle, "get_db_connection", failing_connection):
+            self.assertFalse(asset_lifecycle.cleanup_asset("image", "media"))
+        self.assertFalse((settings.UPLOAD_IMAGE_DIR / "fixture.png").exists())
+        with real_connection(write=True) as conn:
+            self.assertIsNotNone(
+                conn.execute("SELECT 1 FROM asset_deletions").fetchone()
+            )
+            conn.execute("UPDATE asset_deletions SET lease_expires_at=0")
+        self.assertEqual(asset_lifecycle.purge_deleted_assets(), 1)
+
+    def test_explicit_asset_schema_initialization_preserves_pending_jobs_and_rejects_unsafe_keys(
+        self,
+    ):
+        from app.services.storage_service import storage_service
+
+        with patch.object(
+            storage_service,
+            "delete_owned_file",
+            side_effect=RuntimeError("fixture outage"),
+        ):
+            self.assertEqual(
+                self.request("DELETE", "/media/assets/image", self.token).status_code,
+                200,
+            )
+        database.init_db()
+        database.init_db()
+        with database.get_db_connection(write=True) as conn:
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM asset_deletions").fetchone()[0], 1
+            )
+            conn.execute(
+                "UPDATE documents SET storage_url='../private.txt' WHERE id='document'"
+            )
+        self.assertEqual(
+            self.request("DELETE", "/media/assets/document", self.token).status_code,
+            404,
+        )
+        with database.get_db_connection() as conn:
+            self.assertIsNotNone(
+                conn.execute("SELECT 1 FROM documents WHERE id='document'").fetchone()
+            )
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM asset_deletions").fetchone()[0], 1
+            )
 
     def test_history_windows_have_stable_cursors_and_preserve_all_rows(self):
         from app.services.chat_history_service import chat_history_service as history

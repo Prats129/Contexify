@@ -5,7 +5,16 @@ from pathlib import Path
 from threading import BoundedSemaphore
 from typing import List, Optional, Tuple
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    UploadFile,
+    status,
+)
 
 from app.core.concurrency import run_blocking
 from app.core.config import settings
@@ -30,6 +39,7 @@ from app.schemas.document import (
     DocumentMetadata,
     DocumentUploadResponse,
 )
+from app.services.asset_lifecycle import cleanup_asset
 from app.services.chat_history_service import chat_history_service
 from app.services.pdf_service import PDFProcessingError
 from app.services.rag_service import rag_service
@@ -274,7 +284,10 @@ def get_document_chunks(
 
 @router.delete("/{document_id}")
 def delete_document(
-    document_id: str, session_id: str, principal: Principal = Depends(require_principal)
+    document_id: str,
+    session_id: str,
+    background_tasks: BackgroundTasks,
+    principal: Principal = Depends(require_principal),
 ):
     """
     Delete a document and purge its vectors from ChromaDB.
@@ -283,10 +296,12 @@ def delete_document(
     check_session(session_id, principal)
     if row["session_id"] != session_id:
         raise HTTPException(404, "Document not found in this session.")
-    vector_store_repo.delete_document(document_id)
-    session_store_repo.remove_document(document_id)
+    session_store_repo.remove_document(document_id, cleanup_now=False)
+    background_tasks.add_task(cleanup_asset, document_id, "document")
     chat_history_service.touch_session(session_id)
-    return {"message": f"Document '{document_id}' removed successfully."}
+    return {
+        "message": "Document removed. Any pending storage cleanup will be retried automatically."
+    }
 
 
 @router.post("/clear-all")

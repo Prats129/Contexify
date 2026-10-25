@@ -437,6 +437,18 @@ def init_db():
             FOREIGN KEY (attempt_id) REFERENCES upload_attempts(id) ON DELETE CASCADE
         )""")
 
+        # Independent of asset/session rows: retries must survive logical deletion.
+        cursor.execute("""CREATE TABLE IF NOT EXISTS asset_deletions (
+            kind TEXT NOT NULL, asset_id TEXT NOT NULL,
+            resources_json TEXT NOT NULL, requested_at REAL NOT NULL,
+            last_attempt_at REAL NOT NULL DEFAULT 0,
+            claim_token TEXT, lease_expires_at REAL NOT NULL DEFAULT 0,
+            PRIMARY KEY (kind,asset_id)
+        )""")
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_asset_cleanup ON asset_deletions(lease_expires_at,last_attempt_at,requested_at)"
+        )
+
         # 5. Media Assets Table (for user uploads and AI generated images)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS media_assets (

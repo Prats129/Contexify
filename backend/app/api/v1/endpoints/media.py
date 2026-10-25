@@ -4,6 +4,7 @@ from typing import List, Optional
 
 from fastapi import (
     APIRouter,
+    BackgroundTasks,
     Depends,
     File,
     Form,
@@ -32,6 +33,7 @@ from app.core.security import (
 from app.db.database import get_db_connection
 from app.schemas.chat import MediaAttachment
 from app.schemas.media import AssetDeleteResponse, AssetItem, PaginatedAssetsResponse
+from app.services.asset_lifecycle import cleanup_asset
 from app.services.image_validation import image_response
 from app.services.media_service import (
     ALLOWED_IMAGE_EXTENSIONS,
@@ -230,20 +232,25 @@ def list_unified_assets(
 
 @router.delete("/assets/{asset_id}", response_model=AssetDeleteResponse)
 def delete_unified_asset(
-    asset_id: str, principal: Principal = Depends(require_principal)
+    asset_id: str,
+    background_tasks: BackgroundTasks,
+    principal: Principal = Depends(require_principal),
 ):
     """
     Delete an asset (uploaded image, document, or generated media) and purge from storage.
     """
     from app.core.security import asset_record
 
-    check_asset(asset_id, principal, "media" if asset_record(asset_id) else "document")
-    success = media_service.delete_asset(asset_id)
+    kind = "media" if asset_record(asset_id) else "document"
+    check_asset(asset_id, principal, kind)
+    success = media_service.delete_asset(asset_id, kind=kind, cleanup_now=False)
     if not success:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Asset with ID '{asset_id}' not found",
         )
+    background_tasks.add_task(cleanup_asset, asset_id, kind)
     return AssetDeleteResponse(
-        message=f"Asset '{asset_id}' deleted successfully", id=asset_id
+        message="Asset removed. Any pending storage cleanup will be retried automatically.",
+        id=asset_id,
     )

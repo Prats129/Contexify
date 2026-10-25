@@ -318,6 +318,9 @@ def cleanup_session(session_id: str) -> bool:
 
 
 def purge_expired_sessions() -> int:
+    from app.services.asset_lifecycle import purge_deleted_assets
+
+    purge_deleted_assets()
     purge_failed_uploads()
     with get_db_connection(write=True) as conn:
         conn.execute(

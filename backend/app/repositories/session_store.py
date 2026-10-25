@@ -251,20 +251,10 @@ class SessionStoreRepository:
             session.messages.append(msg_dict)
             del session.messages[: -getattr(settings, "MODEL_HISTORY_MESSAGES", 40)]
 
-    def remove_document(self, document_id: str):
-        from app.services.storage_service import storage_service
+    def remove_document(self, document_id: str, *, cleanup_now: bool = True):
+        from app.services.asset_lifecycle import request_asset_deletion
 
-        # Check storage URL to purge from Cloudflare R2
-        storage_url = chat_history_service.get_document_storage_url(document_id)
-        if storage_url:
-            storage_service.delete_file(storage_url)
-
-        with self._cache_lock:
-            self._documents.pop(document_id, None)
-            for session in self._sessions.values():
-                if document_id in session.document_ids:
-                    session.document_ids.remove(document_id)
-        chat_history_service.delete_document(document_id)
+        return request_asset_deletion(document_id, "document", cleanup_now=cleanup_now)
 
 
 session_store_repo = SessionStoreRepository()
