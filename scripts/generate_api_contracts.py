@@ -2,14 +2,17 @@
 
 Run with backend/venv/Scripts/python.exe -B scripts/generate_api_contracts.py.
 Use --check in verification to reject stale generated files without writing them.
+Check mode requires Node.js and installed frontend TypeScript dependencies.
 """
 
 import argparse
 import json
+import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+CHECKER = Path(__file__).with_name("check_api_contracts.cjs")
 sys.path.insert(0, str(ROOT / "backend"))
 
 from pydantic.json_schema import models_json_schema  # noqa: E402
@@ -98,19 +101,60 @@ def render() -> str:
     )
 
 
+def verify_contracts(expected: str, sources: dict[str, str]) -> list[str]:
+    """Compare type declarations with the existing frontend TypeScript parser."""
+    try:
+        result = subprocess.run(
+            ["node", str(CHECKER)],
+            input=json.dumps({"expected": expected, "sources": sources}),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=30,
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+        )
+    except FileNotFoundError:
+        raise RuntimeError("Node.js is required to check API contracts.") from None
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("API contract verification timed out.") from None
+    if result.returncode not in (0, 1):
+        raise RuntimeError(result.stderr.strip() or "API contract parser failed.")
+    try:
+        errors = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        raise RuntimeError("API contract parser returned an invalid result.") from None
+    if not isinstance(errors, list) or any(
+        not isinstance(error, str) for error in errors
+    ):
+        raise RuntimeError("API contract parser returned an invalid result.")
+    if result.returncode == 1 and not errors:
+        raise RuntimeError("API contract parser failed without diagnostics.")
+    return errors
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
     generated = render()
     stale = []
+    sources = {}
     for platform in ("frontend", "mobile"):
         target = ROOT / platform / "src/types/api-contracts.ts"
         if args.check:
-            if not target.exists() or target.read_text(encoding="utf-8") != generated:
-                stale.append(str(target.relative_to(ROOT)))
+            relative = target.relative_to(ROOT).as_posix()
+            if not target.exists():
+                stale.append(f"{relative}: missing file")
+            else:
+                sources[relative] = target.read_text(encoding="utf-8-sig")
         else:
             target.write_text(generated, encoding="utf-8")
+    if args.check and sources:
+        try:
+            stale.extend(verify_contracts(generated, sources))
+        except RuntimeError as error:
+            print(str(error), file=sys.stderr)
+            return 2
     if stale:
         print("Stale API contracts: " + ", ".join(stale), file=sys.stderr)
         return 1
