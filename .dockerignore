@@ -1,4 +1,5 @@
 # Include only inputs used by the production Dockerfile.
+# Docker glob syntax is not Markdown; keep wildcard patterns literal.
 
 **
 !backend/
@@ -23,28 +24,29 @@ frontend/**
 # Keep secrets and runtime artifacts out even inside included source trees.
 
 **/.env
-**/.env._
-\*\*/_.env
-**/\*.pem
-**/_.key
-\*\*/_.p12
-**/\*.pfx
+**/.env.*
+**/*.env
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
 **/.aws
 **/.ssh
 **/credentials.json
-**/_service-account_.json
+**/*service-account*.json
 **/.git
 **/node_modules
-**/**pycache**
-**/\*.py[cod]
+**/__pycache__
+**/*.py[cod]
 **/venv
 **/.venv
 **/data
 **/chroma_db
-**/_.db
-\*\*/_.db-_
-\*\*/_.sqlite
-**/_.sqlite-_
-**/_.sqlite3
-\*\*/_.sqlite3-_
-\*\*/_.log \*_/_.tsbuildinfo
+**/*.db
+**/*.db-*
+**/*.sqlite
+**/*.sqlite-*
+**/*.sqlite3
+**/*.sqlite3-*
+**/*.log
+**/*.tsbuildinfo

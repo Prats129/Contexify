@@ -1,0 +1,2 @@
+# Docker wildcard patterns must not be rewritten as Markdown formatting.
+.dockerignore
