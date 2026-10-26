@@ -7354,6 +7354,40 @@ class SecurityTests(unittest.TestCase):
         self.assertTrue(slots.acquire(blocking=False))
         slots.release()
 
+    def test_pdf_worker_preserves_windows_drive_without_leaking_credentials(self):
+        import os
+
+        from app.services import pdf_service
+
+        working = root / (self.__class__.__name__ + "-parser-environment")
+        working.mkdir()
+        worker = working / "environment_worker.py"
+        worker.write_text(
+            "import json, os\n"
+            "assert 'GEMINI_API_KEY' not in os.environ\n"
+            "print(json.dumps({'pages': [['fixture', 1]]}))\n",
+            encoding="utf-8",
+        )
+        path = working / "fixture.pdf"
+        path.write_bytes(b"fixture")
+        original_spawn = pdf_service.subprocess.Popen
+
+        def spawn(*args, **kwargs):
+            environment = {key.upper(): value for key, value in kwargs["env"].items()}
+            self.assertEqual(environment["SYSTEMDRIVE"], "C:")
+            self.assertNotIn("GEMINI_API_KEY", kwargs["env"])
+            return original_spawn(*args, cwd=working, **kwargs)
+
+        with (
+            patch.dict(
+                os.environ, {"SystemDrive": "C:", "GEMINI_API_KEY": "fixture-secret"}
+            ),
+            patch.object(pdf_service, "_worker", worker),
+            patch.object(pdf_service.subprocess, "Popen", side_effect=spawn),
+        ):
+            self.assertEqual(pdf_service.extract_pdf_pages(path), [("fixture", 1)])
+        self.assertFalse((working / "%SystemDrive%").exists())
+
     def test_pdf_concurrency_limit_rejects_without_starting_another_worker(self):
         import threading
 

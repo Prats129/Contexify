@@ -1,4 +1,5 @@
 """Bounded PDF extraction without importing application code in the worker."""
+
 import json
 import os
 import subprocess
@@ -30,33 +31,66 @@ def extract_pdf_pages(file_path: Path) -> List[Tuple[str, int]]:
         raise PDFProcessingError("PDF processing is busy. Please retry shortly.", 503)
     try:
         command = [
-            sys.executable, "-I", "-B", str(_worker), str(file_path.resolve()),
-            str(settings.PDF_MAX_PAGES), str(settings.PDF_MAX_TEXT_CHARS),
-            str(settings.PDF_PARSE_MEMORY_MB), str(settings.PDF_PARSE_TIMEOUT_SECONDS),
+            sys.executable,
+            "-I",
+            "-B",
+            str(_worker),
+            str(file_path.resolve()),
+            str(settings.PDF_MAX_PAGES),
+            str(settings.PDF_MAX_TEXT_CHARS),
+            str(settings.PDF_PARSE_MEMORY_MB),
+            str(settings.PDF_PARSE_TIMEOUT_SECONDS),
         ]
-        # Do not pass provider credentials or application configuration to the parser.
-        environment = {key: value for key, value in os.environ.items()
-                       if key.upper() in {"SYSTEMROOT", "WINDIR", "PATH", "TEMP", "TMP", "LANG", "LC_ALL"}}
+        # Preserve Windows path expansion without passing application credentials.
+        environment = {
+            key: value
+            for key, value in os.environ.items()
+            if key.upper()
+            in {
+                "SYSTEMROOT",
+                "SYSTEMDRIVE",
+                "WINDIR",
+                "PATH",
+                "TEMP",
+                "TMP",
+                "LANG",
+                "LC_ALL",
+            }
+        }
         try:
             with subprocess.Popen(
-                command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                env=environment, text=True, encoding="utf-8",
-                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                env=environment,
+                text=True,
+                encoding="utf-8",
+                creationflags=subprocess.CREATE_NO_WINDOW
+                if sys.platform == "win32"
+                else 0,
             ) as process:
                 try:
-                    output, _ = process.communicate(timeout=settings.PDF_PARSE_TIMEOUT_SECONDS)
+                    output, _ = process.communicate(
+                        timeout=settings.PDF_PARSE_TIMEOUT_SECONDS
+                    )
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.communicate()
-                    raise PDFProcessingError("PDF processing timed out. Try a smaller document.") from None
+                    raise PDFProcessingError(
+                        "PDF processing timed out. Try a smaller document."
+                    ) from None
         except OSError:
-            raise PDFProcessingError("PDF processing is unavailable. Please retry shortly.", 503) from None
+            raise PDFProcessingError(
+                "PDF processing is unavailable. Please retry shortly.", 503
+            ) from None
         if process.returncode:
             raise PDFProcessingError("PDF could not be processed within safety limits.")
         try:
             result = json.loads(output)
         except json.JSONDecodeError:
-            raise PDFProcessingError("PDF could not be processed within safety limits.") from None
+            raise PDFProcessingError(
+                "PDF could not be processed within safety limits."
+            ) from None
         if "error" in result:
             raise PDFProcessingError(result["error"], result["status_code"])
         return [(text, number) for text, number in result["pages"]]
