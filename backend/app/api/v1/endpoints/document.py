@@ -177,7 +177,10 @@ def _process_document_upload(
         raise HTTPException(status_code=503, detail=str(e)) from None
     except Exception as e:
         logger.exception(f"Error processing document: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail="The document could not be processed because of an unexpected server error. Please try again or contact support.",
+        ) from None
     finally:
         _remove_temp_file(temp_file_path)
 
@@ -223,7 +226,10 @@ async def upload_document(
             logger.exception("Failed to read uploaded document")
             raise HTTPException(500, "Failed to read uploaded file.") from None
         if len(content) > max_size:
-            raise HTTPException(413, "Document exceeds the upload size limit.")
+            raise HTTPException(
+                413,
+                f"Document exceeds the upload size limit ({max_size / (1024 * 1024):g} MB). Upload a smaller file.",
+            )
 
         return await run_blocking(
             _process_document_upload,

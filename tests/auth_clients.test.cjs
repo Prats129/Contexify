@@ -1683,6 +1683,99 @@ const credentials = (token) => ({
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
 for (const platform of ["frontend", "mobile"]) {
+  test(`${platform}: document uploads preserve specific processing errors and allow a later retry`, async () => {
+    let result = response({});
+    const fixture = client(platform, (url) =>
+      url.endsWith("/user/login")
+        ? response(credentials("signed-token"))
+        : result,
+    );
+    await fixture.api.login("fixture", "password");
+    const upload = () =>
+      platform === "frontend"
+        ? fixture.api.uploadDocument(
+            { name: "book.pdf", size: 100, type: "application/pdf" },
+            "fixture-session",
+          )
+        : fixture.api.uploadDocument(
+            "fixture-session",
+            "file:///book.pdf",
+            "book.pdf",
+            "application/pdf",
+          );
+    const cases = [
+      [
+        503,
+        "The AI service has reached a rate or usage limit while processing your document. Please try again later.",
+      ],
+      [
+        503,
+        "The AI service denied access to document processing. Please contact support.",
+      ],
+      [
+        503,
+        "The configured document-processing model could not be found. Please contact support.",
+      ],
+      [
+        503,
+        "The AI service timed out while processing your document. Please try again later.",
+      ],
+      [
+        413,
+        "PDF exceeds the page limit of 100. This file has 158 pages. Upload a smaller PDF.",
+      ],
+      [
+        413,
+        "Document exceeds the upload size limit (25 MB). Upload a smaller file.",
+      ],
+      [422, "Encrypted PDFs are not supported. Upload an unencrypted copy."],
+      [
+        422,
+        "PDF contains no extractable text. If it is a scanned document, upload a searchable/OCR version.",
+      ],
+    ];
+    for (const [status, message] of cases) {
+      result = response({ detail: message }, status);
+      const index = fixture.uploads.length;
+      const rejection = assert.rejects(
+        upload(),
+        (error) => error.message === message,
+      );
+      if (platform === "mobile") {
+        await until(() => fixture.uploads[index]?.sent);
+        fixture.uploads[index].status = status;
+        fixture.uploads[index].responseText = JSON.stringify({
+          detail: message,
+        });
+        fixture.uploads[index].onload();
+      }
+      await rejection;
+    }
+    const document = {
+      document_id: "retry-document",
+      filename: "book.pdf",
+      file_type: ".pdf",
+      file_size_bytes: 100,
+      total_chunks: 1,
+      uploaded_at: "2026-10-26",
+    };
+    result = response({ document, message: "Uploaded" }, 201);
+    const index = fixture.uploads.length;
+    const retry = upload();
+    if (platform === "mobile") {
+      await until(() => fixture.uploads[index]?.sent);
+      fixture.uploads[index].status = 201;
+      fixture.uploads[index].responseText = JSON.stringify({ document });
+      fixture.uploads[index].onload();
+    }
+    const uploaded = await retry;
+    assert.equal(
+      (platform === "frontend" ? uploaded.document : uploaded).document_id,
+      document.document_id,
+    );
+    assert.equal(await fixture.api.hasUserSession(), true);
+  });
+
   test(`${platform}: storage failures show the server message without publishing uploads or signing out`, async () => {
     const message =
       "File storage is temporarily unavailable. The upload was not completed. Please try again.";

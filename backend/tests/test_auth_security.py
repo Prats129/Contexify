@@ -3055,7 +3055,8 @@ class SecurityTests(unittest.TestCase):
                 )
                 self.assertEqual(response.status_code, 500)
                 self.assertEqual(objects, original_objects)
-                self.assertIn("fixture embedding failure", response.json()["detail"])
+                self.assertIn("unexpected server error", response.json()["detail"])
+                self.assertNotIn("fixture embedding failure", response.json()["detail"])
             self.assertEqual(client.put_object.call_count, 2)
             self.assertEqual(client.delete_object.call_count, 2)
             with database.get_db_connection() as conn:
@@ -3566,6 +3567,62 @@ class SecurityTests(unittest.TestCase):
             self.assertIsNone(row["embedding_space"])
         self.assertTrue((root / "documents/alice-session/fixture.txt").exists())
         self.assertEqual(vectors.clear_all.call_count, previous_clears)
+
+    def test_embedding_provider_causes_reach_upload_response_without_private_details(
+        self,
+    ):
+        from google.genai.errors import ClientError, ServerError
+
+        from app.api.v1.endpoints import document
+
+        rag, repository, _ = self._load_document_pipeline()
+        service = runpy.run_path(
+            str(
+                Path(__file__).resolve().parents[1]
+                / "app/services/embedding_service.py"
+            )
+        )["embedding_service"]
+        provider = Mock()
+        service.client = types.SimpleNamespace(models=provider)
+        with (
+            self._isolated_r2() as (objects, _),
+            patch.object(document, "rag_service", rag),
+            patch.dict(
+                rag.recursive_character_chunking.__func__.__globals__,
+                {"embedding_service": service},
+            ),
+        ):
+            before = dict(objects)
+            for code, reason in (
+                (429, "rate or usage limit"),
+                (400, "rejected the document-processing request"),
+                (403, "denied access"),
+                (404, "model could not be found"),
+                (503, "temporarily unavailable"),
+            ):
+                error_type = ServerError if code >= 500 else ClientError
+                provider.embed_content.side_effect = error_type(
+                    code,
+                    {
+                        "error": {
+                            "message": "private credential and private document content"
+                        }
+                    },
+                )
+                with self.subTest(code=code):
+                    response = self.request(
+                        "POST",
+                        "/document/upload",
+                        self.token,
+                        data={"session_id": "alice-session"},
+                        files={"file": ("valid.txt", b"test", "text/plain")},
+                    )
+                    self.assertEqual(response.status_code, 503, response.text)
+                    self.assertIn(reason, response.json()["detail"])
+                    self.assertNotIn("private", response.text)
+                    self.assertNotIn("page limit", response.text)
+                    self.assertEqual(objects, before)
+            repository.collection.add.assert_not_called()
 
     def test_embedding_failure_returns_503_rolls_back_r2_and_retry_records_space(self):
         from app.api.v1.endpoints import document
@@ -7258,10 +7315,23 @@ class SecurityTests(unittest.TestCase):
             ):
                 extract_pdf_pages(path)
             self.assertEqual(raised.exception.status_code, 413)
+            if field == "PDF_MAX_PAGES":
+                self.assertIn("page limit of 1", str(raised.exception))
+                self.assertIn("2 pages", str(raised.exception))
+            elif field == "PDF_MAX_TEXT_CHARS":
+                self.assertIn("3 characters", str(raised.exception))
+            else:
+                self.assertIn("MB", str(raised.exception))
         path.write_bytes(self.pdf_fixture("Encrypted fixture", encrypted=True))
         with self.assertRaises(PDFProcessingError) as raised:
             extract_pdf_pages(path)
         self.assertEqual(raised.exception.status_code, 422)
+
+        path.write_bytes(self.pdf_fixture(""))
+        with self.assertRaises(PDFProcessingError) as raised:
+            extract_pdf_pages(path)
+        self.assertIn("no extractable text", str(raised.exception))
+        self.assertIn("OCR", str(raised.exception))
 
     def test_pdf_timeout_kills_and_reaps_worker_and_releases_slot(self):
         import threading
@@ -8606,6 +8676,107 @@ class BlockingWorkerTests(unittest.TestCase):
 
                     with self.assertRaises(EmbeddingError):
                         asyncio.run(run_blocking(service.embed_batch, ["one", "two"]))
+
+    def test_embedding_error_diagnostics_are_redacted_and_later_requests_can_recover(
+        self,
+    ):
+        from google.genai.errors import ClientError, ServerError
+
+        from app.core.errors import EmbeddingError
+
+        service = runpy.run_path(
+            str(
+                Path(__file__).resolve().parents[1]
+                / "app/services/embedding_service.py"
+            )
+        )["embedding_service"]
+        provider = Mock()
+        service.client = types.SimpleNamespace(models=provider)
+        original_client = service.client
+        original_space = service.embedding_space
+        for code, category in (
+            (400, "invalid_request"),
+            (401, "authentication"),
+            (402, "account_settings"),
+            (403, "permission"),
+            (404, "model_not_found"),
+            (408, "timeout"),
+            (413, "request_too_large"),
+            (429, "rate_or_quota_limit"),
+            (503, "provider_unavailable"),
+            (504, "timeout"),
+            (None, "unknown"),
+        ):
+            error_type = ServerError if code and code >= 500 else ClientError
+            provider.embed_content.side_effect = (
+                error_type(
+                    code,
+                    {"error": {"message": "private-api-key and private-document-text"}},
+                )
+                if code
+                else RuntimeError("private-api-key and private-document-text")
+            )
+            with (
+                self.subTest(code=code),
+                self.assertLogs(logger, level="ERROR") as captured,
+            ):
+                with self.assertRaises(EmbeddingError) as failed:
+                    service.embed_batch(["private-document-text"] * 101)
+            output = " ".join(captured.output)
+            self.assertIn(f"http_status={code if code else 'unknown'}", output)
+            self.assertIn("category=" + category, output)
+            self.assertIn("batch_size=100", output)
+            self.assertNotIn("private-api-key", output)
+            self.assertNotIn("private-document-text", output)
+            public = str(failed.exception)
+            self.assertNotIn("private-api-key", public)
+            self.assertNotIn("private-document-text", public)
+            if code == 429:
+                self.assertIn("rate or usage limit", public)
+                self.assertNotIn("page", public)
+            elif code in (408, 504):
+                self.assertIn("timed out", public)
+            elif code == 413:
+                self.assertIn("too large", public)
+            # A provider failure must not disable the client or poison the next
+            # small upload. No retries or fake embeddings are introduced here.
+            provider.embed_content.side_effect = None
+            provider.embed_content.return_value = types.SimpleNamespace(
+                embeddings=[types.SimpleNamespace(values=[1.0, 0.0])]
+            )
+            self.assertEqual(service.embed_batch(["same TXT again"]), [[1.0, 0.0]])
+            self.assertIs(service.client, original_client)
+            self.assertEqual(service.embedding_space, original_space)
+
+    def test_embedding_transport_and_invalid_response_errors_have_specific_safe_messages(
+        self,
+    ):
+        from app.core.errors import EmbeddingError
+
+        service = runpy.run_path(
+            str(
+                Path(__file__).resolve().parents[1]
+                / "app/services/embedding_service.py"
+            )
+        )["embedding_service"]
+        provider = Mock()
+        service.client = types.SimpleNamespace(models=provider)
+        for error, reason in (
+            (httpx.ReadTimeout("private URL"), "timed out"),
+            (httpx.ConnectError("private URL"), "Could not connect"),
+        ):
+            provider.embed_content.side_effect = error
+            with (
+                self.subTest(reason=reason),
+                self.assertRaises(EmbeddingError) as failed,
+            ):
+                service.embed_batch(["test"])
+            self.assertIn(reason, str(failed.exception))
+            self.assertNotIn("private", str(failed.exception))
+        provider.embed_content.side_effect = None
+        provider.embed_content.return_value = types.SimpleNamespace(embeddings=None)
+        with self.assertRaisesRegex(EmbeddingError, "incomplete or invalid result"):
+            service.embed_batch(["test"])
 
     def test_embedding_provider_failures_invalid_vectors_and_model_changes_are_explicit(
         self,

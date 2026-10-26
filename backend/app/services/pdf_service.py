@@ -21,7 +21,11 @@ class PDFProcessingError(ValueError):
 
 def extract_pdf_pages(file_path: Path) -> List[Tuple[str, int]]:
     if file_path.stat().st_size > settings.PDF_MAX_FILE_SIZE_BYTES:
-        raise PDFProcessingError("PDF exceeds the upload size limit.", 413)
+        raise PDFProcessingError(
+            f"PDF exceeds the upload size limit ({settings.PDF_MAX_FILE_SIZE_BYTES / (1024 * 1024):g} MB). "
+            "Upload a smaller PDF.",
+            413,
+        )
     if not _slots.acquire(blocking=False):
         raise PDFProcessingError("PDF processing is busy. Please retry shortly.", 503)
     try:
