@@ -1,26 +1,27 @@
 {
   "name": "mobile",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "main": "index.ts",
   "dependencies": {
     "@expo/vector-icons": "^15.0.2",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-native-google-signin/google-signin": "^16.1.5",
-    "expo": "~57.0.21",
-    "expo-clipboard": "^57.0.1",
-    "expo-constants": "~57.0.18",
-    "expo-document-picker": "~57.0.1",
-    "expo-haptics": "~57.0.2",
-    "expo-linking": "~57.0.9",
-    "expo-status-bar": "~57.0.1",
-    "expo-updates": "^57.0.21",
-    "expo-web-browser": "~57.0.3",
-    "react": "19.2.3",
-    "react-native": "0.86.3",
-    "react-native-safe-area-context": "~5.7.0"
+    "expo": "~58.0.19",
+    "expo-clipboard": "~58.0.4",
+    "expo-constants": "~58.0.13",
+    "expo-document-picker": "~58.0.4",
+    "expo-font": "~58.0.10",
+    "expo-haptics": "~58.0.7",
+    "expo-linking": "~58.0.14",
+    "expo-status-bar": "~58.0.4",
+    "expo-updates": "~58.0.18",
+    "expo-web-browser": "~58.0.6",
+    "react": "19.3.0",
+    "react-native": "0.88.0",
+    "react-native-safe-area-context": "~5.10.1"
   },
   "devDependencies": {
-    "@types/react": "~19.2.2",
+    "@types/react": "~19.3.0",
     "typescript": "~6.0.3"
   },
   "scripts": {
@@ -35,6 +36,6 @@
   },
   "private": true,
   "engines": {
-    "node": "^20.19.4 || ^22.13.0 || ^24.3.0 || >=25.0.0"
+    "node": "^22.13.0 || ^24.3.0 || ^26.0.0 || >=27.0.0"
   }
 }

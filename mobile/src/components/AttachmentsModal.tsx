@@ -791,7 +791,7 @@ export const AttachmentsModal: React.FC<AttachmentsModalProps> = ({
                     <View style={styles.listFooter}>
                       <ActivityIndicator size="small" color={theme.primary} />
                     </View>
-                  ) : null
+                  ) : undefined
                 }
               />
             )}

@@ -9,6 +9,7 @@ import {
   StyleSheet,
   Image,
   useWindowDimensions,
+  type ViewInstance,
 } from "react-native";
 import { Feather, MaterialCommunityIcons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
@@ -35,7 +36,7 @@ export const Header: React.FC<HeaderProps> = ({
 }) => {
   const theme = customTheme || getAppTheme(isDark);
   const { width, height } = useWindowDimensions();
-  const menuAnchorRef = useRef<View>(null);
+  const menuAnchorRef = useRef<ViewInstance>(null);
   const pendingActionRef = useRef<(() => void) | undefined>(undefined);
   const [menuPosition, setMenuPosition] = useState<{
     top: number;

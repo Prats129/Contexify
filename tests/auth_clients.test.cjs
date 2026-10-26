@@ -1626,6 +1626,7 @@ function client(platform, handleRequest, environment = {}) {
       }
       if (name === "@react-native-async-storage/async-storage")
         return {
+          __esModule: true,
           default: asyncStorage,
         };
       if (name === "react-native")

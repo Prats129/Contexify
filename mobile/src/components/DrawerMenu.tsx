@@ -18,6 +18,7 @@ import {
   Dimensions,
   type NativeSyntheticEvent,
   type NativeScrollEvent,
+  type TextInputInstance,
 } from "react-native";
 import { Feather, Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -114,7 +115,7 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
   // --- Collapsible Search State ---
   const setSearchQuery = (value: string) => onSearchQueryChange?.(value);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
-  const searchTextInputRef = useRef<TextInput | null>(null);
+  const searchTextInputRef = useRef<TextInputInstance | null>(null);
 
   // --- Rename State ---
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
@@ -122,7 +123,7 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
   const [isSavingSessionId, setIsSavingSessionId] = useState<string | null>(
     null,
   );
-  const editInputRef = useRef<TextInput | null>(null);
+  const editInputRef = useRef<TextInputInstance | null>(null);
 
   // --- Ellipsis Options Dropdown Menu State ---
   const [activeMenuSession, setActiveMenuSession] = useState<{

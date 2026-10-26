@@ -7,10 +7,15 @@
 _Document Q&A, web search, image analysis, and image generation across web and mobile._
 
 [![Python](https://img.shields.io/badge/Python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
-[![FastAPI](https://img.shields.io/badge/FastAPI-API-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
-[![React](https://img.shields.io/badge/React-18-61DAFB?style=for-the-badge&logo=react&logoColor=black)](https://react.dev)
-[![React Native](https://img.shields.io/badge/React_Native-0.86-61DAFB?style=for-the-badge&logo=react&logoColor=black)](https://reactnative.dev)
-[![Expo](https://img.shields.io/badge/Expo_SDK-57-000020?style=for-the-badge&logo=expo&logoColor=white)](https://expo.dev)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.141.1-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
+[![React](https://img.shields.io/badge/React-19-61DAFB?style=for-the-badge&logo=react&logoColor=black)](https://react.dev)
+[![React Native](https://img.shields.io/badge/React_Native-0.88-61DAFB?style=for-the-badge&logo=react&logoColor=black)](https://reactnative.dev)
+[![Expo](https://img.shields.io/badge/Expo_SDK-58-000020?style=for-the-badge&logo=expo&logoColor=white)](https://expo.dev)
+[![Google Gemini](https://img.shields.io/badge/Google_Gemini-AI-4285F4?style=for-the-badge&logo=google&logoColor=white)](https://ai.google.dev)
+[![Cloudflare R2](https://img.shields.io/badge/Cloudflare_R2-S3_Compatible-F38020?style=for-the-badge&logo=cloudflare&logoColor=white)](https://www.cloudflare.com/products/r2/)
+[![Turso](https://img.shields.io/badge/Turso-Cloud_SQLite-4FF8D2?style=for-the-badge&logo=sqlite&logoColor=black)](https://turso.tech)
+[![Pinecone](https://img.shields.io/badge/Pinecone-Vector_DB-000000?style=for-the-badge)](https://www.pinecone.io)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](#license)
 
 [Features](#key-features) | [Architecture](#system-architecture) | [Tech Stack](#tech-stack) | [Quick Start](#quick-start) | [Configuration](#environment-configuration) | [Testing](#automated-testing) | [Docker](#docker) | [Mobile & OTA](#mobile-deployment--over-the-air-ota-updates) | [Scripts](#available-scripts)
 
@@ -316,6 +321,8 @@ The helpers invoke EAS and can create remote builds or publish updates. Configur
 The helpers read `EXPO_PUBLIC_API_URL` from their environment and may override it from `mobile/.env`, so check the effective target before invoking them. The development profile uses a development client; preview is an internal APK; production is a separate channel.
 
 OTA updates require a compatible native runtime and matching channel. They can update compatible JavaScript/assets; adding or changing native modules/configuration requires a new app build. This project uses the `appVersion` runtime policy: maintain the app version/runtime compatibility when making native changes. See Expo's [runtime-version guidance](https://docs.expo.dev/eas-update/runtime-versions/).
+
+The SDK 58 upgrade uses app/runtime version `1.1.0` and requires a new native build or an SDK 58-compatible Expo Go installation. Do not publish this JavaScript bundle to an SDK 57 native runtime. Keep Expo-managed dependencies at the versions recommended by `npx expo install --check`; an independently newer native package may not match Expo Go.
 
 With this project's on-load checks and zero cache-wait setting, updates can download for a subsequent restart; they are not guaranteed to apply immediately on launch or reach every installed app. See [expo-updates](https://docs.expo.dev/versions/latest/sdk/updates/). EAS commands were not executed as part of the offline regression checks.
 

@@ -2262,7 +2262,7 @@ export default function App() {
                         isDark={isDark}
                         theme={theme}
                       />
-                    ) : null
+                    ) : undefined
                   }
                 />
               )}
