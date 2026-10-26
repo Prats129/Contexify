@@ -1,5 +1,7 @@
-from pydantic import BaseModel, Field
 from typing import List, Optional
+
+from pydantic import BaseModel
+
 
 class AssetItem(BaseModel):
     id: str
@@ -15,12 +17,14 @@ class AssetItem(BaseModel):
     prompt: Optional[str] = None
     created_at: str
 
+
 class PaginatedAssetsResponse(BaseModel):
     items: List[AssetItem]
     total: int
     has_more: bool
     limit: int
     offset: int
+
 
 class AssetDeleteResponse(BaseModel):
     message: str

@@ -1,6 +1,7 @@
-from pydantic import BaseModel, Field
 from typing import List, Optional
-from datetime import datetime
+
+from pydantic import BaseModel
+
 
 class DocumentMetadata(BaseModel):
     document_id: str
@@ -11,13 +12,16 @@ class DocumentMetadata(BaseModel):
     storage_url: Optional[str] = None
     uploaded_at: str
 
+
 class DocumentUploadResponse(BaseModel):
     document: DocumentMetadata
     message: str
 
+
 class DocumentListResponse(BaseModel):
     documents: List[DocumentMetadata]
     total_count: int
+
 
 class ChunkMetadata(BaseModel):
     document_id: str
@@ -27,15 +31,16 @@ class ChunkMetadata(BaseModel):
     source_excerpt: str
     similarity_score: float
 
+
 class DocumentChunkItem(BaseModel):
     chunk_id: str
     chunk_index: int
     page_number: Optional[int] = None
     text: str
 
+
 class DocumentChunksResponse(BaseModel):
     document_id: str
     filename: str
     total_chunks: int
     chunks: List[DocumentChunkItem]
-

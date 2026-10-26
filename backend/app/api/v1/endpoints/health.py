@@ -1,7 +1,9 @@
 from fastapi import APIRouter
+
 from app.core.config import settings
 
 router = APIRouter()
+
 
 @router.get("")
 @router.get("/")
@@ -11,5 +13,5 @@ async def health_check():
         "status": "online",
         "project": settings.PROJECT_NAME,
         "chroma_dir": str(settings.CHROMA_PERSIST_DIR),
-        "has_gemini_key": bool(settings.GEMINI_API_KEY)
+        "has_gemini_key": bool(settings.GEMINI_API_KEY),
     }

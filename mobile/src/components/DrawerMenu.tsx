@@ -38,6 +38,9 @@ interface DrawerMenuProps {
   currentUser: User | null;
   sessions?: ChatSession[];
   totalSessions?: number;
+  searchQuery?: string;
+  onSearchQueryChange?: (value: string) => void;
+  sessionsError?: string | null;
   hasMoreSessions?: boolean;
   isLoadingMoreSessions?: boolean;
   onLoadMoreSessions?: () => void;
@@ -56,6 +59,7 @@ interface DrawerMenuProps {
   onOpenAttachments?: () => void;
   onOpenAuth: () => void;
   onOpenProfile: () => void;
+  onToggleTheme: () => void;
   onOpenServerConfig: () => void;
   onLogout: () => void;
   isDark?: boolean;
@@ -68,6 +72,9 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
   currentUser,
   sessions = [],
   totalSessions,
+  searchQuery = "",
+  onSearchQueryChange,
+  sessionsError,
   hasMoreSessions = false,
   isLoadingMoreSessions = false,
   onLoadMoreSessions,
@@ -86,6 +93,7 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
   onOpenAttachments,
   onOpenAuth,
   onOpenProfile,
+  onToggleTheme,
   onOpenServerConfig,
   onLogout,
   isDark = true,
@@ -93,6 +101,10 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
 }) => {
   const insets = useSafeAreaInsets();
   const theme = customTheme || getAppTheme(isDark);
+  const handleThemePress = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    onToggleTheme();
+  };
   const sessionList = Array.isArray(sessions) ? sessions : [];
 
   const [isChatsExpanded, setIsChatsExpanded] = useState(true);
@@ -100,7 +112,7 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
   const [avatarLoadError, setAvatarLoadError] = useState(false);
 
   // --- Collapsible Search State ---
-  const [searchQuery, setSearchQuery] = useState("");
+  const setSearchQuery = (value: string) => onSearchQueryChange?.(value);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const searchTextInputRef = useRef<TextInput | null>(null);
 
@@ -193,11 +205,10 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
     }
   }, [currentUser?.avatar_url, visible]);
 
-  // --- Search and Filter Logic ---
-  const filteredSessions = sessionList.filter((s) => {
-    if (!searchQuery.trim()) return true;
-    return s.title.toLowerCase().includes(searchQuery.trim().toLowerCase());
-  });
+  // The backend searches all chats; also filter optimistic local title changes.
+  const filteredSessions = sessionList.filter((session) =>
+    session.title.toLowerCase().includes(searchQuery.trim().toLowerCase()),
+  );
 
   const handleToggleSearch = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -326,7 +337,13 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
       layoutMeasurement.height + contentOffset.y >=
         contentSize.height - paddingToBottom
     ) {
-      if (hasMoreSessions && !isLoadingMoreSessions && onLoadMoreSessions) {
+      if (
+        hasMoreSessions &&
+        !isLoadingMoreSessions &&
+        !isRefreshingSessions &&
+        !sessionsError &&
+        onLoadMoreSessions
+      ) {
         onLoadMoreSessions();
       }
     }
@@ -564,7 +581,34 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
                 ) : undefined
               }
             >
-              {sessionList.length === 0 ? (
+              {sessionsError && (
+                <View style={{ padding: 16, gap: 8 }}>
+                  <Text
+                    accessibilityRole="alert"
+                    style={{ color: theme.danger }}
+                  >
+                    {sessionsError}
+                  </Text>
+                  <TouchableOpacity
+                    accessibilityRole="button"
+                    onPress={onRefreshSessions}
+                  >
+                    <Text style={{ color: theme.primary }}>Retry</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+              {isRefreshingSessions && (
+                <View style={styles.scrollLoadingContainer}>
+                  <ActivityIndicator size="small" color={theme.primary} />
+                  <Text style={{ color: theme.textMuted }}>
+                    Loading conversations...
+                  </Text>
+                </View>
+              )}
+              {filteredSessions.length === 0 &&
+              (sessionsError ||
+                isRefreshingSessions) ? null : filteredSessions.length === 0 &&
+                !searchQuery.trim() ? (
                 <Text style={[styles.emptyText, { color: theme.textMuted }]}>
                   {currentUser
                     ? "No conversations yet."
@@ -751,9 +795,26 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
                 </View>
               )}
 
+              {hasMoreSessions &&
+                !isLoadingMoreSessions &&
+                !isRefreshingSessions &&
+                !sessionsError && (
+                  <TouchableOpacity
+                    accessibilityRole="button"
+                    onPress={onLoadMoreSessions}
+                    style={styles.scrollLoadingContainer}
+                  >
+                    <Text style={{ color: theme.primary }}>
+                      Load more conversations
+                    </Text>
+                  </TouchableOpacity>
+                )}
+
               {/* End of conversations marker */}
               {isChatsExpanded &&
                 !hasMoreSessions &&
+                !isRefreshingSessions &&
+                !sessionsError &&
                 sessionList.length >= 6 &&
                 !searchQuery.trim() && (
                   <View style={styles.endOfListContainer}>
@@ -779,7 +840,7 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
           >
             {/* User Profile Pill or Sign In Trigger */}
             {currentUser ? (
-              <TouchableOpacity
+              <View
                 style={[
                   styles.userPill,
                   {
@@ -787,89 +848,142 @@ export const DrawerMenu: React.FC<DrawerMenuProps> = ({
                     borderColor: theme.borderSubtle,
                   },
                 ]}
-                onPress={handleProfilePress}
-                activeOpacity={0.7}
               >
-                <View
-                  style={[
-                    styles.userAvatar,
-                    {
-                      backgroundColor:
-                        currentUser.avatar_color || theme.primary,
-                    },
-                  ]}
+                <TouchableOpacity
+                  style={styles.profileButton}
+                  onPress={handleProfilePress}
+                  activeOpacity={0.7}
+                  accessibilityRole="button"
+                  accessibilityLabel="Open profile and settings"
                 >
-                  {resolvedAvatar && !avatarLoadError ? (
-                    <Image
-                      key={resolvedAvatar}
-                      source={{ uri: resolvedAvatar }}
-                      style={styles.userAvatarImage}
-                      resizeMode="cover"
-                      onError={() => {
-                        console.warn(
-                          "Drawer avatar image failed to load:",
-                          resolvedAvatar,
-                        );
-                        setAvatarLoadError(true);
-                      }}
-                    />
-                  ) : (
-                    <Text style={styles.userAvatarText}>
-                      {(currentUser.display_name || currentUser.username || "U")
-                        .charAt(0)
-                        .toUpperCase()}
-                    </Text>
-                  )}
-                </View>
-
-                <View style={styles.userInfo}>
-                  <Text
-                    style={[styles.userName, { color: theme.textMain }]}
-                    numberOfLines={1}
+                  <View
+                    style={[
+                      styles.userAvatar,
+                      {
+                        backgroundColor:
+                          currentUser.avatar_color || theme.primary,
+                      },
+                    ]}
                   >
-                    {currentUser.display_name}
-                  </Text>
-                  <Text
-                    style={[styles.userEmail, { color: theme.textMuted }]}
-                    numberOfLines={1}
-                  >
-                    @{currentUser.username}
-                  </Text>
-                </View>
+                    {resolvedAvatar && !avatarLoadError ? (
+                      <Image
+                        key={resolvedAvatar}
+                        source={{ uri: resolvedAvatar }}
+                        style={styles.userAvatarImage}
+                        resizeMode="cover"
+                        onError={() => {
+                          console.warn(
+                            "Drawer avatar image failed to load:",
+                            resolvedAvatar,
+                          );
+                          setAvatarLoadError(true);
+                        }}
+                      />
+                    ) : (
+                      <Text style={styles.userAvatarText}>
+                        {(
+                          currentUser.display_name ||
+                          currentUser.username ||
+                          "U"
+                        )
+                          .charAt(0)
+                          .toUpperCase()}
+                      </Text>
+                    )}
+                  </View>
 
-                <Feather name="settings" size={16} color={theme.textMuted} />
-              </TouchableOpacity>
-            ) : (
-              <TouchableOpacity
-                style={[
-                  styles.guestPill,
-                  {
-                    backgroundColor: theme.primaryLight,
-                    borderColor: theme.primaryBorder,
-                  },
-                ]}
-                onPress={handleProfilePress}
-                activeOpacity={0.8}
-              >
-                <View style={styles.guestLeft}>
-                  <Ionicons
-                    name="person-circle-outline"
-                    size={22}
-                    color={theme.primary}
-                  />
-                  <View>
-                    <Text style={[styles.guestTitle, { color: theme.primary }]}>
-                      Sign In / Register
+                  <View style={styles.userInfo}>
+                    <Text
+                      style={[styles.userName, { color: theme.textMain }]}
+                      numberOfLines={1}
+                    >
+                      {currentUser.display_name}
                     </Text>
                     <Text
-                      style={[styles.guestSubtitle, { color: theme.textMuted }]}
+                      style={[styles.userEmail, { color: theme.textMuted }]}
+                      numberOfLines={1}
                     >
-                      Sync history & documents
+                      @{currentUser.username}
                     </Text>
                   </View>
-                </View>
-                <Feather name="arrow-right" size={14} color={theme.primary} />
-              </TouchableOpacity>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.themeButton,
+                    { borderColor: theme.borderSubtle },
+                  ]}
+                  onPress={handleThemePress}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    isDark ? "Switch to Light Mode" : "Switch to Dark Mode"
+                  }
+                >
+                  <Feather
+                    name={isDark ? "sun" : "moon"}
+                    size={18}
+                    color={isDark ? "#fbbf24" : theme.textMain}
+                  />
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <View style={styles.guestProfileRow}>
+                <TouchableOpacity
+                  style={[
+                    styles.guestPill,
+                    { flex: 1 },
+                    {
+                      backgroundColor: theme.primaryLight,
+                      borderColor: theme.primaryBorder,
+                    },
+                  ]}
+                  onPress={handleProfilePress}
+                  activeOpacity={0.8}
+                >
+                  <View style={styles.guestLeft}>
+                    <Ionicons
+                      name="person-circle-outline"
+                      size={22}
+                      color={theme.primary}
+                    />
+                    <View>
+                      <Text
+                        style={[styles.guestTitle, { color: theme.primary }]}
+                      >
+                        Sign In / Register
+                      </Text>
+                      <Text
+                        style={[
+                          styles.guestSubtitle,
+                          { color: theme.textMuted },
+                        ]}
+                      >
+                        Sync history & documents
+                      </Text>
+                    </View>
+                  </View>
+                  <Feather name="arrow-right" size={14} color={theme.primary} />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.themeButton,
+                    {
+                      backgroundColor: theme.borderSubtle,
+                      borderColor: theme.borderSubtle,
+                    },
+                  ]}
+                  onPress={handleThemePress}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    isDark ? "Switch to Light Mode" : "Switch to Dark Mode"
+                  }
+                >
+                  <Feather
+                    name={isDark ? "sun" : "moon"}
+                    size={18}
+                    color={isDark ? "#fbbf24" : theme.textMain}
+                  />
+                </TouchableOpacity>
+              </View>
             )}
 
             {/* Server IP / Wi-Fi Config Button (Enterprise-standard environment governance via src/config/env) */}
@@ -1299,6 +1413,26 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     borderWidth: 1,
     gap: 10,
+  },
+  profileButton: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    minWidth: 0,
+  },
+  themeButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  guestProfileRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
   },
   userAvatar: {
     width: 36,

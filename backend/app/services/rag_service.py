@@ -1,19 +1,24 @@
 import uuid
 from pathlib import Path
-from typing import List, Dict, Any, Tuple, Optional
-from pypdf import PdfReader
+from typing import Any, Dict, List, Optional, Tuple
+
 from app.core.config import settings
+from app.core.errors import DocumentLimitError, EmbeddingCompatibilityError
 from app.core.logging import logger
-from app.schemas.document import DocumentMetadata, ChunkMetadata
-from app.repositories.vector_store import vector_store_repo
 from app.repositories.session_store import session_store_repo
+from app.repositories.vector_store import vector_store_repo
+from app.schemas.document import DocumentMetadata
 from app.services.embedding_service import embedding_service
+from app.services.pdf_service import extract_pdf_pages
+from app.services.session_lifecycle import protect_resource_write, register_resource
+from app.services.upload_lifecycle import rollback_failed_upload
+
 
 class RAGService:
     """
     Core Document RAG Service: Parsing, Chunking, Vectorizing, Indexing, and Retrieval.
     """
-    
+
     def extract_text_from_file(self, file_path: Path) -> List[Tuple[str, int]]:
         """
         Extract text from file.
@@ -21,45 +26,42 @@ class RAGService:
         """
         ext = file_path.suffix.lower()
         pages = []
-        
+
         if ext == ".pdf":
-            try:
-                reader = PdfReader(file_path)
-                for idx, page in enumerate(reader.pages):
-                    text = page.extract_text() or ""
-                    if text.strip():
-                        pages.append((text, idx + 1))
-            except Exception as e:
-                logger.error(f"Error parsing PDF file '{file_path.name}': {e}")
-                raise e
+            return extract_pdf_pages(file_path)
         elif ext in [".txt", ".md", ".csv", ".json", ".log"]:
             try:
                 with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-                    content = f.read()
+                    maximum = getattr(settings, "DOCUMENT_MAX_TEXT_CHARS", 2_000_000)
+                    content = f.read(maximum + 1)
+                    if len(content) > maximum:
+                        raise DocumentLimitError(
+                            "Document exceeds the text processing limit. Please split it into smaller files."
+                        )
                     pages.append((content, 1))
             except Exception as e:
                 logger.error(f"Error reading text file '{file_path.name}': {e}")
                 raise e
         else:
             raise ValueError(f"Unsupported file format: {ext}")
-            
+
         return pages
 
     def recursive_character_chunking(
         self,
         pages: List[Tuple[str, int]],
         chunk_size: int = settings.CHUNK_SIZE,
-        chunk_overlap: int = settings.CHUNK_OVERLAP
+        chunk_overlap: int = settings.CHUNK_OVERLAP,
     ) -> List[Dict[str, Any]]:
         """
         Splits text pages recursively maintaining paragraph and sentence boundaries.
         """
         chunks = []
-        
+
         for page_text, page_num in pages:
             # Paragraph level split -> Sentence level split -> Character level split
             separators = ["\n\n", "\n", ". ", " ", ""]
-            
+
             raw_splits = [page_text]
             for sep in separators:
                 next_splits = []
@@ -67,7 +69,10 @@ class RAGService:
                     if len(s) > chunk_size:
                         if sep == "":
                             # Character split fallback
-                            parts = [s[i:i+chunk_size] for i in range(0, len(s), chunk_size - chunk_overlap)]
+                            parts = [
+                                s[i : i + chunk_size]
+                                for i in range(0, len(s), chunk_size - chunk_overlap)
+                            ]
                             next_splits.extend(parts)
                         else:
                             parts = s.split(sep)
@@ -88,22 +93,29 @@ class RAGService:
                 raw_splits = next_splits
 
             for chunk_idx, text_chunk in enumerate(raw_splits):
-                if len(text_chunk.strip()) > 15:  # Ignore tiny noise chunks
-                    chunks.append({
-                        "text": text_chunk.strip(),
-                        "page_number": page_num,
-                        "chunk_index": len(chunks)
-                    })
+                if (
+                    text_chunk.strip()
+                ):  # Short documents are valid; skip only blank chunks.
+                    chunks.append(
+                        {
+                            "text": text_chunk.strip(),
+                            "page_number": page_num,
+                            "chunk_index": len(chunks),
+                        }
+                    )
 
         return chunks
 
+    @rollback_failed_upload
+    @protect_resource_write
     def process_and_index_document(
         self,
         file_path: Path,
         filename: str,
         session_id: str,
         user_id: Optional[str] = None,
-        storage_url: Optional[str] = None
+        storage_url: Optional[str] = None,
+        extracted_pages: Optional[List[Tuple[str, int]]] = None,
     ) -> DocumentMetadata:
         """
         Full ingestion pipeline: Extract -> Chunk -> Embed -> Index -> Register Metadata.
@@ -112,17 +124,35 @@ class RAGService:
         file_size = file_path.stat().st_size
         file_type = file_path.suffix.lower()
 
-        logger.info(f"Ingesting document '{filename}' ({file_size} bytes) for session '{session_id}'...")
+        logger.info(
+            f"Ingesting document '{filename}' ({file_size} bytes) for session '{session_id}'..."
+        )
 
         # 1. Extract
-        pages = self.extract_text_from_file(file_path)
+        pages = (
+            self.extract_text_from_file(file_path)
+            if extracted_pages is None
+            else extracted_pages
+        )
         if not pages:
             raise ValueError("No extractable text found in uploaded document.")
+
+        if sum(len(text) for text, _ in pages) > getattr(
+            settings, "DOCUMENT_MAX_TEXT_CHARS", 2_000_000
+        ):
+            raise DocumentLimitError(
+                "Document exceeds the text processing limit. Please split it into smaller files."
+            )
 
         # 2. Chunk
         chunks = self.recursive_character_chunking(pages)
         if not chunks:
             raise ValueError("Document could not be split into valid text chunks.")
+
+        if len(chunks) > getattr(settings, "DOCUMENT_MAX_CHUNKS", 5000):
+            raise DocumentLimitError(
+                "Document contains too many text chunks. Please split it into smaller files."
+            )
 
         # 3. Vectorize
         chunk_texts = [c["text"] for c in chunks]
@@ -133,19 +163,21 @@ class RAGService:
         metadatas = [
             {
                 "document_id": document_id,
+                "embedding_space": embedding_service.embedding_space,
                 "filename": filename,
                 "page_number": c["page_number"],
-                "chunk_index": c["chunk_index"]
+                "chunk_index": c["chunk_index"],
             }
             for c in chunks
         ]
 
+        register_resource(session_id, "vector", document_id)
         vector_store_repo.add_chunks(
             document_id=document_id,
             chunk_ids=chunk_ids,
             embeddings=embeddings,
             documents=chunk_texts,
-            metadatas=metadatas
+            metadatas=metadatas,
         )
 
         # 5. Metadata Registration
@@ -156,24 +188,39 @@ class RAGService:
             file_size_bytes=file_size,
             total_chunks=len(chunks),
             storage_url=storage_url if storage_url else None,
-            uploaded_at=Path(file_path).stat().st_mtime.__str__()
+            uploaded_at=Path(file_path).stat().st_mtime.__str__(),
         )
 
-        session_store_repo.save_document_metadata(doc_metadata, user_id=user_id, session_id=session_id)
+        session_store_repo.save_document_metadata(
+            doc_metadata,
+            user_id=user_id,
+            session_id=session_id,
+            embedding_space=embedding_service.embedding_space,
+        )
         session_store_repo.attach_document_to_session(session_id, document_id)
 
-        logger.info(f"Document '{filename}' indexed successfully into ChromaDB with {len(chunks)} chunks.")
+        logger.info(
+            f"Document '{filename}' indexed successfully into ChromaDB with {len(chunks)} chunks."
+        )
         return doc_metadata
 
-
-    def retrieve_context_for_query(self, query: str, session_id: str) -> List[Dict[str, Any]]:
+    def retrieve_context_for_query(
+        self, query: str, session_id: str, document_ids: Optional[List[str]] = None
+    ) -> List[Dict[str, Any]]:
         """
         Generate query vector and retrieve top-K relevant chunks with similarity score filter.
         """
         session = session_store_repo.get_or_create_session(session_id)
-        if not session.document_ids:
+        selected_ids = session.document_ids if document_ids is None else document_ids
+        if not selected_ids:
             logger.warning(f"No documents attached to session '{session_id}'")
             return []
+
+        if not set(selected_ids).issubset(session.document_ids):
+            raise EmbeddingCompatibilityError()
+        session_store_repo.check_embedding_compatibility(
+            selected_ids, embedding_service.embedding_space
+        )
 
         # Generate query vector
         query_embedding = embedding_service.embed_text(query)
@@ -181,20 +228,19 @@ class RAGService:
         # Vector similarity search
         retrieved = vector_store_repo.similarity_search(
             query_embedding=query_embedding,
+            embedding_space=embedding_service.embedding_space,
             top_k=settings.TOP_K_RETRIEVAL,
-            document_ids=session.document_ids
+            document_ids=selected_ids,
         )
 
         # Filter by threshold
         valid_chunks = [
-            c for c in retrieved 
+            c
+            for c in retrieved
             if c["similarity_score"] >= settings.SIMILARITY_THRESHOLD
         ]
-        
-        # If threshold filtered all out, return top retrieved anyway to prevent empty response
-        if not valid_chunks and retrieved:
-            valid_chunks = retrieved[:2]
 
         return valid_chunks
+
 
 rag_service = RAGService()

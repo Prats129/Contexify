@@ -1,186 +1,258 @@
+"""Bounded search excerpts from fixed search endpoints, never full-page evidence."""
+
 import base64
-import requests
+import binascii
+import ipaddress
+import time
 import urllib.parse
 import xml.etree.ElementTree as ET
-from typing import List, Dict, Any
+from typing import Any, Dict, List
+
+import requests
 from bs4 import BeautifulSoup
+
+from app.core.errors import WebSearchError
 from app.core.logging import logger
 
+
 class WebSearchService:
-    """
-    Web Search Service for real-time web query execution and context gathering.
-    Combines Google's live article search with Bing web search to deliver rich,
-    concrete, up-to-the-minute details and direct destination URLs.
-    """
-    def _decode_bing_url(self, raw_url: str) -> str:
-        """Decode Bing redirect URL (/ck/a?!&&p=...&u=a1<base64>&ntb=1) to real destination."""
-        try:
-            if "/ck/a?" in raw_url and "&u=" in raw_url:
-                parsed = urllib.parse.urlparse(raw_url)
-                qs = urllib.parse.parse_qs(parsed.query)
-                if "u" in qs and qs["u"]:
-                    val = qs["u"][0]
-                    if val.startswith("a1"):
-                        encoded = val[2:]
-                        missing_padding = len(encoded) % 4
-                        if missing_padding:
-                            encoded += "=" * (4 - missing_padding)
-                        return base64.b64decode(encoded).decode("utf-8", errors="ignore")
-        except Exception:
-            pass
+    MAX_RESULTS = 6
+    MAX_RESPONSE_BYTES = 1_048_576
+    SEARCH_TIMEOUT_SECONDS = 15
+
+    def _read_response(self, method: str, url: str, deadline: float, **kwargs) -> bytes:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise WebSearchError()
+        # Only fixed provider endpoints are fetched. Result URLs are never fetched.
+        with requests.request(
+            method,
+            url,
+            headers={"User-Agent": "Mozilla/5.0", "Accept-Language": "en-US,en;q=0.9"},
+            timeout=min(4, remaining),
+            stream=True,
+            allow_redirects=False,
+            **kwargs,
+        ) as response:
+            if response.status_code != 200 or time.monotonic() >= deadline:
+                raise WebSearchError()
+            body = bytearray()
+            for chunk in response.iter_content(chunk_size=16_384):
+                if (
+                    time.monotonic() >= deadline
+                    or len(body) + len(chunk) > self.MAX_RESPONSE_BYTES
+                ):
+                    raise WebSearchError()
+                body.extend(chunk)
+            return bytes(body)
+
+    @staticmethod
+    def _decode_bing_url(raw_url: str) -> str:
+        parsed = urllib.parse.urlsplit(raw_url)
+        if parsed.hostname in ("www.bing.com", "bing.com") and parsed.path == "/ck/a":
+            value = urllib.parse.parse_qs(parsed.query).get("u", [""])[0]
+            if value.startswith("a1"):
+                encoded = value[2:]
+                try:
+                    return base64.urlsafe_b64decode(
+                        encoded + "=" * (-len(encoded) % 4)
+                    ).decode("utf-8")
+                except (ValueError, UnicodeError, binascii.Error):
+                    return ""
+            return ""
         return raw_url
 
-    def _fetch_google_live_articles(self, clean_query: str, max_results: int = 4) -> List[Dict[str, Any]]:
-        """Fetch fresh, specific articles and breaking headlines from Google's live search feed."""
+    @staticmethod
+    def _public_url(raw_url: str) -> str:
+        """Accept navigable public HTTP(S) links without resolving/fetching them."""
         try:
-            encoded_q = urllib.parse.quote(clean_query)
-            g_url = f"https://news.google.com/rss/search?q={encoded_q}&hl=en-US&gl=US&ceid=US:en"
-            resp = requests.get(g_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=4)
-            if resp.status_code == 200:
-                root = ET.fromstring(resp.content)
-                results = []
-                for item in root.findall(".//item")[:max_results]:
-                    title = item.find("title").text if item.find("title") is not None else ""
-                    link = item.find("link").text if item.find("link") is not None else ""
-                    desc = item.find("description").text if item.find("description") is not None else ""
-                    desc_text = BeautifulSoup(desc, "html.parser").get_text(separator=" ", strip=True) if desc else title
-                    if title:
-                        results.append({
-                            "title": title,
-                            "url": link or "https://news.google.com",
-                            "snippet": f"{title}. Details: {desc_text}"
-                        })
-                return results
-        except Exception as e:
-            logger.debug(f"Google live articles feed note: {e}")
-        return []
+            if (
+                any(char.isspace() or ord(char) < 32 for char in raw_url)
+                or "\\" in raw_url
+            ):
+                return ""
+            parsed = urllib.parse.urlsplit(raw_url)
+            host = (parsed.hostname or "").lower().rstrip(".")
+            if (
+                parsed.scheme not in ("http", "https")
+                or not host
+                or parsed.username
+                or parsed.password
+            ):
+                return ""
+            if parsed.port not in (None, 80, 443):
+                return ""
+            try:
+                if not ipaddress.ip_address(host).is_global:
+                    return ""
+            except ValueError:
+                if "." not in host or host.endswith(
+                    (".localhost", ".local", ".internal")
+                ):
+                    return ""
+            if host in (
+                "bing.com",
+                "www.bing.com",
+                "duckduckgo.com",
+                "html.duckduckgo.com",
+            ):
+                return ""
+            if host == "news.google.com" and not parsed.path.startswith(
+                "/rss/articles/"
+            ):
+                return ""
+            return urllib.parse.urlunsplit(parsed._replace(fragment=""))
+        except ValueError:
+            return ""
 
-    def _search_bing(self, clean_query: str, max_results: int = 4) -> List[Dict[str, Any]]:
-        """Search Bing for general web coverage, encyclopedic data, and documentation."""
-        try:
-            url = f"https://www.bing.com/search?q={urllib.parse.quote(clean_query)}"
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-                "Accept-Language": "en-US,en;q=0.9",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-            }
-            response = requests.get(url, headers=headers, timeout=5)
-            if response.status_code == 200:
-                soup = BeautifulSoup(response.text, "html.parser")
-                results = []
-                for li in soup.find_all("li", class_="b_algo"):
-                    if len(results) >= max_results:
-                        break
-                    h2 = li.find("h2")
-                    a = h2.find("a") if h2 else None
-                    p = li.find("p") or li.find("div", class_="b_caption")
-                    if a and a.get("href"):
-                        raw_href = a["href"]
-                        clean_url = self._decode_bing_url(raw_href)
-                        title = a.get_text(strip=True)
-                        snippet = p.get_text(strip=True) if p else ""
-                        if title and clean_url and not clean_url.startswith("#"):
-                            results.append({
-                                "title": title,
-                                "url": clean_url,
-                                "snippet": snippet or title
-                            })
-                return results
-        except Exception as e:
-            logger.debug(f"Bing search note: {e}")
-        return []
+    def _fetch_google_live_articles(
+        self, query: str, max_results: int, deadline: float
+    ) -> List[Dict[str, Any]]:
+        content = self._read_response(
+            "GET",
+            "https://news.google.com/rss/search",
+            deadline,
+            params={"q": query, "hl": "en-US", "gl": "US", "ceid": "US:en"},
+        )
+        # RSS must not expand attacker-controlled DTD/entity definitions.
+        if (
+            b"\x00" in content
+            or b"<!DOCTYPE" in content.upper()
+            or b"<!ENTITY" in content.upper()
+        ):
+            raise WebSearchError()
+        root = ET.fromstring(content)
+        if root.tag != "rss":
+            raise WebSearchError()
+        results = []
+        for item in root.findall("./channel/item")[:max_results]:
+            title = item.findtext("title") or ""
+            description = item.findtext("description") or ""
+            results.append(
+                {
+                    "title": title,
+                    "url": item.findtext("link") or "",
+                    "snippet": BeautifulSoup(description, "html.parser").get_text(
+                        " ", strip=True
+                    ),
+                }
+            )
+        return results
 
-    def _search_duckduckgo(self, clean_query: str, max_results: int = 4) -> List[Dict[str, Any]]:
-        """Fallback search using DuckDuckGo HTML parser."""
-        try:
-            url = "https://html.duckduckgo.com/html/"
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Accept-Language": "en-US,en;q=0.9",
-            }
-            response = requests.post(url, data={"q": clean_query}, headers=headers, timeout=5)
-            if response.status_code == 200:
-                soup = BeautifulSoup(response.text, "html.parser")
-                results = []
-                for block in soup.find_all("div", class_="result"):
-                    if len(results) >= max_results:
-                        break
-                    if "result--ad" in block.get("class", []):
-                        continue
+    def _search_bing(
+        self, query: str, max_results: int, deadline: float
+    ) -> List[Dict[str, Any]]:
+        content = self._read_response(
+            "GET", "https://www.bing.com/search", deadline, params={"q": query}
+        )
+        soup = BeautifulSoup(content, "html.parser")
+        if not soup.find("li", class_="b_algo") and not soup.select_one(
+            "#b_results, .b_no"
+        ):
+            raise WebSearchError()
+        results = []
+        for item in soup.find_all("li", class_="b_algo"):
+            heading = item.find("h2")
+            link = heading.find("a") if heading else None
+            excerpt = item.find("p") or item.find("div", class_="b_caption")
+            if link:
+                results.append(
+                    {
+                        "title": link.get_text(" ", strip=True),
+                        "url": self._decode_bing_url(str(link.get("href", ""))),
+                        "snippet": excerpt.get_text(" ", strip=True) if excerpt else "",
+                    }
+                )
+            if len(results) >= max_results:
+                break
+        return results
 
-                    title_elem = block.find("a", class_="result__a")
-                    snippet_elem = block.find("a", class_="result__snippet") or block.find("div", class_="result__snippet")
-                    if not title_elem:
-                        continue
+    def _search_duckduckgo(
+        self, query: str, max_results: int, deadline: float
+    ) -> List[Dict[str, Any]]:
+        content = self._read_response(
+            "POST", "https://html.duckduckgo.com/html/", deadline, data={"q": query}
+        )
+        soup = BeautifulSoup(content, "html.parser")
+        if not soup.select_one(".result, .no-results, .no-results__message"):
+            raise WebSearchError()
+        results = []
+        for item in soup.find_all("div", class_="result"):
+            if "result--ad" in (item.get("class") or []):
+                continue
+            link = item.find("a", class_="result__a")
+            excerpt = item.find(class_="result__snippet")
+            if not link:
+                continue
+            raw_url = str(link.get("href", ""))
+            parsed = urllib.parse.urlsplit(raw_url)
+            if (
+                parsed.hostname
+                in ("duckduckgo.com", "www.duckduckgo.com", "html.duckduckgo.com")
+                or not parsed.netloc
+            ):
+                raw_url = urllib.parse.parse_qs(parsed.query).get("uddg", [raw_url])[0]
+            if raw_url.startswith("//"):
+                raw_url = "https:" + raw_url
+            results.append(
+                {
+                    "title": link.get_text(" ", strip=True),
+                    "url": raw_url,
+                    "snippet": excerpt.get_text(" ", strip=True) if excerpt else "",
+                }
+            )
+            if len(results) >= max_results:
+                break
+        return results
 
-                    title = title_elem.get_text(strip=True)
-                    raw_href = title_elem.get("href", "")
-                    clean_url = raw_href
-                    if "uddg=" in raw_href:
-                        parsed = urllib.parse.urlparse(raw_href)
-                        qs = urllib.parse.parse_qs(parsed.query)
-                        if "uddg" in qs and qs["uddg"]:
-                            clean_url = qs["uddg"][0]
-                    elif raw_href.startswith("//"):
-                        clean_url = "https:" + raw_href
-
-                    snippet = snippet_elem.get_text(strip=True) if snippet_elem else ""
-                    if title and clean_url and clean_url != "#":
-                        results.append({
-                            "title": title,
-                            "url": clean_url,
-                            "snippet": snippet
-                        })
-                return results
-        except Exception as e:
-            logger.debug(f"DuckDuckGo fallback note: {e}")
-        return []
+    def _normalize_results(
+        self, results: List[Dict[str, Any]], limit: int
+    ) -> List[Dict[str, Any]]:
+        seen = set()
+        normalized = []
+        for result in results:
+            title = " ".join(str(result.get("title") or "").split())[:300]
+            snippet = " ".join(str(result.get("snippet") or "").split())[:2000]
+            url = self._public_url(str(result.get("url") or ""))
+            # Headlines alone are not evidence; deduplicate by destination, not title prefix.
+            if not title or not snippet or not url or url in seen:
+                continue
+            seen.add(url)
+            normalized.append({"title": title, "url": url, "snippet": snippet})
+            if len(normalized) >= limit:
+                break
+        return normalized
 
     def search(self, query: str, max_results: int = 6) -> List[Dict[str, Any]]:
-        """
-        Perform real-time multi-source web search:
-        Aggregates Google live articles with Bing general web coverage to give the LLM
-        both specific event details and broad web context.
-        """
-        clean_query = query.strip()
-        if not clean_query:
+        query = query.strip()
+        if not query or max_results <= 0:
             return []
-
-        logger.info(f"Executing multi-source web search for query: '{clean_query}'")
+        limit = min(max_results, self.MAX_RESULTS)
+        deadline = time.monotonic() + self.SEARCH_TIMEOUT_SECONDS
         results = []
-
-        # 1. Fetch live Google articles (specific headlines, breaking developments)
-        google_articles = self._fetch_google_live_articles(clean_query, max_results=3)
-        results.extend(google_articles)
-
-        # 2. Fetch Bing web results (encyclopedic, technical, and web pages)
-        bing_results = self._search_bing(clean_query, max_results=3)
-        results.extend(bing_results)
-
-        # 3. Fallback to DuckDuckGo if both returned empty
-        if not results:
-            ddg_results = self._search_duckduckgo(clean_query, max_results=max_results)
-            results.extend(ddg_results)
-
-        # Deduplicate results by title similarity
-        seen = set()
-        deduped = []
-        for r in results:
-            key = r.get("title", "").lower()[:35]
-            if key and key not in seen:
-                seen.add(key)
-                deduped.append(r)
-            if len(deduped) >= max_results:
+        failed = False
+        providers = (
+            self._fetch_google_live_articles,
+            self._search_bing,
+            self._search_duckduckgo,
+        )
+        for index, provider in enumerate(providers):
+            if index == 2 and results:
                 break
+            try:
+                found = provider(query, limit, deadline)
+                results = self._normalize_results(results + found, limit)
+            except (
+                requests.RequestException,
+                ET.ParseError,
+                ValueError,
+                WebSearchError,
+            ):
+                failed = True
+                logger.warning("Web search adapter %s unavailable", index + 1)
+        if not results and failed:
+            raise WebSearchError()
+        return results
 
-        if not deduped:
-            deduped = [{
-                "title": f"Web Search: '{clean_query}'",
-                "url": "https://www.bing.com/search?q=" + urllib.parse.quote_plus(clean_query),
-                "snippet": f"Real-time web search results for query '{clean_query}'."
-            }]
-
-        return deduped
 
 web_search_service = WebSearchService()
-

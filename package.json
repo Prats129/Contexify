@@ -3,16 +3,18 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev:backend": "cd backend && .\\venv\\Scripts\\python.exe -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8001",
-    "dev:frontend": "npm run dev --prefix frontend",
-    "dev:mobile": "npm run start --prefix mobile",
-    "dev": "concurrently -n \"BACKEND,FRONTEND\" -c \"blue,green\" \"npm run dev:backend\" \"npm run dev:frontend\"",
-    "dev:all": "concurrently -n \"BACKEND,FRONTEND,MOBILE\" -c \"blue,green,magenta\" \"npm run dev:backend\" \"npm run dev:frontend\" \"npm run dev:mobile\"",
+    "contracts:generate": "backend\\venv\\Scripts\\python.exe -B scripts/generate_api_contracts.py",
+    "contracts:check": "backend\\venv\\Scripts\\python.exe -B scripts/generate_api_contracts.py --check",
+    "backend": "cd backend && .\\venv\\Scripts\\python.exe -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8001",
+    "frontend": "npm run dev --prefix frontend",
+    "mobile": "npm run start --prefix mobile",
+    "dev": "concurrently -n \"BACKEND,FRONTEND\" -c \"blue,green\" \"npm run backend\" \"npm run frontend\"",
+    "dev:all": "concurrently -n \"BACKEND,FRONTEND,MOBILE\" -c \"blue,green,magenta\" \"npm run backend\" \"npm run frontend\" \"npm run mobile\"",
     "build:frontend": "npm run build --prefix frontend",
     "db:reset": "cd backend && .\\venv\\Scripts\\python.exe reset_db.py",
-    "setup:backend": "cd backend && python -m venv venv && .\\venv\\Scripts\\pip install -r requirements.txt",
-    "setup:mobile": "npm install --prefix mobile",
-    "setup": "npm install --prefix frontend && npm run setup:backend",
+    "setup:backend": "cd backend && python -m venv venv && .\\venv\\Scripts\\pip install --require-hashes -r requirements.txt",
+    "setup:mobile": "npm ci --prefix mobile",
+    "setup": "npm ci --prefix frontend && npm run setup:backend",
     "deploy:mobile": "node scripts/deploy-mobile.js",
     "deploy:mobile:bundle": "node scripts/deploy-mobile.js --bundle",
     "deploy:mobile:ios": "node scripts/deploy-mobile.js --ios",
@@ -20,5 +22,8 @@
   },
   "devDependencies": {
     "concurrently": "^8.2.2"
+  },
+  "engines": {
+    "node": "^20.19.4 || ^22.13.0 || ^24.3.0 || >=25.0.0"
   }
 }

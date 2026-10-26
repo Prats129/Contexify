@@ -16,6 +16,15 @@ import type {
 } from "../../types";
 
 interface ChatWorkspaceProps {
+  historyLatestRevision?: number;
+  hasOlderHistory?: boolean;
+  hasNewerHistory?: boolean;
+  historyNavigationDisabled?: boolean;
+  historyLoadingDirection?: "older" | "newer" | "latest" | "target" | null;
+  onHistoryPage?: (
+    direction: "older" | "newer" | "latest" | "target",
+    targetId?: string,
+  ) => Promise<boolean>;
   currentMode: ChatMode;
   onModeChange: (mode: ChatMode) => void;
   messages: Message[];
@@ -26,6 +35,7 @@ interface ChatWorkspaceProps {
   onSendMessage: (e?: React.FormEvent) => void;
   onStopGeneration?: () => void;
   isSending: boolean;
+  isBusy?: boolean;
   onFileUpload: (file: File) => void;
   isUploading: boolean;
   uploadStatusText?: string;
@@ -37,6 +47,8 @@ interface ChatWorkspaceProps {
   currentUser: User | null;
   onOpenUserModal: (tab?: "login" | "register") => void;
   onClearChat?: () => void;
+  chatClearedAt?: string;
+  conversationError?: string | null;
   onToggleSidebar?: () => void;
   isTemporaryChat?: boolean;
   onToggleTemporaryChat?: () => void;
@@ -51,6 +63,12 @@ interface ChatWorkspaceProps {
 }
 
 export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
+  historyLatestRevision,
+  hasOlderHistory,
+  hasNewerHistory,
+  historyNavigationDisabled,
+  historyLoadingDirection,
+  onHistoryPage,
   currentMode,
   onModeChange,
   messages,
@@ -61,6 +79,7 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
   onSendMessage,
   onStopGeneration,
   isSending,
+  isBusy = false,
   onFileUpload,
   isUploading,
   uploadStatusText,
@@ -72,6 +91,8 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
   currentUser,
   onOpenUserModal,
   onClearChat,
+  chatClearedAt,
+  conversationError,
   onToggleSidebar,
   isTemporaryChat = false,
   onToggleTemporaryChat,
@@ -117,28 +138,45 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
   const [highlightedMessageId, setHighlightedMessageId] = useState<
     string | null
   >(null);
-  const highlightTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const handleJumpToMessage = useCallback((targetId: string) => {
-    if (!targetId) return;
-    const cleanId = targetId.startsWith("msg-") ? targetId.slice(4) : targetId;
-    const el =
-      document.getElementById(`msg-${cleanId}`) ||
-      document.getElementById(cleanId);
-    if (el) {
-      el.scrollIntoView({
-        behavior: "smooth",
-        block: "center",
-      });
-      if (highlightTimerRef.current) {
-        clearTimeout(highlightTimerRef.current);
+  const handleJumpToMessage = useCallback(
+    async (targetId: string) => {
+      if (!targetId) return;
+      const cleanId = targetId.startsWith("msg-")
+        ? targetId.slice(4)
+        : targetId;
+      let el =
+        document.getElementById(`msg-${cleanId}`) ||
+        document.getElementById(cleanId);
+      const index = messages.findIndex((message) => message.id === cleanId);
+      const needsContext =
+        index < 0 ||
+        (hasOlderHistory && index < 5) ||
+        (hasNewerHistory && messages.length - index - 1 < 5);
+      if ((!el || needsContext) && onHistoryPage) {
+        if (!(await onHistoryPage("target", cleanId))) return;
+        await new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        );
+        el = document.getElementById(`msg-${cleanId}`);
       }
-      setHighlightedMessageId(cleanId);
-      highlightTimerRef.current = setTimeout(() => {
-        setHighlightedMessageId(null);
-      }, 1800);
-    }
-  }, []);
+      if (el) {
+        el.scrollIntoView({
+          behavior: "smooth",
+          block: "center",
+        });
+        if (highlightTimerRef.current) {
+          clearTimeout(highlightTimerRef.current);
+        }
+        setHighlightedMessageId(cleanId);
+        highlightTimerRef.current = setTimeout(() => {
+          setHighlightedMessageId(null);
+        }, 1800);
+      }
+    },
+    [onHistoryPage, messages, hasOlderHistory, hasNewerHistory],
+  );
 
   const handleJumpToReply = useCallback(() => {
     if (replyingTo?.id) {
@@ -282,7 +320,36 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
       >
         {/* Main Conversation Column: MessageList + ChatInput */}
         <div className="flex-1 flex flex-col h-full min-w-0 w-full">
+          {conversationError && (
+            <p
+              role="alert"
+              className="shrink-0 px-4 py-3 text-center text-sm text-red-600"
+            >
+              {conversationError}
+            </p>
+          )}
+          {chatClearedAt && (
+            <div
+              role="status"
+              className="shrink-0 px-4 py-3 text-center text-xs text-(--text-muted)"
+            >
+              <p className="font-medium text-(--text-main)">Chat cleared</p>
+              <time dateTime={chatClearedAt}>
+                {new Date(chatClearedAt).toLocaleString(undefined, {
+                  dateStyle: "medium",
+                  timeStyle: "short",
+                })}
+              </time>
+              <p>Your documents are still available.</p>
+            </div>
+          )}
           <MessageList
+            historyLatestRevision={historyLatestRevision}
+            hasOlderHistory={hasOlderHistory}
+            hasNewerHistory={hasNewerHistory}
+            historyNavigationDisabled={historyNavigationDisabled}
+            historyLoadingDirection={historyLoadingDirection}
+            onHistoryPage={onHistoryPage}
             messages={messages}
             streamingMessage={streamingMessage}
             onSelectPrompt={onSelectPrompt}
@@ -308,6 +375,7 @@ export const ChatWorkspace: React.FC<ChatWorkspaceProps> = ({
                 onSubmit={onSendMessage}
                 onStopGeneration={onStopGeneration}
                 isSending={isSending}
+                isBusy={isBusy}
                 currentMode={currentMode}
                 onModeChange={onModeChange}
                 onFileUpload={onFileUpload}

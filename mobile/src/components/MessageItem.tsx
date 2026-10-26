@@ -7,6 +7,8 @@ import {
   Pressable,
   Platform,
   Image,
+  Linking,
+  Alert,
   Modal,
   Dimensions,
   Animated,
@@ -375,38 +377,77 @@ export const MessageItem: React.FC<MessageItemProps> = React.memo(
                   : styles.assistantMediaContainer,
               ]}
             >
-              {attachments.map((att, attIdx) => (
-                <TouchableOpacity
-                  key={att.id || attIdx}
-                  onPress={() => setPreviewImageUrl(att.url)}
-                  activeOpacity={0.85}
-                  style={[
-                    styles.mediaCard,
-                    {
+              {attachments.map((att, attIdx) =>
+                att.file_type === "document" ? (
+                  <TouchableOpacity
+                    key={att.id || attIdx}
+                    onPress={() => {
+                      void Linking.openURL(att.url).catch(() =>
+                        Alert.alert(
+                          "Unable to open document",
+                          "Please reload the conversation and try again.",
+                        ),
+                      );
+                    }}
+                    accessibilityRole="link"
+                    accessibilityLabel={`Download ${att.file_name || "document"}`}
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 8,
+                      padding: 12,
+                      borderRadius: 12,
+                      borderWidth: 1,
                       borderColor: theme.borderSubtle,
                       backgroundColor: theme.bgCard,
-                    },
-                  ]}
-                >
-                  <Image
-                    source={{ uri: att.url }}
-                    style={styles.mediaImage}
-                    resizeMode="cover"
-                  />
-                  {!isUser && onUseAsReference && (
-                    <TouchableOpacity
-                      style={[
-                        styles.refBtn,
-                        { backgroundColor: theme.primary },
-                      ]}
-                      onPress={() => onUseAsReference(att)}
+                      maxWidth: 280,
+                    }}
+                  >
+                    <Feather
+                      name="file-text"
+                      size={18}
+                      color={theme.textMain}
+                    />
+                    <Text
+                      numberOfLines={1}
+                      style={{ color: theme.textMain, flexShrink: 1 }}
                     >
-                      <Ionicons name="sparkles" size={11} color="#FFF" />
-                      <Text style={styles.refBtnText}>Remix</Text>
-                    </TouchableOpacity>
-                  )}
-                </TouchableOpacity>
-              ))}
+                      {att.file_name || "Attached document"}
+                    </Text>
+                  </TouchableOpacity>
+                ) : (
+                  <TouchableOpacity
+                    key={att.id || attIdx}
+                    onPress={() => setPreviewImageUrl(att.url)}
+                    activeOpacity={0.85}
+                    style={[
+                      styles.mediaCard,
+                      {
+                        borderColor: theme.borderSubtle,
+                        backgroundColor: theme.bgCard,
+                      },
+                    ]}
+                  >
+                    <Image
+                      source={{ uri: att.url }}
+                      style={styles.mediaImage}
+                      resizeMode="cover"
+                    />
+                    {!isUser && onUseAsReference && (
+                      <TouchableOpacity
+                        style={[
+                          styles.refBtn,
+                          { backgroundColor: theme.primary },
+                        ]}
+                        onPress={() => onUseAsReference(att)}
+                      >
+                        <Ionicons name="sparkles" size={11} color="#FFF" />
+                        <Text style={styles.refBtnText}>Remix</Text>
+                      </TouchableOpacity>
+                    )}
+                  </TouchableOpacity>
+                ),
+              )}
             </View>
           )}
 

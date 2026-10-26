@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { apiService } from '../services/api';
-import type { ChatSession, ChatMode, SessionSortOrder } from '../types';
+import { useState, useEffect, useRef, useCallback } from "react";
+import { apiService } from "../services/api";
+import type { ChatSession, ChatMode, SessionSortOrder } from "../types";
 
 interface UseChatSessionsOptions {
   userId: string | null;
@@ -23,7 +23,11 @@ export interface UseChatSessionsReturn {
   loadMore: () => Promise<void>;
   reload: () => Promise<void>;
   prependSession: (session: ChatSession) => void;
-  updateSessionTitle: (sessionId: string, newTitle: string) => void;
+  updateSessionTitle: (
+    sessionId: string,
+    newTitle: string,
+    expectedTitle?: string,
+  ) => void;
   updateSessionMode: (sessionId: string, mode: ChatMode) => void;
   removeSession: (sessionId: string) => void;
   ensureSessionInList: (session: ChatSession) => void;
@@ -35,7 +39,7 @@ const SEARCH_DEBOUNCE_MS = 300;
 
 export const sortSessionsList = (
   list: ChatSession[],
-  order: SessionSortOrder
+  order: SessionSortOrder,
 ): ChatSession[] => {
   return [...list].sort((a, b) => {
     // 1. Pinned conversations always appear first at the top
@@ -47,7 +51,7 @@ export const sortSessionsList = (
     // 2. Sort by creation timestamp
     const aTime = new Date(a.created_at).getTime() || 0;
     const bTime = new Date(b.created_at).getTime() || 0;
-    if (order === 'first_created') {
+    if (order === "first_created") {
       return aTime - bTime;
     }
     return bTime - aTime;
@@ -64,22 +68,22 @@ export function useChatSessions({
   const [isLoadingInitial, setIsLoadingInitial] = useState<boolean>(false);
   const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
   const [isSearching, setIsSearching] = useState<boolean>(false);
-  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [searchQuery, setSearchQuery] = useState<string>("");
 
   // Persistent Sort Order State (last_created vs first_created)
   const [sortOrder, setSortOrderState] = useState<SessionSortOrder>(() => {
     try {
-      const saved = localStorage.getItem('contexify_session_sort');
-      return saved === 'first_created' ? 'first_created' : 'last_created';
+      const saved = localStorage.getItem("contexify_session_sort");
+      return saved === "first_created" ? "first_created" : "last_created";
     } catch {
-      return 'last_created';
+      return "last_created";
     }
   });
 
   const setSortOrder = useCallback((order: SessionSortOrder) => {
     setSortOrderState(order);
     try {
-      localStorage.setItem('contexify_session_sort', order);
+      localStorage.setItem("contexify_session_sort", order);
     } catch {
       // Ignore localStorage errors
     }
@@ -94,8 +98,12 @@ export function useChatSessions({
 
   // --- Initial Load / Reload of First Page ---
   const fetchInitialPage = useCallback(
-    async (targetUserId: string, searchFilter?: string, currentSort: SessionSortOrder = sortOrder) => {
-      if (!targetUserId || targetUserId.startsWith('guest')) {
+    async (
+      targetUserId: string,
+      searchFilter?: string,
+      currentSort: SessionSortOrder = sortOrder,
+    ) => {
+      if (!targetUserId || targetUserId.startsWith("guest")) {
         setSessions([]);
         setTotal(0);
         setHasMore(false);
@@ -133,10 +141,10 @@ export function useChatSessions({
           setHasMore(Boolean(result.has_more));
         }
       } catch (err: unknown) {
-        if (err instanceof Error && err.name === 'AbortError') {
+        if (err instanceof Error && err.name === "AbortError") {
           return;
         }
-        console.error('Failed to fetch initial session page:', err);
+        console.error("Failed to fetch initial session page:", err);
       } finally {
         if (currentRequestId === searchRequestIdRef.current) {
           setIsLoadingInitial(false);
@@ -144,16 +152,16 @@ export function useChatSessions({
         }
       }
     },
-    [pageSize, sortOrder]
+    [pageSize, sortOrder],
   );
 
   // --- User Change Effect ---
   useEffect(() => {
     if (userId !== prevUserIdRef.current) {
       prevUserIdRef.current = userId;
-      setSearchQuery('');
+      setSearchQuery("");
       hadSearchRef.current = false;
-      if (userId && !userId.startsWith('guest')) {
+      if (userId && !userId.startsWith("guest")) {
         fetchInitialPage(userId);
       } else {
         setSessions([]);
@@ -165,14 +173,14 @@ export function useChatSessions({
 
   // --- Re-fetch on Sort Order Change ---
   useEffect(() => {
-    if (userId && !userId.startsWith('guest')) {
+    if (userId && !userId.startsWith("guest")) {
       fetchInitialPage(userId, searchQuery.trim() || undefined, sortOrder);
     }
   }, [sortOrder]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // --- Debounced Search Effect ---
   useEffect(() => {
-    if (!userId || userId.startsWith('guest')) return;
+    if (!userId || userId.startsWith("guest")) return;
 
     if (searchTimeoutRef.current) {
       clearTimeout(searchTimeoutRef.current);
@@ -201,7 +209,13 @@ export function useChatSessions({
 
   // --- Load Next Page (Infinite Scroll) ---
   const loadMore = useCallback(async () => {
-    if (!userId || userId.startsWith('guest') || isLoadingMore || !hasMore || isLoadingInitial) {
+    if (
+      !userId ||
+      userId.startsWith("guest") ||
+      isLoadingMore ||
+      !hasMore ||
+      isLoadingInitial
+    ) {
       return;
     }
 
@@ -219,23 +233,38 @@ export function useChatSessions({
 
       setSessions((prev) => {
         const existingIds = new Set(prev.map((s) => s.id));
-        const uniqueNew = (result.sessions || []).filter((s) => !existingIds.has(s.id));
+        const uniqueNew = (result.sessions || []).filter(
+          (s) => !existingIds.has(s.id),
+        );
         return sortSessionsList([...prev, ...uniqueNew], sortOrder);
       });
 
       setTotal(result.total);
       setHasMore(Boolean(result.has_more));
     } catch (err) {
-      console.error('Failed to load more sessions:', err);
+      console.error("Failed to load more sessions:", err);
     } finally {
       setIsLoadingMore(false);
     }
-  }, [userId, isLoadingMore, hasMore, isLoadingInitial, sessions.length, searchQuery, pageSize, sortOrder]);
+  }, [
+    userId,
+    isLoadingMore,
+    hasMore,
+    isLoadingInitial,
+    sessions.length,
+    searchQuery,
+    pageSize,
+    sortOrder,
+  ]);
 
   // --- Public Reload Method ---
   const reload = useCallback(async () => {
     if (userId) {
-      await fetchInitialPage(userId, searchQuery.trim() || undefined, sortOrder);
+      await fetchInitialPage(
+        userId,
+        searchQuery.trim() || undefined,
+        sortOrder,
+      );
     }
   }, [userId, searchQuery, sortOrder, fetchInitialPage]);
 
@@ -255,7 +284,7 @@ export function useChatSessions({
                 is_pinned: nextPinned,
                 pinned_at: nextPinned ? new Date().toISOString() : null,
               }
-            : s
+            : s,
         );
         return sortSessionsList(updated, sortOrder);
       });
@@ -263,7 +292,7 @@ export function useChatSessions({
       try {
         await apiService.togglePinSession(sessionId, nextPinned);
       } catch (err) {
-        console.error('Failed to toggle pin session:', err);
+        console.error("Failed to toggle pin session:", err);
         // Rollback
         setSessions((prev) => {
           const rolledBack = prev.map((s) =>
@@ -273,13 +302,13 @@ export function useChatSessions({
                   is_pinned: target.is_pinned,
                   pinned_at: target.pinned_at,
                 }
-              : s
+              : s,
           );
           return sortSessionsList(rolledBack, sortOrder);
         });
       }
     },
-    [sessions, sortOrder]
+    [sessions, sortOrder],
   );
 
   // --- In-Memory Mutators for Optimistic UI ---
@@ -291,18 +320,26 @@ export function useChatSessions({
       });
       setTotal((prev) => prev + 1);
     },
-    [sortOrder]
+    [sortOrder],
   );
 
-  const updateSessionTitle = useCallback((sessionId: string, newTitle: string) => {
-    setSessions((prev) =>
-      prev.map((s) => (s.id === sessionId ? { ...s, title: newTitle } : s))
-    );
-  }, []);
+  const updateSessionTitle = useCallback(
+    (sessionId: string, newTitle: string, expectedTitle?: string) => {
+      setSessions((prev) =>
+        prev.map((s) =>
+          s.id === sessionId &&
+          (expectedTitle === undefined || s.title === expectedTitle)
+            ? { ...s, title: newTitle }
+            : s,
+        ),
+      );
+    },
+    [],
+  );
 
   const updateSessionMode = useCallback((sessionId: string, mode: ChatMode) => {
     setSessions((prev) =>
-      prev.map((s) => (s.id === sessionId ? { ...s, mode } : s))
+      prev.map((s) => (s.id === sessionId ? { ...s, mode } : s)),
     );
   }, []);
 
@@ -320,7 +357,7 @@ export function useChatSessions({
         return sortSessionsList([session, ...prev], sortOrder);
       });
     },
-    [sortOrder]
+    [sortOrder],
   );
 
   return {

@@ -333,13 +333,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             const response = await GoogleSignin.signIn();
 
             if (response.type === "success" && response.data) {
-              const { user: gUser, idToken } = response.data;
+              const { idToken } = response.data;
+              if (!idToken)
+                throw new Error("Google did not provide an ID token.");
               const user = await apiService.loginWithGoogle({
-                credential: idToken || undefined,
-                email: gUser.email,
-                name: gUser.name || undefined,
-                picture: gUser.photo || undefined,
-                google_id: gUser.id,
+                credential: idToken,
               });
 
               Haptics.notificationAsync(
@@ -373,6 +371,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       }
 
       // 2. Development (Expo Go) and Web fallback flow
+      const nonce = await apiService.getGoogleNonce();
       let startUrl: string;
       let returnUrl: string;
 
@@ -385,7 +384,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           clientId,
         )}&redirect_uri=${encodeURIComponent(
           returnUrl,
-        )}&response_type=token&scope=${encodeURIComponent(
+        )}&response_type=id_token&nonce=${encodeURIComponent(nonce)}&state=${encodeURIComponent(nonce)}&scope=${encodeURIComponent(
           "openid email profile",
         )}&prompt=select_account`;
       } else {
@@ -396,7 +395,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           clientId,
         )}&redirect_uri=${encodeURIComponent(
           proxyUri,
-        )}&response_type=token&scope=${encodeURIComponent(
+        )}&response_type=id_token&nonce=${encodeURIComponent(nonce)}&state=${encodeURIComponent(nonce)}&scope=${encodeURIComponent(
           "openid email profile",
         )}&prompt=select_account`;
 
@@ -420,44 +419,17 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             ? result.url.split("?")[1]
             : "";
         const params = new URLSearchParams(rawParams);
-        const accessToken = params.get("access_token");
-
-        if (accessToken) {
-          const userInfoRes = await fetch(
-            "https://www.googleapis.com/oauth2/v3/userinfo",
-            {
-              headers: { Authorization: `Bearer ${accessToken}` },
-            },
-          );
-
-          if (userInfoRes.ok) {
-            const info = await userInfoRes.json();
-            const user = await apiService.loginWithGoogle({
-              email: info.email,
-              name: info.name,
-              picture: info.picture,
-              google_id: info.sub,
-            });
-            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-            resetForm();
-            onSuccess(user);
-            onClose();
-            return;
-          } else {
-            throw new Error("Failed to retrieve profile from Google.");
-          }
-        } else if (result.url.includes("error=")) {
-          const errorDesc =
-            params.get("error_description") || params.get("error");
-          if (errorDesc?.includes("redirect_uri_mismatch")) {
-            throw new Error(
-              `Google OAuth Redirect URI mismatch.\nPlease add this URL to your Google Cloud Console Authorized redirect URIs:\nhttps://auth.expo.io/@prats129/contexify`,
-            );
-          }
+        const credential = params.get("id_token");
+        if (!credential || params.get("state") !== nonce) {
           throw new Error(
-            errorDesc || "Google authentication was rejected or cancelled.",
+            "Google Sign-In could not be verified. Please try again.",
           );
         }
+        const user = await apiService.loginWithGoogle({ credential, nonce });
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        resetForm();
+        onSuccess(user);
+        onClose();
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);

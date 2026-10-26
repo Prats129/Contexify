@@ -29,6 +29,7 @@ interface ChatInputProps {
   onSend: () => void;
   onStop: () => void;
   isSending: boolean;
+  isBusy?: boolean;
   onAttachFile: (file: { uri: string; name: string; mimeType: string }) => void;
   isUploading: boolean;
   documents: DocumentMetadata[];
@@ -50,6 +51,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   onSend,
   onStop,
   isSending,
+  isBusy = false,
   onAttachFile,
   isUploading,
   documents,
@@ -71,9 +73,16 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const isVision = currentMode === "MULTIMODAL";
   const isDoc = currentMode === "DOCUMENT_RAG";
   const canSend =
-    (query.trim().length > 0 || attachedMedia.length > 0) && !isSending;
+    (query.trim().length > 0 ||
+      attachedMedia.length > 0 ||
+      documents.length > 0) &&
+    !isSending &&
+    !isBusy &&
+    !isUploading;
   const insets = useSafeAreaInsets();
-  const [isKeyboardOpen, setIsKeyboardOpen] = useState(false);
+  const [isKeyboardOpen, setIsKeyboardOpen] = useState(() =>
+    Keyboard.isVisible(),
+  );
   const [isExpanded, setIsExpanded] = useState(false);
 
   const handleContentSizeChange = (e: {
@@ -114,13 +123,17 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       const res = await DocumentPicker.getDocumentAsync({
         type: [
-          "image/*",
+          "image/png",
+          "image/jpeg",
+          "image/webp",
+          "image/gif",
+          "image/bmp",
+          "image/x-ms-bmp",
           "application/pdf",
           "text/plain",
           "text/markdown",
           "text/csv",
           "application/json",
-          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         ],
         copyToCacheDirectory: true,
       });

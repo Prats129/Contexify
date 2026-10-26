@@ -1,5 +1,6 @@
 import React, {
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   useCallback,
@@ -12,6 +13,7 @@ import {
   LuTarget,
   LuArrowDown,
   LuGhost,
+  LuLoaderCircle,
 } from "react-icons/lu";
 import { MessageItem } from "./MessageItem";
 import { ChatPromptTimeline } from "./ChatPromptTimeline";
@@ -24,6 +26,15 @@ import type {
 } from "../../types";
 
 interface MessageListProps {
+  historyLatestRevision?: number;
+  hasOlderHistory?: boolean;
+  hasNewerHistory?: boolean;
+  historyNavigationDisabled?: boolean;
+  historyLoadingDirection?: "older" | "newer" | "latest" | "target" | null;
+  onHistoryPage?: (
+    direction: "older" | "newer" | "latest" | "target",
+    targetId?: string,
+  ) => Promise<boolean>;
   messages: Message[];
   streamingMessage: StreamingMessageState | null;
   onSelectPrompt: (prompt: string) => void;
@@ -48,6 +59,12 @@ interface MessageListProps {
 }
 
 export const MessageList: React.FC<MessageListProps> = ({
+  historyLatestRevision = 0,
+  hasOlderHistory = false,
+  hasNewerHistory = false,
+  historyNavigationDisabled = false,
+  historyLoadingDirection = null,
+  onHistoryPage,
   messages,
   streamingMessage,
   onSelectPrompt,
@@ -65,7 +82,14 @@ export const MessageList: React.FC<MessageListProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollEndRef = useRef<HTMLDivElement>(null);
   const isAtBottomRef = useRef(true);
-  const prevMsgCountRef = useRef(messages.length);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const positionedRef = useRef(false);
+  const lastLatestRevisionRef = useRef(historyLatestRevision);
+  const userScrolledRef = useRef(false);
+  const loadingRef = useRef(false);
+  const anchorRef = useRef<{ id: string; top: number } | null>(null);
+  const latestRequestedRef = useRef(false);
+  const previousMessagesRef = useRef(messages);
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [activePromptId, setActivePromptId] = useState<string | null>(null);
   const [internalHighlightedId, setInternalHighlightedId] = useState<
@@ -75,7 +99,7 @@ export const MessageList: React.FC<MessageListProps> = ({
     externalHighlightedId !== undefined
       ? externalHighlightedId
       : internalHighlightedId;
-  const highlightTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Extract all user prompt items for the timeline navigation
   const userPrompts = useMemo(() => {
@@ -113,34 +137,106 @@ export const MessageList: React.FC<MessageListProps> = ({
     setActivePromptId(currentActiveId);
   }, [userPrompts]);
 
-  // Check scroll position & update active prompt
+  const loadEdge = useCallback(
+    async (direction: "older" | "newer") => {
+      const container = containerRef.current;
+      if (
+        !container ||
+        loadingRef.current ||
+        historyNavigationDisabled ||
+        !onHistoryPage
+      )
+        return;
+      const bounds = container.getBoundingClientRect();
+      const visible = [
+        ...container.querySelectorAll<HTMLElement>('[id^="msg-"]'),
+      ].find((element) => element.getBoundingClientRect().bottom > bounds.top);
+      anchorRef.current = visible
+        ? {
+            id: visible.id.slice(4),
+            top: visible.getBoundingClientRect().top - bounds.top,
+          }
+        : null;
+      loadingRef.current = true;
+      try {
+        if (!(await onHistoryPage(direction))) anchorRef.current = null;
+      } finally {
+        loadingRef.current = false;
+      }
+    },
+    [historyNavigationDisabled, onHistoryPage],
+  );
+
   const handleScroll = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
-    const offsetFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    // Considered at bottom if within 80px
-    const atBottom = offsetFromBottom < 80;
-    isAtBottomRef.current = atBottom;
-
-    // Show button if user has scrolled up and content is tall enough
-    const canScroll = el.scrollHeight > el.clientHeight + 100;
-    setShowScrollButton(!atBottom && canScroll);
-
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const atBottom = distance < 80;
+    if (userScrolledRef.current || hasNewerHistory)
+      isAtBottomRef.current = atBottom && !hasNewerHistory;
+    setShowScrollButton(
+      hasNewerHistory || (!atBottom && el.scrollHeight > el.clientHeight + 100),
+    );
     updateActivePrompt();
-  }, [updateActivePrompt]);
+    if (loadingRef.current && anchorRef.current) {
+      const visible = [
+        ...el.querySelectorAll<HTMLElement>('[id^="msg-"]'),
+      ].find(
+        (element) =>
+          element.getBoundingClientRect().bottom >
+          el.getBoundingClientRect().top,
+      );
+      if (visible)
+        anchorRef.current = {
+          id: visible.id.slice(4),
+          top:
+            visible.getBoundingClientRect().top -
+            el.getBoundingClientRect().top,
+        };
+    }
+    if (
+      !positionedRef.current ||
+      !userScrolledRef.current ||
+      loadingRef.current
+    )
+      return;
+    if (el.scrollTop < 120 && hasOlderHistory) void loadEdge("older");
+    else if (distance < 120 && hasNewerHistory) void loadEdge("newer");
+  }, [hasOlderHistory, hasNewerHistory, loadEdge, updateActivePrompt]);
 
-  const scrollToBottom = useCallback((smooth = true) => {
-    scrollEndRef.current?.scrollIntoView({
-      behavior: smooth ? "smooth" : "auto",
-    });
-    isAtBottomRef.current = true;
-    setShowScrollButton(false);
-  }, []);
+  const scrollToBottom = useCallback(
+    async (smooth = true) => {
+      if (loadingRef.current || historyNavigationDisabled) return;
+      const wasAtBottom = isAtBottomRef.current;
+      const hadUserScrolled = userScrolledRef.current;
+      // Keep following late layout changes until the reader scrolls manually.
+      userScrolledRef.current = false;
+      isAtBottomRef.current = true;
+      if (hasNewerHistory && onHistoryPage) {
+        latestRequestedRef.current = true;
+        userScrolledRef.current = false;
+        if (!(await onHistoryPage("latest"))) {
+          latestRequestedRef.current = false;
+          isAtBottomRef.current = wasAtBottom;
+          userScrolledRef.current = hadUserScrolled;
+          return;
+        }
+      }
+      scrollEndRef.current?.scrollIntoView({
+        behavior: smooth ? "smooth" : "auto",
+      });
+      isAtBottomRef.current = true;
+      setShowScrollButton(false);
+    },
+    [hasNewerHistory, historyNavigationDisabled, onHistoryPage],
+  );
 
   // Jump to specific message with smooth scroll and momentary highlight glow
   const scrollToTargetMessage = useCallback(
     (targetId: string) => {
       if (onJumpToMessage) {
+        userScrolledRef.current = false;
+        isAtBottomRef.current = false;
         onJumpToMessage(targetId);
         return;
       }
@@ -205,33 +301,117 @@ export const MessageList: React.FC<MessageListProps> = ({
     };
   }, []);
 
-  // Handle auto-scrolling on messages or stream update
-  useEffect(() => {
-    const isNewMessageAdded = messages.length > prevMsgCountRef.current;
-    prevMsgCountRef.current = messages.length;
-
-    if (isNewMessageAdded) {
-      // Always scroll down on brand new messages (user sent or final assistant message)
-      scrollToBottom(true);
-    } else if (streamingMessage) {
-      // ONLY scroll during active streaming if user was already at the bottom
-      if (isAtBottomRef.current) {
-        scrollToBottom(false);
-      }
+  // Commit viewport changes before paint so prepends do not look like new answers.
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    if (!container || messages.length === 0) return;
+    if (lastLatestRevisionRef.current !== historyLatestRevision) {
+      anchorRef.current = null;
+      isAtBottomRef.current = true;
+      userScrolledRef.current = false;
+      lastLatestRevisionRef.current = historyLatestRevision;
     }
+    const previous = previousMessagesRef.current;
+    const last = messages[messages.length - 1];
+    const userSent =
+      last?.role === "user" &&
+      previous.length > 0 &&
+      !previous.some((message) => message.id === last.id) &&
+      messages.some(
+        (message) => message.id === previous[previous.length - 1].id,
+      );
+    previousMessagesRef.current = messages;
+    const anchor = anchorRef.current;
+    if (anchor) {
+      const element = document.getElementById(`msg-${anchor.id}`);
+      if (element && container.contains(element)) {
+        container.scrollTop +=
+          element.getBoundingClientRect().top -
+          container.getBoundingClientRect().top -
+          anchor.top;
+      }
+      anchorRef.current = null;
+      isAtBottomRef.current = false;
+    } else if (
+      !positionedRef.current ||
+      latestRequestedRef.current ||
+      isAtBottomRef.current ||
+      userSent
+    ) {
+      scrollEndRef.current?.scrollIntoView({ behavior: "auto" });
+      isAtBottomRef.current = !hasNewerHistory;
+      latestRequestedRef.current = false;
+    }
+    positionedRef.current = true;
     updateActivePrompt();
-  }, [messages, streamingMessage, scrollToBottom, updateActivePrompt]);
+  }, [
+    messages,
+    streamingMessage,
+    hasNewerHistory,
+    historyLatestRevision,
+    updateActivePrompt,
+  ]);
+
+  // Images and rich content can change height after the initial render.
+  useEffect(() => {
+    if (!contentRef.current || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (isAtBottomRef.current && !loadingRef.current)
+        scrollEndRef.current?.scrollIntoView({ behavior: "auto" });
+    });
+    observer.observe(contentRef.current);
+    if (containerRef.current) observer.observe(containerRef.current);
+    return () => observer.disconnect();
+  }, []);
 
   const showWelcome = messages.length === 0 && !streamingMessage;
 
   return (
     <div className="relative flex-1 overflow-hidden flex flex-col w-full">
+      {historyLoadingDirection && (
+        <div
+          role="status"
+          aria-live="polite"
+          className={`pointer-events-none absolute ${historyLoadingDirection === "newer" || historyLoadingDirection === "latest" ? "bottom-12" : "top-2"} left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 rounded-full border border-(--border-subtle) bg-(--bg-card) px-3 py-2 text-xs text-(--text-muted)`}
+        >
+          <LuLoaderCircle
+            className="animate-spin"
+            size={14}
+            aria-hidden="true"
+          />
+          Loading messages...
+        </div>
+      )}
       <div
         ref={containerRef}
         onScroll={handleScroll}
+        onWheel={() => {
+          userScrolledRef.current = true;
+          handleScroll();
+        }}
+        onTouchMove={() => {
+          userScrolledRef.current = true;
+        }}
+        onKeyDown={(event) => {
+          if (
+            [
+              "ArrowUp",
+              "ArrowDown",
+              "PageUp",
+              "PageDown",
+              "Home",
+              "End",
+            ].includes(event.key)
+          ) {
+            userScrolledRef.current = true;
+            handleScroll();
+          }
+        }}
+        tabIndex={0}
         className="flex-1 overflow-y-auto px-2 sm:px-6 py-4 md:py-6 w-full flex flex-col items-center"
       >
         <div
+          ref={contentRef}
           className={`w-full flex flex-col gap-5 ${
             activeSources ? "max-w-4xl lg:mr-auto lg:ml-4" : "max-w-3xl"
           }`}
@@ -364,7 +544,7 @@ export const MessageList: React.FC<MessageListProps> = ({
                 attachments={msg.attachments}
                 isHighlighted={activeHighlightedId === msg.id}
                 userAvatarUrl={currentUser?.avatar_url}
-                userAvatarColor={currentUser?.avatar_color}
+                userAvatarColor={currentUser?.avatar_color ?? undefined}
                 userDisplayName={
                   currentUser?.display_name || currentUser?.username
                 }
@@ -381,7 +561,16 @@ export const MessageList: React.FC<MessageListProps> = ({
                     : undefined
                 }
                 onUseAsReference={onUseAsReference}
-                onReply={onReply}
+                onReply={
+                  onReply
+                    ? () =>
+                        onReply({
+                          id: msg.id,
+                          role: msg.role,
+                          content: msg.content,
+                        })
+                    : undefined
+                }
                 onJumpToMessage={scrollToTargetMessage}
               />
             );

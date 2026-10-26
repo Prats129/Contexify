@@ -1,9 +1,11 @@
 import smtplib
-import asyncio
-from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+
+from app.core.concurrency import run_blocking
 from app.core.config import settings
 from app.core.logging import logger
+
 
 class EmailService:
     """
@@ -11,7 +13,9 @@ class EmailService:
     and alerts via SMTP with HTML/Text formatting.
     """
 
-    def _generate_otp_html(self, display_name: str, otp_code: str, expiry_minutes: int) -> str:
+    def _generate_otp_html(
+        self, display_name: str, otp_code: str, expiry_minutes: int
+    ) -> str:
         name_str = f" {display_name}" if display_name else ""
         return f"""<!DOCTYPE html>
 <html lang="en">
@@ -71,7 +75,9 @@ class EmailService:
 </body>
 </html>"""
 
-    def _generate_otp_text(self, display_name: str, otp_code: str, expiry_minutes: int) -> str:
+    def _generate_otp_text(
+        self, display_name: str, otp_code: str, expiry_minutes: int
+    ) -> str:
         name_str = f" {display_name}" if display_name else ""
         return (
             f"Hello{name_str},\n\n"
@@ -81,21 +87,26 @@ class EmailService:
             "— The Contexify Team"
         )
 
-    def _send_smtp_sync(self, to_email: str, subject: str, text_content: str, html_content: str) -> bool:
+    def _send_smtp_sync(
+        self, to_email: str, subject: str, text_content: str, html_content: str
+    ) -> bool:
         """Synchronous SMTP email delivery."""
-        if not settings.SMTP_HOST:
-            logger.info(
-                f"[DEV MODE / NO SMTP] Email to '{to_email}' skipped SMTP dispatch.\n"
-                f"Subject: {subject}\n"
-                f"Body: {text_content}"
-            )
-            return True
+        if not (settings.SMTP_HOST or "").strip():
+            logger.warning("Email delivery unavailable: SMTP is not configured")
+            return False
 
         smtp_host = (settings.SMTP_HOST or "").strip()
         smtp_user = (settings.SMTP_USER or "").strip().strip('"').strip("'")
         smtp_password = (settings.SMTP_PASSWORD or "").strip().strip('"').strip("'")
-        smtp_from_email = (settings.SMTP_FROM_EMAIL or smtp_user or "noreply@contexify.ai").strip().strip('"').strip("'")
-        smtp_from_name = (settings.SMTP_FROM_NAME or "Contexify").strip().strip('"').strip("'")
+        smtp_from_email = (
+            (settings.SMTP_FROM_EMAIL or smtp_user or "noreply@contexify.ai")
+            .strip()
+            .strip('"')
+            .strip("'")
+        )
+        smtp_from_name = (
+            (settings.SMTP_FROM_NAME or "Contexify").strip().strip('"').strip("'")
+        )
 
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
@@ -126,39 +137,58 @@ class EmailService:
 
         try:
             _try_send(smtp_host, primary_port, use_ssl)
-            logger.info(f"Successfully sent email to '{to_email}' via SMTP {smtp_host}:{primary_port}")
+            logger.info(
+                f"Successfully sent email to '{to_email}' via SMTP {smtp_host}:{primary_port}"
+            )
             return True
-        except Exception as primary_err:
-            logger.warning(f"Primary SMTP attempt to {smtp_host}:{primary_port} (SSL={use_ssl}) failed: {primary_err}")
+        except (smtplib.SMTPException, OSError) as primary_err:
+            logger.warning(
+                "Primary SMTP delivery failed (%s)", type(primary_err).__name__
+            )
             # Cloud hosts frequently block port 587; retry via alternative port/mode (465 SSL vs 587 TLS)
             fallback_port = 465 if not use_ssl else 587
             fallback_ssl = not use_ssl
             try:
-                logger.info(f"Retrying via fallback SMTP connection to {smtp_host}:{fallback_port} (SSL={fallback_ssl})...")
+                logger.info(
+                    f"Retrying via fallback SMTP connection to {smtp_host}:{fallback_port} (SSL={fallback_ssl})..."
+                )
                 _try_send(smtp_host, fallback_port, fallback_ssl)
-                logger.info(f"Fallback SMTP dispatch to '{to_email}' succeeded via {smtp_host}:{fallback_port}")
+                logger.info(
+                    f"Fallback SMTP dispatch to '{to_email}' succeeded via {smtp_host}:{fallback_port}"
+                )
                 return True
-            except Exception as fallback_err:
-                logger.error(f"Both primary and fallback SMTP failed for '{to_email}'. Error: {fallback_err}", exc_info=True)
+            except (smtplib.SMTPException, OSError) as fallback_err:
+                logger.error(
+                    "Both SMTP delivery attempts failed (%s)",
+                    type(fallback_err).__name__,
+                )
                 return False
 
-    def _send_brevo_http(self, to_email: str, subject: str, text_content: str, html_content: str) -> bool:
+    def _send_brevo_http(
+        self, to_email: str, subject: str, text_content: str, html_content: str
+    ) -> bool:
         """Send email via Brevo HTTP REST API over standard HTTPS port 443 (bypasses cloud SMTP blocks, no custom domain required)."""
         api_key = (settings.BREVO_API_KEY or "").strip().strip('"').strip("'")
         if not api_key:
             return False
 
         from_email = (
-            settings.BREVO_FROM_EMAIL
-            or settings.SMTP_FROM_EMAIL
-            or settings.SMTP_USER
-            or "contexifyindia@gmail.com"
-        ).strip().strip('"').strip("'")
+            (
+                settings.BREVO_FROM_EMAIL
+                or settings.SMTP_FROM_EMAIL
+                or settings.SMTP_USER
+                or "contexifyindia@gmail.com"
+            )
+            .strip()
+            .strip('"')
+            .strip("'")
+        )
         from_name = (
-            settings.BREVO_FROM_NAME
-            or settings.SMTP_FROM_NAME
-            or "Contexify"
-        ).strip().strip('"').strip("'")
+            (settings.BREVO_FROM_NAME or settings.SMTP_FROM_NAME or "Contexify")
+            .strip()
+            .strip('"')
+            .strip("'")
+        )
 
         payload = {
             "sender": {"name": from_name, "email": from_email},
@@ -170,8 +200,8 @@ class EmailService:
 
         try:
             import json
-            import urllib.request
             import urllib.error
+            import urllib.request
 
             data = json.dumps(payload).encode("utf-8")
             req = urllib.request.Request(
@@ -183,23 +213,26 @@ class EmailService:
                     "Accept": "application/json",
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 (Contexify-Backend)",
                 },
-                method="POST"
+                method="POST",
             )
 
             with urllib.request.urlopen(req, timeout=12) as response:
                 resp_data = json.loads(response.read().decode("utf-8"))
                 msg_id = resp_data.get("messageId", "ok")
-                logger.info(f"Successfully sent email to '{to_email}' via Brevo HTTPS API (id: {msg_id})")
+                logger.info(
+                    f"Successfully sent email to '{to_email}' via Brevo HTTPS API (id: {msg_id})"
+                )
                 return True
         except urllib.error.HTTPError as he:
-            err_body = he.read().decode("utf-8", errors="ignore")
-            logger.error(f"Brevo HTTPS API error [{he.code}] sending to '{to_email}': {err_body}")
+            logger.error("Brevo email delivery rejected (HTTP %s)", he.code)
             return False
-        except Exception as e:
-            logger.error(f"Failed to dispatch email via Brevo HTTPS API: {e}", exc_info=True)
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            logger.error("Brevo email delivery failed (%s)", type(e).__name__)
             return False
 
-    def _send_email_sync(self, to_email: str, subject: str, text_content: str, html_content: str) -> bool:
+    def _send_email_sync(
+        self, to_email: str, subject: str, text_content: str, html_content: str
+    ) -> bool:
         """Dispatcher: prefers Brevo HTTPS API (port 443, cloud-friendly), falls back to SMTP."""
         brevo_key = (settings.BREVO_API_KEY or "").strip().strip('"').strip("'")
         if brevo_key and not brevo_key.startswith("paste_"):
@@ -208,7 +241,9 @@ class EmailService:
 
         return self._send_smtp_sync(to_email, subject, text_content, html_content)
 
-    def _generate_password_reset_html(self, display_name: str, otp_code: str, expiry_minutes: int) -> str:
+    def _generate_password_reset_html(
+        self, display_name: str, otp_code: str, expiry_minutes: int
+    ) -> str:
         name_str = f" {display_name}" if display_name else ""
         return f"""<!DOCTYPE html>
 <html lang="en">
@@ -268,7 +303,9 @@ class EmailService:
 </body>
 </html>"""
 
-    def _generate_password_reset_text(self, display_name: str, otp_code: str, expiry_minutes: int) -> str:
+    def _generate_password_reset_text(
+        self, display_name: str, otp_code: str, expiry_minutes: int
+    ) -> str:
         name_str = f" {display_name}" if display_name else ""
         return (
             f"Hello{name_str},\n\n"
@@ -278,7 +315,9 @@ class EmailService:
             "— The Contexify Team"
         )
 
-    async def send_otp_email(self, to_email: str, otp_code: str, display_name: str = "") -> bool:
+    async def send_otp_email(
+        self, to_email: str, otp_code: str, display_name: str = ""
+    ) -> bool:
         """
         Send OTP verification code for login to the target email asynchronously.
         """
@@ -287,29 +326,28 @@ class EmailService:
         text_content = self._generate_otp_text(display_name, otp_code, expiry_minutes)
         html_content = self._generate_otp_html(display_name, otp_code, expiry_minutes)
 
-        return await asyncio.to_thread(
-            self._send_email_sync,
-            to_email,
-            subject,
-            text_content,
-            html_content
+        return await run_blocking(
+            self._send_email_sync, to_email, subject, text_content, html_content
         )
 
-    async def send_password_reset_otp_email(self, to_email: str, otp_code: str, display_name: str = "") -> bool:
+    async def send_password_reset_otp_email(
+        self, to_email: str, otp_code: str, display_name: str = ""
+    ) -> bool:
         """
         Send OTP verification code for password reset to the target email asynchronously.
         """
         expiry_minutes = max(1, settings.OTP_EXPIRY_SECONDS // 60)
         subject = f"{otp_code} is your Contexify password reset code"
-        text_content = self._generate_password_reset_text(display_name, otp_code, expiry_minutes)
-        html_content = self._generate_password_reset_html(display_name, otp_code, expiry_minutes)
-
-        return await asyncio.to_thread(
-            self._send_email_sync,
-            to_email,
-            subject,
-            text_content,
-            html_content
+        text_content = self._generate_password_reset_text(
+            display_name, otp_code, expiry_minutes
         )
+        html_content = self._generate_password_reset_html(
+            display_name, otp_code, expiry_minutes
+        )
+
+        return await run_blocking(
+            self._send_email_sync, to_email, subject, text_content, html_content
+        )
+
 
 email_service = EmailService()

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -35,53 +35,114 @@ export const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
   theme: customTheme,
 }) => {
   const theme = customTheme || getAppTheme(isDark);
-  const [currentUrl, setCurrentUrl] = useState("");
   const [inputUrl, setInputUrl] = useState("");
   const [pingStatus, setPingStatus] = useState<
     "idle" | "testing" | "online" | "offline"
   >("idle");
 
+  const [error, setError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const savingRef = useRef(false);
+  const pingRequestRef = useRef(0);
+  const pingAbortRef = useRef<AbortController | null>(null);
+
+  const invalidatePing = () => {
+    pingRequestRef.current++;
+    pingAbortRef.current?.abort();
+    pingAbortRef.current = null;
+  };
+
+  const changeInput = (value: string) => {
+    invalidatePing();
+    setInputUrl(value);
+    setPingStatus("idle");
+    setError(null);
+  };
+
   useEffect(() => {
-    if (visible) {
-      getApiBaseUrl().then((url) => {
-        setCurrentUrl(url);
-        setInputUrl(url);
-        setPingStatus("idle");
+    if (!visible) return;
+    const request = ++pingRequestRef.current;
+    setPingStatus("idle");
+    setError(null);
+    getApiBaseUrl()
+      .then((url) => {
+        if (request === pingRequestRef.current) setInputUrl(url);
+      })
+      .catch(() => {
+        if (request === pingRequestRef.current)
+          setError("Could not load the saved server address. Enter it below.");
       });
-    }
+    return invalidatePing;
   }, [visible]);
 
   const handleTestPing = async () => {
+    invalidatePing();
+    const request = pingRequestRef.current;
+    const controller = new AbortController();
+    pingAbortRef.current = controller;
     setPingStatus("testing");
+    setError(null);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     try {
-      const isOnline = await apiService.pingHealth();
+      const isOnline = await apiService.pingHealth(inputUrl, controller.signal);
+      if (request !== pingRequestRef.current) return;
       setPingStatus(isOnline ? "online" : "offline");
       Haptics.notificationAsync(
         isOnline
           ? Haptics.NotificationFeedbackType.Success
           : Haptics.NotificationFeedbackType.Error,
       );
-    } catch {
+    } catch (err) {
+      if (request !== pingRequestRef.current) return;
       setPingStatus("offline");
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      setError(
+        err instanceof Error ? err.message : "Could not test this server.",
+      );
+    } finally {
+      if (request === pingRequestRef.current) pingAbortRef.current = null;
     }
   };
 
   const handleSave = async () => {
-    if (!inputUrl.trim()) return;
-    await setApiBaseUrl(inputUrl.trim());
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    onClose();
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setIsSaving(true);
+    invalidatePing();
+    setPingStatus("idle");
+    setError(null);
+    try {
+      await setApiBaseUrl(inputUrl);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      onClose();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Could not save the server address.",
+      );
+    } finally {
+      savingRef.current = false;
+      setIsSaving(false);
+    }
   };
 
   const handleReset = async () => {
-    await resetApiBaseUrl();
-    const def = await getApiBaseUrl();
-    setCurrentUrl(def);
-    setInputUrl(def);
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setIsSaving(true);
+    invalidatePing();
     setPingStatus("idle");
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setError(null);
+    try {
+      await resetApiBaseUrl();
+      setInputUrl(await getApiBaseUrl());
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } catch {
+      setError("Could not restore the default server address. Please retry.");
+    } finally {
+      savingRef.current = false;
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -89,13 +150,20 @@ export const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
       visible={visible}
       transparent
       animationType="fade"
-      onRequestClose={onClose}
+      onRequestClose={() => {
+        if (!savingRef.current) onClose();
+      }}
     >
       <KeyboardAvoidingView
         behavior={Platform.OS === "ios" ? "padding" : "height"}
         style={styles.container}
       >
-        <Pressable style={styles.backdrop} onPress={onClose}>
+        <Pressable
+          style={styles.backdrop}
+          onPress={() => {
+            if (!savingRef.current) onClose();
+          }}
+        >
           <Pressable
             style={[
               styles.dialog,
@@ -117,6 +185,7 @@ export const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
                   { backgroundColor: theme.borderSubtle },
                 ]}
                 onPress={onClose}
+                disabled={isSaving}
               >
                 <Feather name="x" size={16} color={theme.textMain} />
               </TouchableOpacity>
@@ -145,9 +214,9 @@ export const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
                         : "transparent",
                   },
                 ]}
+                disabled={isSaving}
                 onPress={() => {
-                  setInputUrl("http://10.66.137.54:8001");
-                  setPingStatus("idle");
+                  changeInput("http://10.66.137.54:8001");
                   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                 }}
               >
@@ -169,9 +238,9 @@ export const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
                       : "transparent",
                   },
                 ]}
+                disabled={isSaving}
                 onPress={() => {
-                  setInputUrl("https://contexify-backend.onrender.com");
-                  setPingStatus("idle");
+                  changeInput("https://contexify-backend.onrender.com");
                   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                 }}
               >
@@ -195,10 +264,8 @@ export const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
               <TextInput
                 style={[styles.input, { color: theme.textMain }]}
                 value={inputUrl}
-                onChangeText={(t) => {
-                  setInputUrl(t);
-                  setPingStatus("idle");
-                }}
+                onChangeText={changeInput}
+                editable={!isSaving}
                 placeholder="http://10.66.137.54:8001"
                 placeholderTextColor={theme.textMuted}
                 autoCapitalize="none"
@@ -214,7 +281,7 @@ export const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
                   { backgroundColor: theme.borderSubtle },
                 ]}
                 onPress={handleTestPing}
-                disabled={pingStatus === "testing"}
+                disabled={pingStatus === "testing" || isSaving}
               >
                 {pingStatus === "testing" ? (
                   <ActivityIndicator size="small" color={theme.primary} />
@@ -259,6 +326,15 @@ export const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
               )}
             </View>
 
+            {error && (
+              <Text
+                accessibilityRole="alert"
+                style={{ color: theme.danger, marginBottom: 12 }}
+              >
+                {error}
+              </Text>
+            )}
+
             {/* Actions */}
             <View style={styles.actionRow}>
               <TouchableOpacity
@@ -267,6 +343,7 @@ export const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
                   { backgroundColor: theme.borderSubtle },
                 ]}
                 onPress={handleReset}
+                disabled={isSaving}
               >
                 <Text style={[styles.resetText, { color: theme.textMuted }]}>
                   Reset Default
@@ -276,6 +353,7 @@ export const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
               <TouchableOpacity
                 style={[styles.saveBtn, { backgroundColor: theme.primary }]}
                 onPress={handleSave}
+                disabled={isSaving}
               >
                 <Text style={styles.saveText}>Save URL</Text>
               </TouchableOpacity>

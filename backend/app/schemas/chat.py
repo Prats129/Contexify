@@ -1,7 +1,9 @@
-from pydantic import BaseModel, Field, model_validator
-from typing import List, Optional, Literal, Dict, Any
+import uuid
 from enum import Enum
-from app.schemas.document import ChunkMetadata
+from typing import Any, Dict, List, Literal, Optional
+
+from pydantic import BaseModel, Field, field_validator, model_validator
+
 
 class ChatMode(str, Enum):
     AUTO = "AUTO"
@@ -10,7 +12,6 @@ class ChatMode(str, Enum):
     MULTIMODAL = "MULTIMODAL"
     IMAGE_GENERATION = "IMAGE_GENERATION"
 
-import uuid
 
 MODE_ALIASES: Dict[str, ChatMode] = {
     "DOC": ChatMode.DOCUMENT_RAG,
@@ -28,7 +29,10 @@ MODE_ALIASES: Dict[str, ChatMode] = {
     "AUTO": ChatMode.AUTO,
 }
 
-def normalize_chat_mode(val: Any, default: Optional[ChatMode] = ChatMode.AUTO) -> Optional[ChatMode]:
+
+def normalize_chat_mode(
+    val: Any, default: Optional[ChatMode] = ChatMode.AUTO
+) -> Optional[ChatMode]:
     """Normalize strings, aliases, or enum members to a valid ChatMode instance."""
     if val is None:
         return default
@@ -44,6 +48,7 @@ def normalize_chat_mode(val: Any, default: Optional[ChatMode] = ChatMode.AUTO) -
             return default
     return default
 
+
 class MediaAttachment(BaseModel):
     id: Optional[str] = None
     url: str = ""
@@ -51,23 +56,65 @@ class MediaAttachment(BaseModel):
     file_name: Optional[str] = None
     mime_type: Optional[str] = "image/png"
     file_size_bytes: Optional[int] = 0
-    media_type: Optional[str] = "upload" # "upload" | "generated"
+    media_type: Optional[str] = "upload"  # "upload" | "generated"
     prompt: Optional[str] = None
+
 
 class MessageReplyReference(BaseModel):
     id: str = Field(..., description="ID of the message being replied to")
-    role: str = Field(default="assistant", description="Role of referenced message ('user' | 'assistant')")
-    content: str = Field(default="", description="Snippet or text of the referenced message")
-    sender_name: Optional[str] = Field(default=None, description="Optional display name of the original sender")
+    role: str = Field(
+        default="assistant",
+        description="Role of referenced message ('user' | 'assistant')",
+    )
+    content: str = Field(
+        default="",
+        max_length=8_000,
+        description="Snippet or text of the referenced message",
+    )
+    sender_name: Optional[str] = Field(
+        default=None, description="Optional display name of the original sender"
+    )
+
+    @field_validator("id")
+    @classmethod
+    def normalize_dom_id(cls, value: str) -> str:
+        # Older web replies used the DOM element's ID. Only unwrap a real UUID;
+        # unknown timestamp references keep their preview without guessing a target.
+        if value.startswith("msg-"):
+            raw_id = value[4:]
+            try:
+                if str(uuid.UUID(raw_id)) == raw_id:
+                    return raw_id
+            except ValueError:
+                pass
+        return value
+
 
 class ChatRequest(BaseModel):
-    session_id: str = Field(default_factory=lambda: f"guest_{uuid.uuid4().hex[:12]}", description="Unique identifier for chat thread")
-    user_id: Optional[str] = Field(default=None, description="Optional ID of authenticated user")
-    message: Optional[str] = Field(default="", description="User question or query")
-    query: Optional[str] = Field(default="", description="Alternative field for user query")
+    is_temporary: bool = False
+    session_id: str = Field(
+        default_factory=lambda: f"guest_{uuid.uuid4().hex[:12]}",
+        description="Unique identifier for chat thread",
+    )
+    user_id: Optional[str] = Field(
+        default=None, description="Optional ID of authenticated user"
+    )
+    message: Optional[str] = Field(
+        default="", max_length=32_000, description="User question or query"
+    )
+    query: Optional[str] = Field(
+        default="", max_length=32_000, description="Alternative field for user query"
+    )
     mode: Optional[ChatMode] = Field(default=ChatMode.AUTO)
-    attachments: Optional[List[MediaAttachment]] = Field(default_factory=list, description="Attached media such as images or documents")
-    reply_to: Optional[MessageReplyReference] = Field(default=None, description="Optional reference to a prior message being replied to")
+    attachments: Optional[List[MediaAttachment]] = Field(
+        default_factory=list,
+        max_length=16,
+        description="Attached media such as images or documents",
+    )
+    reply_to: Optional[MessageReplyReference] = Field(
+        default=None,
+        description="Optional reference to a prior message being replied to",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -114,6 +161,7 @@ class ChatRequest(BaseModel):
 
         return data
 
+
 class Citation(BaseModel):
     document_id: str
     filename: str
@@ -122,15 +170,26 @@ class Citation(BaseModel):
     snippet: str
     similarity_score: float
 
+
+class MessageAcknowledgement(BaseModel):
+    id: str
+    session_id: str
+    role: Literal["user", "assistant"]
+    created_at: str
+
+
 class StreamChunkResponse(BaseModel):
-    event: Literal["token", "citations", "media", "error", "done"]
+    event: Literal["token", "citations", "media", "message", "error", "done"]
     data: str
     citations: Optional[List[Citation]] = None
     media: Optional[MediaAttachment] = None
+    message: Optional[MessageAcknowledgement] = None
+
 
 class SessionState(BaseModel):
     session_id: str
     mode: ChatMode
+    history_version: int = 0
     document_ids: List[str] = []
     messages: List[Dict[str, Any]] = []
     created_at: str

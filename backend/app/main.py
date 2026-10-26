@@ -1,25 +1,67 @@
+import asyncio
+import posixpath
 import sys
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 # Add backend directory to Python path
-backend_dir = Path(__file__).resolve().parent.parent
-if str(backend_dir) not in sys.path:
-    sys.path.insert(0, str(backend_dir))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+
+from app.api.v1.endpoints import chat, document, health, media, session, user
+from app.core.concurrency import run_blocking
 from app.core.config import settings
 from app.core.logging import logger
 from app.db.database import init_db
-from app.api.v1.endpoints import document, chat, health, user, session, media
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from app.services.chat_history_service import chat_history_service
+from app.services.image_gen_service import image_gen_service
+
+
+async def _periodic_temporary_cleanup():
+    while True:
+        try:
+            await asyncio.sleep(
+                60
+            )  # Retry pending cleanup as well as newly expired chats
+            await run_blocking(chat_history_service.purge_expired_temporary_sessions)
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            logger.exception("Error in periodic temporary cleanup")
+
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    logger.info(f"Starting {settings.PROJECT_NAME}...")
+    init_db()
+    try:
+        await run_blocking(chat_history_service.purge_expired_temporary_sessions)
+    except Exception:
+        logger.warning("Initial temporary chat purge notice", exc_info=True)
+    cleanup_task = asyncio.create_task(_periodic_temporary_cleanup())
+    logger.info("API documentation available at /docs")
+    try:
+        yield
+    finally:
+        cleanup_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await cleanup_task
+        try:
+            await image_gen_service.aclose()
+        except Exception:
+            logger.exception("Could not close the image generation client")
+
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version="1.0.0",
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
 # Configure CORS and middlewares
@@ -31,18 +73,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount media static directory for uploaded and generated images and documents (local fallback)
-app.mount("/api/v1/media/uploads", StaticFiles(directory=str(settings.UPLOAD_IMAGE_DIR)), name="media-uploads")
-app.mount("/api/v1/media/generated", StaticFiles(directory=str(settings.GENERATED_IMAGE_DIR)), name="media-generated")
-documents_dir = settings.DATA_DIR / "documents"
-documents_dir.mkdir(parents=True, exist_ok=True)
-app.mount("/api/v1/media/documents", StaticFiles(directory=str(documents_dir)), name="media-documents")
-
 # API Routers
-app.include_router(health.router, prefix=f"{settings.API_V1_STR}/health", tags=["Health"])
+app.include_router(
+    health.router, prefix=f"{settings.API_V1_STR}/health", tags=["Health"]
+)
 app.include_router(user.router, prefix=f"{settings.API_V1_STR}/user", tags=["Users"])
-app.include_router(session.router, prefix=f"{settings.API_V1_STR}/session", tags=["Sessions"])
-app.include_router(document.router, prefix=f"{settings.API_V1_STR}/document", tags=["Documents"])
+app.include_router(
+    session.router, prefix=f"{settings.API_V1_STR}/session", tags=["Sessions"]
+)
+app.include_router(
+    document.router, prefix=f"{settings.API_V1_STR}/document", tags=["Documents"]
+)
 app.include_router(media.router, prefix=f"{settings.API_V1_STR}/media", tags=["Media"])
 app.include_router(chat.router, prefix=f"{settings.API_V1_STR}/chat", tags=["Chat"])
 
@@ -57,14 +98,21 @@ if frontend_dist.exists() and (frontend_dist / "index.html").exists():
 
     # SPA catch-all route: serves static files or index.html for client routing
     @app.get("/{full_path:path}")
-    async def serve_frontend(full_path: str):
-        if full_path.startswith("api/") or full_path.startswith("docs") or full_path.startswith("redoc") or full_path.startswith("openapi.json"):
+    def serve_frontend(full_path: str):
+        normalized_path = full_path.replace("\\", "/")
+        route_path = posixpath.normpath(normalized_path).lstrip("/")
+        if route_path == "api" or route_path.startswith(
+            ("api/", "docs", "redoc", "openapi.json")
+        ):
             raise HTTPException(status_code=404, detail="Not Found")
-        candidate = frontend_dist / full_path
+        candidate = (frontend_dist / normalized_path).resolve()
+        if not candidate.is_relative_to(frontend_dist.resolve()):
+            raise HTTPException(status_code=404, detail="Not Found")
         if candidate.is_file():
             return FileResponse(candidate)
         return FileResponse(frontend_dist / "index.html")
 else:
+
     @app.get("/")
     async def root():
         return {
@@ -72,40 +120,5 @@ else:
             "service": settings.PROJECT_NAME,
             "version": "1.0.0",
             "api_docs": "/docs",
-            "frontend_dev_url": "http://localhost:8000"
+            "frontend_dev_url": "http://localhost:8000",
         }
-
-import asyncio
-from app.services.chat_history_service import chat_history_service
-
-_cleanup_task: asyncio.Task = None
-
-async def _periodic_temporary_cleanup():
-    while True:
-        try:
-            await asyncio.sleep(21600)  # Every 6 hours
-            chat_history_service.purge_expired_temporary_sessions()
-        except asyncio.CancelledError:
-            break
-        except Exception as e:
-            logger.error(f"Error in periodic temporary cleanup: {e}")
-
-@app.on_event("startup")
-async def startup_event():
-    global _cleanup_task
-    logger.info(f"Starting {settings.PROJECT_NAME}...")
-    init_db()
-    # Run initial cleanup of expired temporary conversations
-    try:
-        chat_history_service.purge_expired_temporary_sessions()
-    except Exception as e:
-        logger.warning(f"Initial temporary chat purge notice: {e}")
-    # Launch periodic background cleanup
-    _cleanup_task = asyncio.create_task(_periodic_temporary_cleanup())
-    logger.info("API documentation available at /docs")
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    global _cleanup_task
-    if _cleanup_task and not _cleanup_task.done():
-        _cleanup_task.cancel()
