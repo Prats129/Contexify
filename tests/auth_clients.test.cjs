@@ -1683,6 +1683,76 @@ const credentials = (token) => ({
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
 for (const platform of ["frontend", "mobile"]) {
+  test(`${platform}: storage failures show the server message without publishing uploads or signing out`, async () => {
+    const message =
+      "File storage is temporarily unavailable. The upload was not completed. Please try again.";
+    const fixture = client(platform, (url) =>
+      url.endsWith("/user/login")
+        ? response(credentials("signed-token"))
+        : response({ detail: message }, 503),
+    );
+    await fixture.api.login("fixture", "password");
+    const image = { name: "image.png", size: 4, type: "image/png" };
+    const operations =
+      platform === "frontend"
+        ? [
+            () => fixture.api.uploadAvatar(profile.id, image),
+            () => fixture.api.uploadMedia(image, "fixture-session"),
+            () =>
+              fixture.api.uploadDocument(
+                { name: "test.txt", size: 4, type: "text/plain" },
+                "fixture-session",
+              ),
+          ]
+        : [
+            () =>
+              fixture.api.uploadAvatar(
+                profile.id,
+                "file:///image.png",
+                "image.png",
+                "image/png",
+              ),
+            () =>
+              fixture.api.uploadMedia(
+                "fixture-session",
+                "file:///image.png",
+                "image.png",
+                "image/png",
+              ),
+            () =>
+              fixture.api.uploadDocument(
+                "fixture-session",
+                "file:///test.txt",
+                "test.txt",
+                "text/plain",
+              ),
+          ];
+    for (const operation of operations) {
+      const uploadIndex = fixture.uploads.length;
+      const rejection = assert.rejects(
+        operation(),
+        (error) => error.message === message,
+      );
+      if (platform === "mobile") {
+        await until(() => fixture.uploads[uploadIndex]?.sent);
+        const xhr = fixture.uploads[uploadIndex];
+        xhr.status = 503;
+        xhr.responseText = JSON.stringify({ detail: message });
+        xhr.onload();
+      }
+      await rejection;
+    }
+    assert.equal(await fixture.api.hasUserSession(), true);
+    assert.equal(
+      platform === "mobile"
+        ? fixture.uploads.length
+        : fixture.requests.length - 1,
+      3,
+    );
+  });
+}
+
+for (const platform of ["frontend", "mobile"]) {
   const retryMessage = "Too many requests. Please try again in 30 seconds.";
 
   test(`${platform}: throttled sign-in and Google challenge show retry guidance without automatic retries`, async () => {

@@ -4,6 +4,7 @@ from typing import Optional, Tuple
 from urllib.parse import unquote, urlsplit
 
 from app.core.config import settings
+from app.core.errors import StorageError
 from app.core.logging import logger
 from app.services.session_lifecycle import protect_resource_write, register_resource
 
@@ -84,7 +85,7 @@ class StorageService:
             raise ValueError("Invalid storage key.")
         if clean_key.startswith("avatars/"):
             filename = clean_key.split("avatars/")[-1]
-            user_id = Path(filename).stem
+            user_id = Path(filename).stem.split(".", 1)[0]
             return f"/api/v1/user/avatar/{user_id}"
 
         if clean_key.startswith("media/uploads/"):
@@ -117,9 +118,6 @@ class StorageService:
         local_target = (data_root / clean_key).resolve()
         if not local_target.is_relative_to(data_root):
             raise ValueError("Storage key escapes the data directory.")
-        register_resource(session_id, "local", clean_key)
-        if self.is_r2_active:
-            register_resource(session_id, "r2", clean_key)
 
         if clean_key.startswith("documents/"):
             content_type = "application/octet-stream"
@@ -127,8 +125,12 @@ class StorageService:
             guessed, _ = mimetypes.guess_type(clean_key)
             content_type = guessed or "application/octet-stream"
 
-        # Try Cloudflare R2 Upload
-        if self.is_r2_active and self._s3_client is not None:
+        # Cloud selection must never silently publish an ephemeral local copy.
+        if settings.is_cloudflare_r2_configured or self.is_r2_active:
+            if not self.is_r2_active or self._s3_client is None:
+                raise StorageError()
+            # Register before PUT: a timeout can occur after R2 accepted bytes.
+            register_resource(session_id, "r2", clean_key)
             try:
                 self._s3_client.put_object(
                     Bucket=settings.CLOUDFLARE_R2_BUCKET_NAME,
@@ -146,12 +148,12 @@ class StorageService:
                     f"Uploaded {len(file_bytes)} bytes to Cloudflare R2: {clean_key} -> {public_url}"
                 )
                 return public_url, clean_key
-            except Exception as e:
-                logger.exception(
-                    f"Cloudflare R2 upload error for key '{clean_key}': {e}. Falling back to local disk."
-                )
+            except Exception:
+                logger.exception("Cloudflare R2 upload failed for key '%s'", clean_key)
+                raise StorageError() from None
 
-        # Local Disk Storage Fallback
+        # Local disk is a deliberate mode, not a cloud error recovery path.
+        register_resource(session_id, "local", clean_key)
         local_target.parent.mkdir(parents=True, exist_ok=True)
         with open(local_target, "wb") as f:
             f.write(file_bytes)

@@ -238,6 +238,8 @@ def init_db():
             )
         if "avatar_url" not in columns:
             cursor.execute("ALTER TABLE users ADD COLUMN avatar_url TEXT DEFAULT '';")
+        if "avatar_storage_key" not in columns:
+            cursor.execute("ALTER TABLE users ADD COLUMN avatar_storage_key TEXT;")
 
         if "google_subject" not in columns:
             cursor.execute("ALTER TABLE users ADD COLUMN google_subject TEXT;")

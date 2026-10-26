@@ -11,6 +11,7 @@ from fastapi import (
 )
 
 from app.core.concurrency import run_blocking
+from app.core.errors import StorageError
 from app.core.rate_limits import (
     require_auth_budget,
     require_guest_budget,
@@ -232,12 +233,15 @@ async def upload_avatar(
         filename = f"{filename}{ext_map.get(file.content_type, '.jpg')}"
 
     file_bytes = await file.read(MAX_AVATAR_SIZE_BYTES + 1)
-    user = await run_blocking(
-        user_service.save_user_avatar,
-        user_id=user_id,
-        file_bytes=file_bytes,
-        filename=filename,
-    )
+    try:
+        user = await run_blocking(
+            user_service.save_user_avatar,
+            user_id=user_id,
+            file_bytes=file_bytes,
+            filename=filename,
+        )
+    except StorageError as error:
+        raise HTTPException(503, str(error)) from None
     return await run_blocking(present_user, user, principal)
 
 

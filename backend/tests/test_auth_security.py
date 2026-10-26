@@ -5799,9 +5799,9 @@ class SecurityTests(unittest.TestCase):
             image,
         )
         # Simulate an old SVG/HTML upload mislabeled as PNG, without executing it.
-        (root / "avatars" / f"{self.alice.id}.png").write_bytes(
-            b"<svg>legacy fixture</svg>"
-        )
+        avatar_path = user_service.get_user_avatar_path(self.alice.id)
+        assert avatar_path is not None
+        avatar_path.write_bytes(b"<svg>legacy fixture</svg>")
         for url in (
             "/user/avatar/" + self.alice.id,
             "/media/content/avatar/" + self.alice.id,
@@ -6044,7 +6044,10 @@ class SecurityTests(unittest.TestCase):
             client.put_object.assert_not_called()
         self.assertEqual(list(data.iterdir()), [])
 
-    def test_storage_valid_keys_work_in_local_r2_and_cloud_fallback_modes(self):
+    def test_storage_valid_keys_work_in_local_and_r2_but_cloud_errors_do_not_fallback(
+        self,
+    ):
+        from app.core.errors import StorageError
         from app.services.storage_service import storage_service
 
         data = root / (self.__class__.__name__ + "-storage-valid")
@@ -6073,13 +6076,20 @@ class SecurityTests(unittest.TestCase):
                 self.assertEqual(client.put_object.call_args.kwargs["Key"], key)
                 self.assertFalse((data / key).exists())
                 client.put_object.side_effect = RuntimeError("fixture provider failure")
-                url, key = storage_service.upload_file(
-                    b"fallback", "media/generated/object.png"
-                )
-                self.assertEqual(url, "/api/v1/media/generated/object.png")
-                self.assertEqual((data / key).read_bytes(), b"fallback")
+                with self.assertRaises(StorageError):
+                    storage_service.upload_file(b"failed", "media/generated/object.png")
+                self.assertFalse((data / "media/generated/object.png").exists())
+            with (
+                patch.object(settings, "is_cloudflare_r2_configured", True),
+                patch.object(storage_service, "_initialized", False),
+            ):
+                with self.assertRaises(StorageError):
+                    storage_service.upload_file(
+                        b"failed", "media/generated/missing-client.png"
+                    )
+                self.assertFalse((data / "media/generated/missing-client.png").exists())
 
-    def test_storage_fallback_uploads_keep_authenticated_downloads_working(self):
+    def test_storage_local_and_r2_uploads_keep_authenticated_downloads_working(self):
         from app.services.storage_service import storage_service
 
         image_bytes = self.image_fixture()
@@ -6096,7 +6106,7 @@ class SecurityTests(unittest.TestCase):
             patch.object(settings, "r2_endpoint_url", "https://r2.fixture.invalid"),
         ):
             for cdn in ("", "https://cdn.fixture.invalid"):
-                for backend in ("local", "r2", "fallback"):
+                for backend in ("local", "r2"):
                     with (
                         self.subTest(cdn=cdn, backend=backend),
                         patch.object(settings, "CLOUDFLARE_R2_PUBLIC_URL", cdn),
@@ -6106,12 +6116,8 @@ class SecurityTests(unittest.TestCase):
                         patch.object(
                             client,
                             "put_object",
-                            side_effect=(
-                                RuntimeError("fixture R2 failure")
-                                if backend == "fallback"
-                                else lambda **kwargs: objects.update(
-                                    {kwargs["Key"]: kwargs["Body"]}
-                                )
+                            side_effect=lambda **kwargs: objects.update(
+                                {kwargs["Key"]: kwargs["Body"]}
                             ),
                         ),
                     ):
@@ -6152,6 +6158,333 @@ class SecurityTests(unittest.TestCase):
                         self.assertEqual(
                             (root / row["file_path"]).exists(), backend != "r2"
                         )
+
+    def test_r2_failure_uploads_return_503_without_local_copies_or_published_assets(
+        self,
+    ):
+        from app.api.v1.endpoints import document
+        from app.services.upload_lifecycle import purge_failed_uploads
+
+        with self._isolated_r2() as (objects, client):
+            before = dict(objects)
+
+            def uncertain_put(**kwargs):
+                objects[kwargs["Key"]] = kwargs["Body"]
+                raise TimeoutError("private provider details")
+
+            client.put_object.side_effect = uncertain_put
+            client.delete_object.side_effect = RuntimeError("cleanup unavailable")
+            with patch.object(
+                document.rag_service, "process_and_index_document"
+            ) as index:
+                for path, file in (
+                    ("/media/upload", ("image.png", self.image_fixture(), "image/png")),
+                    ("/document/upload", ("document.txt", b"test", "text/plain")),
+                ):
+                    response = self.request(
+                        "POST",
+                        path,
+                        self.token,
+                        data={"session_id": "alice-session"},
+                        files={"file": file},
+                    )
+                    self.assertEqual(response.status_code, 503, response.text)
+                    self.assertIn("upload was not completed", response.json()["detail"])
+                    self.assertNotIn("private", response.text)
+                index.assert_not_called()
+            with database.get_db_connection() as conn:
+                self.assertEqual(
+                    conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0], 1
+                )
+                self.assertEqual(
+                    conn.execute("SELECT COUNT(*) FROM media_assets").fetchone()[0], 1
+                )
+                rows = conn.execute(
+                    "SELECT kind,resource_key FROM upload_resources"
+                ).fetchall()
+            self.assertEqual(len(rows), 2)
+            self.assertTrue(all(row["kind"] == "r2" for row in rows))
+            self.assertTrue(
+                all(
+                    not (settings.DATA_DIR / row["resource_key"]).exists()
+                    for row in rows
+                )
+            )
+            self.assertEqual(list(settings.UPLOAD_DIR.iterdir()), [])
+            client.delete_object.side_effect = lambda **kwargs: objects.pop(
+                kwargs["Key"], None
+            )
+            self.assertEqual(purge_failed_uploads(), 2)
+            self.assertEqual(objects, before)
+            self.assertTrue((settings.UPLOAD_IMAGE_DIR / "fixture.png").exists())
+
+    def test_r2_failure_generated_image_is_not_published_or_regenerated(self):
+        from app.core.errors import ImageGenerationError
+
+        calls = []
+
+        def handler(request):
+            calls.append(request)
+            return httpx.Response(200, json=self.image_provider_payload())
+
+        with self._isolated_r2() as (objects, client):
+            before = dict(objects)
+            unrelated = settings.GENERATED_IMAGE_DIR / "unrelated-generated.png"
+            unrelated.write_bytes(self.image_fixture())
+            before_files = set(settings.GENERATED_IMAGE_DIR.iterdir())
+            client.put_object.side_effect = RuntimeError("private storage failure")
+            with self.assertRaisesRegex(ImageGenerationError, "could not be saved"):
+                asyncio.run(self.image_provider_request(handler))
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(objects, before)
+            self.assertEqual(set(settings.GENERATED_IMAGE_DIR.iterdir()), before_files)
+            with database.get_db_connection() as conn:
+                self.assertEqual(
+                    conn.execute("SELECT COUNT(*) FROM media_assets").fetchone()[0], 1
+                )
+
+    def test_r2_failure_avatar_preserves_previous_version_and_retries_exact_cleanup(
+        self,
+    ):
+        from app.services.upload_lifecycle import purge_failed_uploads
+
+        image = self.image_fixture()
+        with self._isolated_r2() as (objects, client):
+            user_service.save_user_avatar(self.alice.id, image, "old.png")
+            purge_failed_uploads()
+            with database.get_db_connection() as conn:
+                before = tuple(
+                    conn.execute(
+                        "SELECT avatar_url,avatar_storage_key FROM users WHERE id=?",
+                        (self.alice.id,),
+                    ).fetchone()
+                )
+            old_key = before[1]
+            old_path = user_service.get_user_avatar_path(self.alice.id)
+            assert old_path is not None
+            unrelated = f"avatars/{self.bob.id}.png"
+            objects[unrelated] = image
+
+            def uncertain_put(**kwargs):
+                objects[kwargs["Key"]] = kwargs["Body"]
+                raise TimeoutError("private provider details")
+
+            client.put_object.side_effect = uncertain_put
+            client.delete_object.side_effect = RuntimeError("delete unavailable")
+            response = self.request(
+                "POST",
+                "/user/avatar",
+                self.token,
+                data={"user_id": self.alice.id},
+                files={"file": ("new.jpg", self.image_fixture("JPEG"), "image/jpeg")},
+            )
+            self.assertEqual(response.status_code, 503, response.text)
+            self.assertNotIn("private", response.text)
+            with database.get_db_connection() as conn:
+                self.assertEqual(
+                    tuple(
+                        conn.execute(
+                            "SELECT avatar_url,avatar_storage_key FROM users WHERE id=?",
+                            (self.alice.id,),
+                        ).fetchone()
+                    ),
+                    before,
+                )
+            self.assertEqual(old_path.read_bytes(), image)
+            self.assertEqual(objects[old_key], image)
+            self.assertEqual(
+                self.request(
+                    "GET", "/user/avatar/" + self.alice.id, self.token
+                ).content,
+                image,
+            )
+            # An uncertain extra object must not be selected as the current avatar.
+            self.assertEqual(len(objects), 5)
+            client.delete_object.side_effect = lambda **kwargs: objects.pop(
+                kwargs["Key"], None
+            )
+            self.assertEqual(purge_failed_uploads(), 1)
+            self.assertIn(old_key, objects)
+            self.assertIn(unrelated, objects)
+            self.assertEqual(len(objects), 4)
+            client.put_object.side_effect = lambda **kwargs: objects.update(
+                {kwargs["Key"]: kwargs["Body"]}
+            )
+            user_service.save_user_avatar(
+                self.alice.id, self.image_fixture("JPEG"), "new.jpg"
+            )
+            purge_failed_uploads()
+            self.assertNotIn(old_key, objects)
+            self.assertFalse(old_path.exists())
+            self.assertIn(unrelated, objects)
+            current_path = user_service.get_user_avatar_path(self.alice.id)
+            assert current_path is not None
+            self.assertEqual(current_path.read_bytes(), self.image_fixture("JPEG"))
+            user_service.delete_user_avatar(self.alice.id)
+            purge_failed_uploads()
+            self.assertIsNone(user_service.get_user_avatar_path(self.alice.id))
+            self.assertIn(unrelated, objects)
+
+    def test_r2_failure_avatar_metadata_transaction_rolls_back_only_new_upload(self):
+        from app.services import user_service as service_module
+        from app.services.upload_lifecycle import purge_failed_uploads
+
+        with self._isolated_r2() as (objects, _):
+            image = self.image_fixture()
+            user_service.save_user_avatar(self.alice.id, image, "old.png")
+            purge_failed_uploads()
+            before = dict(objects)
+            connection = service_module.get_db_connection
+
+            @contextmanager
+            def failed_update(**kwargs):
+                with connection(**kwargs) as conn:
+                    proxy = Mock(wraps=conn)
+
+                    def execute(sql, params=()):
+                        if sql.startswith("UPDATE users SET avatar_url=?"):
+                            raise RuntimeError("fixture SQL failure")
+                        return conn.execute(sql, params)
+
+                    proxy.execute.side_effect = execute
+                    yield proxy
+
+            with patch.object(service_module, "get_db_connection", failed_update):
+                with self.assertRaisesRegex(RuntimeError, "fixture SQL failure"):
+                    user_service.save_user_avatar(
+                        self.alice.id, self.image_fixture("JPEG"), "new.jpg"
+                    )
+            self.assertEqual(objects, before)
+            self.assertEqual(
+                self.request(
+                    "GET", "/user/avatar/" + self.alice.id, self.token
+                ).content,
+                image,
+            )
+
+    def test_r2_failure_legacy_local_files_and_static_cloud_avatars_remain_readable(
+        self,
+    ):
+        from app.services.storage_service import storage_service
+
+        with self._isolated_r2() as (objects, client):
+            client.get_object.side_effect = RuntimeError("R2 unavailable")
+            self.assertEqual(
+                storage_service.download_owned_file("media/uploads/fixture.png"),
+                b"fixture-image",
+            )
+            image = self.image_fixture()
+            key = f"avatars/{self.alice.id}.png"
+            objects[key] = image
+            with database.get_db_connection() as conn:
+                conn.execute(
+                    "UPDATE users SET avatar_url=? WHERE id=?",
+                    (f"/api/v1/user/avatar/{self.alice.id}?v=123", self.alice.id),
+                )
+            client.get_object.side_effect = lambda **kwargs: {
+                "Body": io.BytesIO(objects[kwargs["Key"]])
+            }
+            self.assertEqual(
+                self.request(
+                    "GET", "/user/avatar/" + self.alice.id, self.token
+                ).content,
+                image,
+            )
+            with database.get_db_connection() as conn:
+                self.assertIsNone(
+                    conn.execute(
+                        "SELECT avatar_storage_key FROM users WHERE id=?",
+                        (self.alice.id,),
+                    ).fetchone()[0]
+                )
+            # Access is revoked immediately, even before queued object cleanup.
+            user_service.delete_user_avatar(self.alice.id)
+            self.assertIn(key, objects)
+            self.assertEqual(
+                self.request(
+                    "GET", "/user/avatar/" + self.alice.id, self.token
+                ).status_code,
+                404,
+            )
+
+    def test_r2_failure_avatar_migration_and_profile_edits_preserve_storage_identity(
+        self,
+    ):
+        user_service.save_user_avatar(self.alice.id, self.image_fixture(), "image.png")
+        with database.get_db_connection() as conn:
+            key = conn.execute(
+                "SELECT avatar_storage_key FROM users WHERE id=?", (self.alice.id,)
+            ).fetchone()[0]
+        database.init_db()
+        user_service.update_user_profile(self.alice.id, display_name="Updated Person")
+        with database.get_db_connection() as conn:
+            self.assertEqual(
+                conn.execute(
+                    "SELECT avatar_storage_key FROM users WHERE id=?", (self.alice.id,)
+                ).fetchone()[0],
+                key,
+            )
+        self.assertEqual(
+            self.request("GET", "/user/avatar/" + self.alice.id, self.token).content,
+            self.image_fixture(),
+        )
+
+    def test_r2_failure_concurrent_avatar_replacements_keep_the_published_version(self):
+        import sqlite3
+        from contextlib import closing
+        from threading import Barrier
+
+        from app.services.upload_lifecycle import purge_failed_uploads
+
+        with self._isolated_r2() as (objects, client):
+            user_service.save_user_avatar(
+                self.alice.id, self.image_fixture(), "old.png"
+            )
+            purge_failed_uploads()
+            unrelated = f"avatars/{self.bob.id}.png"
+            objects[unrelated] = self.image_fixture()
+            barrier = Barrier(2)
+
+            def put(**kwargs):
+                objects[kwargs["Key"]] = kwargs["Body"]
+
+            client.put_object.side_effect = put
+
+            def replace(_):
+                barrier.wait(timeout=10)
+                return user_service.save_user_avatar(
+                    self.alice.id, self.image_fixture(), "new.png"
+                )
+
+            # The SDK's file:// test backend uses timeout=0. Keep the disposable
+            # WAL initialized so concurrent opens test transactions, not SQLite
+            # WAL recovery when its last connection closes. Remote Turso does
+            # not open this local file for each request.
+            with closing(sqlite3.connect(str(database.DB_FILE))) as anchor:
+                anchor.execute("SELECT COUNT(*) FROM users").fetchone()
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    list(pool.map(replace, range(2)))
+            with database.get_db_connection() as conn:
+                key = conn.execute(
+                    "SELECT avatar_storage_key FROM users WHERE id=?", (self.alice.id,)
+                ).fetchone()[0]
+            purge_failed_uploads()
+            self.assertIn(key, objects)
+            self.assertIn(unrelated, objects)
+            self.assertEqual(
+                [
+                    name
+                    for name in objects
+                    if name.startswith(f"avatars/{self.alice.id}.")
+                ],
+                [key],
+            )
+            self.assertEqual(
+                self.request(
+                    "GET", "/user/avatar/" + self.alice.id, self.token
+                ).content,
+                self.image_fixture(),
+            )
 
     def reference_generator(self, handler=None):
         """Load the production constructor with only an offline HTTP transport."""
@@ -6245,7 +6578,7 @@ class SecurityTests(unittest.TestCase):
         for backend, image_format in (
             ("local", "PNG"),
             ("r2", "JPEG"),
-            ("fallback", "WEBP"),
+            ("legacy-local", "WEBP"),
             ("local", "GIF"),
             ("local", "BMP"),
         ):
@@ -6258,17 +6591,16 @@ class SecurityTests(unittest.TestCase):
             client = Mock()
             image_bytes = self.image_fixture(image_format)
             client.get_object.return_value = {"Body": io.BytesIO(image_bytes)}
-            client.put_object.side_effect = (
-                RuntimeError("fixture R2 failure") if backend == "fallback" else None
-            )
             with (
                 self.subTest(backend=backend),
                 patch.object(storage_service, "_s3_client", client),
                 patch.object(storage_service, "_initialized", backend != "local"),
             ):
-                _, key = storage_service.upload_file(
-                    image_bytes, f"media/uploads/{backend}-reference.img"
-                )
+                key = f"media/uploads/{backend}-reference.img"
+                if backend == "legacy-local":
+                    (settings.DATA_DIR / key).write_bytes(image_bytes)
+                else:
+                    storage_service.upload_file(image_bytes, key)
 
                 async def edit(actual):
                     return await actual.generate_from_reference(

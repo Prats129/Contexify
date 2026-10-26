@@ -17,6 +17,7 @@ from fastapi.responses import Response
 from fastapi.security import HTTPAuthorizationCredentials
 
 from app.core.concurrency import run_blocking
+from app.core.errors import StorageError
 from app.core.logging import logger
 from app.core.security import (
     Principal,
@@ -133,6 +134,8 @@ async def upload_media(
         return await run_blocking(present_attachment, attachment, principal)
     except HTTPException:
         raise
+    except StorageError as error:
+        raise HTTPException(503, str(error)) from None
     except Exception as e:
         logger.exception(f"Failed to process media upload: {e}")
         raise HTTPException(

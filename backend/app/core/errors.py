@@ -5,6 +5,15 @@ class ImageGenerationError(RuntimeError):
     """An image-generation failure with a message safe to show to the user."""
 
 
+class StorageError(RuntimeError):
+    """An upload failed before it could be published; safe for client display."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "File storage is temporarily unavailable. The upload was not completed. Please try again."
+        )
+
+
 class TextGenerationError(RuntimeError):
     """A text-generation failure with a message safe to show to the user."""
 

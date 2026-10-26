@@ -18,7 +18,12 @@ from fastapi import (
 
 from app.core.concurrency import run_blocking
 from app.core.config import settings
-from app.core.errors import DocumentLimitError, EmbeddingDimensionError, EmbeddingError
+from app.core.errors import (
+    DocumentLimitError,
+    EmbeddingDimensionError,
+    EmbeddingError,
+    StorageError,
+)
 from app.core.logging import logger
 from app.core.rate_limits import require_ai_budget
 from app.core.security import (
@@ -168,7 +173,7 @@ def _process_document_upload(
         raise HTTPException(413, str(e)) from None
     except PDFProcessingError as e:
         raise HTTPException(e.status_code, str(e)) from None
-    except (EmbeddingDimensionError, EmbeddingError) as e:
+    except (EmbeddingDimensionError, EmbeddingError, StorageError) as e:
         raise HTTPException(status_code=503, detail=str(e)) from None
     except Exception as e:
         logger.exception(f"Error processing document: {e}")

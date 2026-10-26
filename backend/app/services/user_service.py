@@ -27,6 +27,7 @@ from app.services.email_service import email_service
 from app.services.google_auth import verify_google_credential
 from app.services.image_validation import validate_image
 from app.services.storage_service import storage_service
+from app.services.upload_lifecycle import publish_upload, upload_attempt
 
 AVATAR_COLORS = [
     "#3B82F6",
@@ -286,50 +287,38 @@ class UserService:
             file_bytes, filename, max_bytes=MAX_AVATAR_SIZE_BYTES
         )
 
-        # 3. Save locally
-        avatars_dir = settings.DATA_DIR / "avatars"
-        avatars_dir.mkdir(parents=True, exist_ok=True)
-
-        # Remove previous avatar files for this user locally
-        for old_file in avatars_dir.glob(f"{user_id}.*"):
-            try:
-                old_file.unlink()
-            except OSError:
-                logger.warning("Could not remove local avatar file", exc_info=True)
-
-        target_file = avatars_dir / f"{user_id}{ext}"
-        target_file.write_bytes(file_bytes)
-
-        # 4. Upload to persistent cloud storage (Cloudflare R2 if configured)
-        storage_key = f"avatars/{user_id}{ext}"
-        if storage_service.is_r2_active:
-            for old_ext in ALLOWED_AVATAR_EXTENSIONS:
-                if old_ext != ext:
-                    try:
-                        storage_service.delete_file(f"avatars/{user_id}{old_ext}")
-                    except Exception:
-                        logger.warning(
-                            "Could not remove previous cloud avatar", exc_info=True
-                        )
-
-        public_url, _ = storage_service.upload_file(
-            file_bytes=file_bytes,
-            destination_key=storage_key,
-            content_type=content_type,
-        )
-
-        # Append cache buster parameter to bust browser caches upon update
-        cache_buster = f"v={int(time.time())}"
-        avatar_url = (
-            f"{public_url}&{cache_buster}"
-            if "?" in public_url
-            else f"{public_url}?{cache_buster}"
-        )
-
-        with get_db_connection() as conn:
-            conn.execute(
-                "UPDATE users SET avatar_url = ? WHERE id = ?", (avatar_url, user_id)
+        # A failed or uncertain PUT must never overwrite the previous avatar.
+        version = uuid.uuid4().hex + ext
+        storage_key = f"avatars/{user_id}.{version}"
+        avatar_url = f"/api/v1/user/avatar/{user_id}?v={version}"
+        with upload_attempt():
+            storage_service.upload_file(
+                file_bytes=file_bytes,
+                destination_key=storage_key,
+                content_type=content_type,
             )
+            with get_db_connection(write=True) as conn:
+                previous = conn.execute(
+                    "SELECT avatar_storage_key FROM users WHERE id=?", (user_id,)
+                ).fetchone()
+                if previous is None:
+                    raise HTTPException(404, "User account not found.")
+                previous_key = previous["avatar_storage_key"]
+                conn.execute(
+                    "UPDATE users SET avatar_url=?,avatar_storage_key=? WHERE id=?",
+                    (avatar_url, storage_key, user_id),
+                )
+                obsolete = (
+                    {previous_key}
+                    if previous_key
+                    else {
+                        f"avatars/{user_id}{suffix}"
+                        for suffix in ALLOWED_AVATAR_EXTENSIONS
+                    }
+                )
+                obsolete.discard(storage_key)
+                self._queue_avatar_cleanup(conn, obsolete)
+                publish_upload(conn)
 
         logger.info(
             f"Saved custom avatar image for user '{user.username}' ({user_id}) -> {avatar_url}"
@@ -339,6 +328,27 @@ class UserService:
             raise HTTPException(status_code=404, detail="User account not found.")
         return updated_user
 
+    @staticmethod
+    def _queue_avatar_cleanup(conn, keys: set[str]) -> None:
+        # Enqueue obsolete exact keys atomically with the avatar change. Reuse
+        # the existing retry worker rather than listing/deleting live uploads.
+        job_id = uuid.uuid4().hex
+        conn.execute(
+            "INSERT INTO upload_attempts (id,state,expires_at) VALUES (?,'failed',?)",
+            (job_id, time.time()),
+        )
+        backends = (
+            ["local", "r2"]
+            if storage_service.is_r2_active or settings.is_cloudflare_r2_configured
+            else ["local"]
+        )
+        for key in sorted(keys):
+            for backend in backends:
+                conn.execute(
+                    "INSERT INTO upload_resources (attempt_id,session_id,kind,resource_key) VALUES (?,NULL,?,?)",
+                    (job_id, backend, key),
+                )
+
     def delete_user_avatar(self, user_id: str) -> UserResponse:
         """Delete custom avatar image from disk and cloud storage, resetting to default avatar color."""
         user = self.get_user_by_id(user_id)
@@ -347,25 +357,23 @@ class UserService:
                 status_code=status.HTTP_404_NOT_FOUND, detail="User account not found."
             )
 
-        # Remove local files
-        avatars_dir = settings.DATA_DIR / "avatars"
-        if avatars_dir.exists():
-            for old_file in avatars_dir.glob(f"{user_id}.*"):
-                try:
-                    old_file.unlink()
-                except OSError:
-                    logger.warning("Could not remove local avatar file", exc_info=True)
-
-        # Remove from cloud storage
-        if storage_service.is_r2_active:
-            for ext in ALLOWED_AVATAR_EXTENSIONS:
-                try:
-                    storage_service.delete_file(f"avatars/{user_id}{ext}")
-                except Exception:
-                    logger.warning("Could not remove cloud avatar", exc_info=True)
-
-        with get_db_connection() as conn:
-            conn.execute("UPDATE users SET avatar_url = '' WHERE id = ?", (user_id,))
+        with get_db_connection(write=True) as conn:
+            previous = conn.execute(
+                "SELECT avatar_storage_key FROM users WHERE id=?", (user_id,)
+            ).fetchone()
+            previous_key = previous["avatar_storage_key"] if previous else None
+            conn.execute(
+                "UPDATE users SET avatar_url='',avatar_storage_key=NULL WHERE id=?",
+                (user_id,),
+            )
+            obsolete = (
+                {previous_key}
+                if previous_key
+                else {
+                    f"avatars/{user_id}{suffix}" for suffix in ALLOWED_AVATAR_EXTENSIONS
+                }
+            )
+            self._queue_avatar_cleanup(conn, obsolete)
 
         logger.info(
             f"Removed custom avatar image for user '{user.username}' ({user_id})"
@@ -384,38 +392,36 @@ class UserService:
         avatars_dir = settings.DATA_DIR / "avatars"
         avatars_dir.mkdir(parents=True, exist_ok=True)
 
-        # 1. Fast path: check local disk cache
-        for f in avatars_dir.glob(f"{user_id}.*"):
-            if f.is_file() and f.stat().st_size > 0:
-                return f
-
-        # 2. Resilient path: check Cloudflare R2 and self-heal local cache
-        if storage_service.is_r2_active and storage_service._s3_client:
-            try:
-                resp = storage_service._s3_client.list_objects_v2(
-                    Bucket=settings.CLOUDFLARE_R2_BUCKET_NAME,
-                    Prefix=f"avatars/{user_id}.",
-                    MaxKeys=1,
-                )
-                contents = resp.get("Contents", [])
-                if contents:
-                    found_key = contents[0]["Key"]
-                    data = storage_service.download_owned_file(
-                        found_key, max_bytes=MAX_AVATAR_SIZE_BYTES
-                    )
-                    if data:
-                        ext = Path(found_key).suffix.lower()
-                        cached_file = avatars_dir / f"{user_id}{ext}"
+        with get_db_connection() as conn:
+            user = conn.execute(
+                "SELECT avatar_storage_key,avatar_url FROM users WHERE id=?", (user_id,)
+            ).fetchone()
+        if user is None or not user["avatar_url"]:
+            return None
+        current_key = user["avatar_storage_key"]
+        if current_key and not current_key.startswith(f"avatars/{user_id}."):
+            return None
+        # Legacy static names remain readable. Never select an unpublished
+        # version merely because its object exists after an uncertain PUT.
+        keys = (
+            [current_key]
+            if current_key
+            else [
+                f"avatars/{user_id}{ext}" for ext in sorted(ALLOWED_AVATAR_EXTENSIONS)
+            ]
+        )
+        for key in keys:
+            cached_file = settings.DATA_DIR / key
+            data = storage_service.download_owned_file(
+                key, max_bytes=MAX_AVATAR_SIZE_BYTES
+            )
+            if data:
+                try:
+                    if not cached_file.is_file():
                         cached_file.write_bytes(data)
-                        logger.info(
-                            f"Self-healed missing local avatar for user {user_id} from R2 ({found_key})"
-                        )
-                        return cached_file
-            except Exception as e:
-                logger.warning(
-                    f"Failed to query R2 storage for avatar of user {user_id}: {e}",
-                    exc_info=True,
-                )
+                    return cached_file
+                except OSError:
+                    logger.warning("Could not cache the owned avatar", exc_info=True)
 
         return None
 
