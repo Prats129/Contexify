@@ -2,10 +2,11 @@ import sqlite3
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Optional
 
 from app.core.config import settings
 from app.core.logging import logger
+from app.db.turso_http import TursoDatabaseError, connect, http_database_url
 
 DB_FILE = settings.DATA_DIR / "app.db"
 
@@ -23,102 +24,63 @@ def is_turso_configured() -> bool:
 
 
 def get_turso_url() -> str:
-    url = settings.TURSO_DATABASE_URL.strip()
-    # The installed SDK only supports interactive transactions over WebSockets.
-    if url.startswith("https://"):
-        return url.replace("https://", "wss://", 1)
-    if url.startswith("http://"):
-        return url.replace("http://", "ws://", 1)
-    return url
+    return http_database_url(settings.TURSO_DATABASE_URL)
 
 
 class TursoCursor:
-    """DB-API compliant cursor wrapper around libsql_client."""
+    """Keep SQLite cursor semantics at the application's database boundary."""
 
-    def __init__(self, client):
-        self._client = client
-        self._last_result = None
-        self._rows: List[Any] = []
-        self._idx = 0
-        self.rowcount = 0
+    def __init__(self, cursor):
+        self._cursor = cursor
+        self._skipped = False
+
+    @property
+    def rowcount(self):
+        return 0 if self._skipped else self._cursor.rowcount
 
     def execute(self, sql: str, params: Optional[Any] = None):
         clean_sql = sql.strip()
-        # Skip local-only PRAGMAs that Turso cloud handles automatically
-        if clean_sql.upper().startswith(
-            "PRAGMA JOURNAL_MODE"
-        ) or clean_sql.upper().startswith("PRAGMA FOREIGN_KEYS"):
-            self.rowcount = 0
-            self._rows = []
+        # Local journal settings and connection-level FK changes do not belong
+        # inside a remote transaction. Existing cloud behavior is preserved.
+        if clean_sql.upper().startswith(("PRAGMA JOURNAL_MODE", "PRAGMA FOREIGN_KEYS")):
+            self._skipped = True
             return self
-
-        args = []
-        if params is not None:
-            if isinstance(params, (list, tuple)):
-                args = list(params)
-            elif isinstance(params, dict):
-                args = params
-
-        try:
-            self._last_result = self._client.execute(clean_sql, args)
-            self._rows = list(self._last_result.rows) if self._last_result else []
-            self.rowcount = getattr(self._last_result, "rows_affected", 0)
-            self._idx = 0
-        except Exception as e:
-            logger.exception(
-                f"Turso query error on SQL: {clean_sql[:100]}... Error: {e}"
-            )
-            raise e
+        self._skipped = False
+        self._cursor.execute(clean_sql, () if params is None else params)
         return self
 
     def fetchone(self):
-        if self._idx < len(self._rows):
-            row = self._rows[self._idx]
-            self._idx += 1
-            return row
-        return None
+        return None if self._skipped else self._cursor.fetchone()
 
     def fetchall(self):
-        remaining = self._rows[self._idx :]
-        self._idx = len(self._rows)
-        return remaining
+        return [] if self._skipped else self._cursor.fetchall()
 
     def close(self):
-        pass
+        self._cursor.close()
 
 
 class TursoConnection:
-    """DB-API compliant connection wrapper around libsql_client."""
+    """One HTTP stream and explicit transaction per connection context."""
 
     def __init__(self, url: str, token: str):
-        import libsql_client
+        self._client = connect(url, token)
 
-        self._client = libsql_client.create_client_sync(url=url, auth_token=token)
-        self._transaction = None
+    def begin(self, *, write: bool = False):
+        if not self._client.in_transaction:
+            self._client.execute("BEGIN IMMEDIATE" if write else "BEGIN")
 
     def cursor(self):
-        if self._transaction is None:
-            self._transaction = self._client.transaction()
-        return TursoCursor(self._transaction)
+        self.begin()
+        return TursoCursor(self._client.cursor())
 
     def execute(self, sql: str, params: Optional[Any] = None):
-        cursor = self.cursor()
-        cursor.execute(sql, params)
-        return cursor
+        return self.cursor().execute(sql, params)
 
     def commit(self):
-        if self._transaction is not None:
-            self._transaction.commit()
-            self._transaction.close()
-            self._transaction = None
+        self._client.commit()
 
     def rollback(self):
-        if self._transaction is not None:
-            try:
-                self._transaction.rollback()
-            finally:
-                self._transaction.close()
-                self._transaction = None
+        self._client.rollback()
 
     def close(self):
         try:
@@ -126,10 +88,7 @@ class TursoConnection:
         except Exception:
             logger.warning("Could not roll back database connection", exc_info=True)
         finally:
-            try:
-                self._client.close()
-            except Exception:
-                logger.warning("Could not close database connection", exc_info=True)
+            self._client.close()
 
 
 def get_db_path() -> Path:
@@ -148,20 +107,16 @@ def get_db_connection(*, write: bool = False):
         )
         try:
             if write:
-                from libsql_client import LibsqlError
-
-                # Acquire the write lock before OTP reads, including on deferred
-                # SDK transactions. The empty update changes no challenge rows.
+                # Acquire the write lock before any application reads. Retry
+                # only a rejected BEGIN, never caller writes or an uncertain commit.
                 deadline = time.monotonic() + 20
                 while True:
                     try:
-                        conn.execute(
-                            "UPDATE email_otps SET attempts = attempts WHERE 0"
-                        )
+                        conn.begin(write=True)
                         break
-                    except LibsqlError as exc:
+                    except TursoDatabaseError as exc:
                         if (
-                            not exc.code.startswith("SQLITE_BUSY")
+                            not (exc.code or "").startswith("SQLITE_BUSY")
                             or time.monotonic() >= deadline
                         ):
                             raise
@@ -171,9 +126,12 @@ def get_db_connection(*, write: bool = False):
                         time.sleep(0.05)
             yield conn
             conn.commit()
-        except Exception as e:
-            conn.rollback()
-            logger.exception(f"Turso database transaction error: {e}")
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                logger.warning("Could not roll back Turso transaction", exc_info=True)
+            logger.exception("Turso database transaction failed")
             raise
         finally:
             conn.close()

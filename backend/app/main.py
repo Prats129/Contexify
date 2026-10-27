@@ -17,6 +17,7 @@ from app.core.concurrency import run_blocking
 from app.core.config import settings
 from app.core.logging import logger
 from app.db.database import init_db
+from app.db.turso_http import close_http_client
 from app.services.chat_history_service import chat_history_service
 from app.services.image_gen_service import image_gen_service
 
@@ -54,6 +55,7 @@ async def lifespan(application: FastAPI):
             await image_gen_service.aclose()
         except Exception:
             logger.exception("Could not close the image generation client")
+        await run_blocking(close_http_client)
 
 
 app = FastAPI(

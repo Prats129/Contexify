@@ -270,6 +270,7 @@ The following regression suites use disposable databases/files, mocked providers
 backend/venv/Scripts/python.exe -B backend/tests/test_configuration.py
 backend/venv/Scripts/python.exe -B backend/tests/test_api_contracts.py
 backend/venv/Scripts/python.exe -B backend/tests/test_auth_security.py
+backend/venv/Scripts/python.exe -B backend/tests/test_turso_http.py
 node tests/auth_clients.test.cjs
 node tests/chat_history_scroll.test.cjs
 node tests/mobile_keyboard.test.cjs

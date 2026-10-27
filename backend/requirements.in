@@ -13,7 +13,7 @@ requests==2.34.2
 aiofiles==25.1.0
 numpy==2.4.6
 beautifulsoup4==4.15.0
-libsql-client==0.3.1
+turso-serverless==0.1.0
 pinecone==10.0.0
 boto3==1.43.98
 google-auth==2.56.2

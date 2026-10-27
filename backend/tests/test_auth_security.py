@@ -9451,28 +9451,20 @@ class TextStreamingTests(unittest.TestCase):
 
 
 class CloudAdapterSecurityTests(SecurityTests):
-    """Exercise the Turso adapter with real SDK transactions on disposable SQL.
+    """Run application SQL through the real HTTP driver and a loopback server."""
 
-    This verifies statement/row compatibility, not remote Turso or its FK setup.
-    """
+    @classmethod
+    def setUpClass(cls):
+        from turso_http_fixture import TursoHTTPFixture
+
+        cls.http_fixture = TursoHTTPFixture(lambda: database.DB_FILE)
+        cls.addClassCleanup(cls.http_fixture.close)
 
     def setUp(self):
         super().setUp()
-        import libsql_client
-
-        original = libsql_client.create_client_sync
-
-        # Run the installed SDK and its transaction/row classes against
-        # disposable local SQL, without contacting a remote server.
-        def client(**kwargs):
-            return original(url=database.DB_FILE.resolve().as_uri())
-
         for replacement in (
             patch.object(database, "is_turso_configured", return_value=True),
-            patch.object(
-                database, "get_turso_url", return_value="wss://fixture.invalid"
-            ),
-            patch.object(libsql_client, "create_client_sync", side_effect=client),
+            patch.object(database, "get_turso_url", return_value=self.http_fixture.url),
         ):
             replacement.start()
             self.addCleanup(replacement.stop)
@@ -9480,6 +9472,18 @@ class CloudAdapterSecurityTests(SecurityTests):
     def test_cloud_initializer_is_repeatable(self):
         database.init_db()
         self.assertEqual(self.request("GET", "/user/me", self.token).status_code, 200)
+
+    def test_skipped_local_pragmas_do_not_return_previous_cursor_results(self):
+        with database.get_db_connection() as connection:
+            cursor = connection.execute("SELECT 1 AS fixture")
+            cursor.execute("PRAGMA journal_mode=WAL")
+            self.assertIsNone(cursor.fetchone())
+            self.assertEqual(cursor.fetchall(), [])
+            self.assertEqual(cursor.rowcount, 0)
+            cursor.execute("SELECT 2 AS fixture")
+            row = cursor.fetchone()
+            assert row is not None
+            self.assertEqual(row["fixture"], 2)
 
 
 class EmailDeliveryTests(unittest.TestCase):
@@ -9537,9 +9541,9 @@ class EmailDeliveryTests(unittest.TestCase):
 
     def test_turso_transport_supports_transactions(self):
         for source, expected in (
-            ("libsql://fixture.invalid", "libsql://fixture.invalid"),
-            ("https://fixture.invalid", "wss://fixture.invalid"),
-            ("http://localhost:8080", "ws://localhost:8080"),
+            ("libsql://fixture.invalid", "https://fixture.invalid"),
+            ("https://fixture.invalid", "https://fixture.invalid"),
+            ("http://localhost:8080", "http://localhost:8080"),
         ):
             with patch.object(settings, "TURSO_DATABASE_URL", source):
                 self.assertEqual(database.get_turso_url(), expected)
