@@ -8,11 +8,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fastapi import FastAPI, HTTPException
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api.v1.endpoints import chat, document, health, media, session, user
+from app.api.v1.endpoints import assistant_security, chat, document, health, media, session, user
+from app.core.assistant_http import AssistantSecurityHTTP, assistant_validation_error
 from app.core.concurrency import run_blocking
 from app.core.config import settings
 from app.core.logging import logger
@@ -66,6 +69,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+@app.exception_handler(RequestValidationError)
+async def safe_validation_error(request, error):
+    if request.url.path.startswith(f"{settings.API_V1_STR}/assistant/"):
+        return assistant_validation_error(request, error)
+    return await request_validation_exception_handler(request, error)
+
+app.add_middleware(AssistantSecurityHTTP, prefix=f"{settings.API_V1_STR}/assistant")
+
 # Configure CORS and middlewares
 app.add_middleware(
     CORSMiddleware,
@@ -88,6 +99,7 @@ app.include_router(
 )
 app.include_router(media.router, prefix=f"{settings.API_V1_STR}/media", tags=["Media"])
 app.include_router(chat.router, prefix=f"{settings.API_V1_STR}/chat", tags=["Chat"])
+app.include_router(assistant_security.router, prefix=f"{settings.API_V1_STR}/assistant/security", tags=["Assistant security"])
 
 # Check for production frontend build
 frontend_dist = settings.WORKSPACE_DIR / "frontend" / "dist"

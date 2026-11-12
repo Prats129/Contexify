@@ -211,12 +211,16 @@ def init_db():
                 user_id TEXT NOT NULL,
                 credential_hash TEXT NOT NULL,
                 expires_at REAL NOT NULL,
+                authenticated_at REAL NOT NULL DEFAULT 0,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             );
         """)
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_auth_expiry ON auth_sessions(expires_at);"
         )
+        from app.db.assistant_migrations import migrate_assistant_security
+
+        migrate_assistant_security(conn)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS download_tickets (
                 ticket_hash TEXT PRIMARY KEY,

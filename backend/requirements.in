@@ -21,3 +21,5 @@ httpx==0.28.1
 anyio==4.14.2
 starlette==1.3.1
 botocore==1.43.98
+# Device proof verification and authenticated encryption (already hash-locked).
+cryptography==50.0.0

@@ -1,5 +1,7 @@
 # Assistant implementation plan and approval record
 
+**2026-11-12 authorization:** the user approved starting Phase 1A. Local security implementation and tests are authorized; deployment, later phases and unresolved processor/region/retention decisions remain gated. See [Phase 1A implementation](phase-1a-security.md) and [verification checkpoint](phase-1a-progress.md).
+
 **Recommendation:** approve a security-foundation phase followed by an Android foreground push-to-talk MVP and restricted web companion. Keep the existing stack. Defer always-on wake, direct communication and cross-device control. This document is a proposal; implementation requires explicit approval.
 
 Planning date: 2026-11-07. Read [feasibility](feasibility.md), [architecture](architecture.md), [threat model](security-threat-model.md), [permissions](permissions.md), [privacy](privacy.md), [test gates](testing-strategy.md), and [current source findings](review-coverage.md). The old AUD-001/AUD-002 descriptions are historical: current code has identity/ownership and Google verification, and selected isolated regressions pass. Do not rebuild those controls from the old audit's assumptions.
@@ -81,4 +83,4 @@ Compute/cloud spend is likely smaller than engineering, physical-device QA and i
 | D9 Team/budget | Two engineers plus native QA/security support; staged delivery | Confirm staffing, real-device access, monthly cap and assessment budget |
 | D10 Trust/remote control | Same-device execution only; no arbitrary plugins | Cross-device or desktop execution requires a new threat/design approval |
 
-Approval should identify accepted decisions, exceptions and the first authorized implementation phase. Until then, this work stops at analysis/documentation. No production source, dependencies, database migration, deployment or security setting has been changed.
+The original planning task stopped at documentation. The subsequent 2026-11-12 instruction authorizes Phase 1A source/dependency/migration-code changes and isolated tests. This does not authorize running migrations against configured data, deployment or later device execution phases. Remaining decisions must be resolved before their dependent work or release.

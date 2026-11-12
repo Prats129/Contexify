@@ -1250,13 +1250,22 @@ class SecurityTests(unittest.TestCase):
         self.assertFalse(body["has_newer"])
 
     def test_model_history_is_bounded_and_old_replies_load_their_own_window(self):
+        from datetime import timedelta
+
         from app.repositories.session_store import session_store_repo
         from app.services.chat_history_service import chat_history_service as history
 
-        messages = [
-            history.save_message("alice-session", "user", f"Turn {i}")
-            for i in range(65)
-        ]
+        # This test covers context windows, not wall-clock resolution. Identical
+        # timestamps legitimately sort by UUID, rather than insertion order.
+        with patch("app.services.chat_history_service.datetime") as clock:
+            clock.now.side_effect = [
+                datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(microseconds=i)
+                for i in range(65)
+            ]
+            messages = [
+                history.save_message("alice-session", "user", f"Turn {i}")
+                for i in range(65)
+            ]
         latest = session_store_repo.get_history_messages("alice-session")
         self.assertEqual([m["id"] for m in latest], [m.id for m in messages[-40:]])
         older = session_store_repo.get_history_messages(

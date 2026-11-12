@@ -17,9 +17,18 @@ sys.path.insert(0, str(ROOT / "backend"))
 
 from pydantic.json_schema import models_json_schema  # noqa: E402
 
-from app.schemas import chat, document, media, session, user  # noqa: E402
+from app.schemas import assistant_security, chat, document, media, session, user  # noqa: E402
 
 MODELS = (
+    assistant_security.EmptySecurityRequest,
+    assistant_security.EnrollmentRequest,
+    assistant_security.ChallengeResponse,
+    assistant_security.ProofRequest,
+    assistant_security.DeviceResponse,
+    assistant_security.SecuritySessionResponse,
+    assistant_security.WebSessionResponse,
+    assistant_security.DeviceSessionResponse,
+    assistant_security.SessionChallengeRequest,
     chat.ChatRequest,
     chat.MessageAcknowledgement,
     chat.StreamChunkResponse,

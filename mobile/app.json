@@ -3,7 +3,7 @@
     "name": "Contexify AI",
     "slug": "contexify",
     "scheme": "contexify",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -42,7 +42,8 @@
     "plugins": [
       "expo-web-browser",
       "@react-native-google-signin/google-signin",
-      "expo-font"
+      "expo-font",
+      ["expo-secure-store", { "configureAndroidBackup": true }]
     ]
   }
 }

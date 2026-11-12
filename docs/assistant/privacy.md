@@ -1,5 +1,7 @@
 # Assistant privacy and data governance
 
+2026-11-12 update: [Phase 1A](phase-1a-security.md) records the implemented secure-storage migration, isolated bootstrap data flow and key/encryption decisions. Baseline observations below remain historical; processor, jurisdiction and retention proposals still require release review.
+
 Proposed controls, 2026-11-07. This is an engineering privacy assessment; a deployment-specific legal review remains a launch gate. [Source evidence](review-coverage.md), [authorization](permissions.md), [threat model](security-threat-model.md).
 
 ## Current baseline and privacy boundary

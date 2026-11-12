@@ -1,0 +1,15 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'ai.contexify.security'
+version = '0.1.0'
+
+android {
+  namespace 'ai.contexify.security'
+  defaultConfig {
+    versionCode 1
+    versionName '0.1.0'
+  }
+}

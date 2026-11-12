@@ -581,7 +581,7 @@ class ChatOrchestrator:
         # 1. Handle Conversational Greetings & Continuity Follow-ups directly
         if self.routing.is_conversational_query(query, chat_history):
             logger.info(
-                f"Routing query '{query}' to conversational assistant with chat history"
+                "Routing web-search request to conversational assistant"
             )
             async with aclosing(
                 self._execute_conversational(

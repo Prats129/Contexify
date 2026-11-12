@@ -50,8 +50,9 @@ def issue_credentials(user_id: str) -> dict:
         )
         conn.execute("DELETE FROM auth_sessions WHERE expires_at <= ?", (time.time(),))
         conn.execute(
-            "INSERT INTO auth_sessions (token_hash, user_id, credential_hash, expires_at) VALUES (?, ?, ?, ?)",
-            (digest(token), user_id, digest(user["password_hash"]), expires_at),
+            "INSERT INTO auth_sessions (token_hash, user_id, credential_hash, expires_at, authenticated_at) VALUES (?, ?, ?, ?, ?)",
+            (digest(token), user_id, digest(user["password_hash"]), expires_at,
+             0 if user_id.startswith("guest_") else time.time()),
         )
     return {"access_token": token, "token_type": "bearer", "expires_at": expires_at}
 

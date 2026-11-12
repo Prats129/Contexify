@@ -1,4 +1,5 @@
 import { createAuthTransport } from "./auth_transport";
+import { createAssistantDeviceSecurity } from "./assistant_security";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Platform } from "react-native";
 import type {
@@ -30,6 +31,10 @@ const DEFAULT_HOST: string =
 let cachedBaseUrl: string | null = null;
 let baseUrlRevision = 0;
 
+// A release binary cannot become a development client via a public env switch.
+const RELEASE_TRANSPORT = process.env.EXPO_PUBLIC_APP_ENV === "production" ||
+  (typeof __DEV__ !== "undefined" && !__DEV__);
+
 const normalizeApiBaseUrl = (value: string): string => {
   const clean = value
     .trim()
@@ -46,12 +51,16 @@ const normalizeApiBaseUrl = (value: string): string => {
       url.hash
     )
       throw new Error("Invalid server URL");
+    if (RELEASE_TRANSPORT && url.protocol !== "https:")
+      throw new Error("HTTPS required");
     return `${url.origin}${url.pathname}`
       .replace(/\/+$/, "")
       .replace(/\/api\/v1$/, "");
   } catch {
     throw new Error(
-      "Enter a valid http:// or https:// server URL without credentials, query parameters, or fragments.",
+      RELEASE_TRANSPORT
+        ? "The release app requires its configured HTTPS server."
+        : "Enter a valid http:// or https:// server URL without credentials, query parameters, or fragments.",
     );
   }
 };
@@ -59,6 +68,12 @@ const normalizeApiBaseUrl = (value: string): string => {
 export const getApiBaseUrl = async (): Promise<string> => {
   if (cachedBaseUrl) return cachedBaseUrl;
   const revision = baseUrlRevision;
+  if (RELEASE_TRANSPORT) {
+    const configured = process.env.EXPO_PUBLIC_API_URL?.trim();
+    if (!configured) throw new Error("The release app has no configured HTTPS server.");
+    cachedBaseUrl = normalizeApiBaseUrl(configured);
+    return cachedBaseUrl;
+  }
   let saved: string | null = null;
   try {
     saved = await AsyncStorage.getItem("contexify_server_url");
@@ -72,6 +87,8 @@ export const getApiBaseUrl = async (): Promise<string> => {
 
 export const setApiBaseUrl = async (newUrl: string) => {
   const clean = normalizeApiBaseUrl(newUrl);
+  if (RELEASE_TRANSPORT && clean !== normalizeApiBaseUrl(process.env.EXPO_PUBLIC_API_URL || ""))
+    throw new Error("The release app cannot switch to an unapproved server.");
   await AsyncStorage.setItem("contexify_server_url", clean);
   baseUrlRevision++;
   cachedBaseUrl = clean;
@@ -196,6 +213,7 @@ export function extractErrorMessage(
 }
 
 const auth = createAuthTransport(getCleanHost);
+const assistantSecurity = createAssistantDeviceSecurity(getCleanHost, auth.authHeaders);
 const {
   authenticatedFetch,
   acceptLogin,
@@ -205,6 +223,7 @@ const {
 } = auth;
 
 export const apiService = {
+  assistantSecurity,
   async getGoogleNonce(): Promise<string> {
     const response = await authenticatedFetch(
       await getEndpoint("/user/auth/google/challenge"),
@@ -219,7 +238,10 @@ export const apiService = {
   },
   onSessionExpired: auth.onSessionExpired,
   hasUserSession: auth.hasUserSession,
-  logout: auth.logout,
+  async logout(): Promise<void> {
+    assistantSecurity.cancel();
+    await auth.logout();
+  },
   // --- Health Check ---
   async pingHealth(baseUrl?: string, signal?: AbortSignal): Promise<boolean> {
     const host = normalizeApiBaseUrl(baseUrl ?? (await getApiBaseUrl()));

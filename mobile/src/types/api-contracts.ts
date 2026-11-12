@@ -277,3 +277,52 @@ export type VerifyOtpLoginRequest = {
   email_or_username: string;
   otp: string;
 };
+
+export type ChallengeResponse = {
+  "challenge_id": string;
+  "payload": string;
+  "expires_at": number;
+};
+
+export type DeviceResponse = {
+  "device_id": string;
+  "platform": "android" | "ios";
+  "revoked": boolean;
+};
+
+export type DeviceSessionResponse = {
+  "expires_at": number;
+  "scope"?: "security:manage";
+  "access_token": string;
+  "device_id": string;
+};
+
+export type EmptySecurityRequest = {
+
+};
+
+export type EnrollmentRequest = {
+  "installation_id": string;
+  "public_key": string;
+  "platform": "android" | "ios";
+};
+
+export type ProofRequest = {
+  "challenge_id": string;
+  "signature": string;
+};
+
+export type SecuritySessionResponse = {
+  "expires_at": number;
+  "scope"?: "security:manage";
+};
+
+export type SessionChallengeRequest = {
+  "device_id": string;
+};
+
+export type WebSessionResponse = {
+  "expires_at": number;
+  "scope"?: "security:manage";
+  "csrf_token": string;
+};

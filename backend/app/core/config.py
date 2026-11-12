@@ -18,6 +18,13 @@ class Settings(BaseSettings):
     # Security & CORS
     CORS_ORIGINS: list[str] = ["*"]
 
+    # Phase 1A security bootstrap only; no device action capability is enabled.
+    ASSISTANT_SECURITY_ENABLED: bool = False
+    ASSISTANT_API_ORIGIN: str = ""
+    ASSISTANT_WEB_ORIGINS: list[str] = []
+    ASSISTANT_SESSION_TTL_SECONDS: int = Field(default=900, ge=60, le=900)
+    ASSISTANT_FRESH_AUTH_SECONDS: int = Field(default=300, ge=30, le=300)
+
     MODEL_HISTORY_MESSAGES: int = Field(default=40, ge=10, le=200)
     SESSION_CACHE_MAX_ENTRIES: int = Field(default=128, ge=1, le=4096)
     DOCUMENT_CACHE_MAX_ENTRIES: int = Field(default=512, ge=1, le=16384)
@@ -227,6 +234,33 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_selected_backends(self) -> Self:
+        if self.ASSISTANT_SECURITY_ENABLED:
+            from urllib.parse import urlsplit
+
+            def https_origin(value: str) -> bool:
+                try:
+                    parsed = urlsplit(value)
+                    return (
+                        parsed.scheme == "https" and bool(parsed.hostname)
+                        and not parsed.username and not parsed.password
+                        and parsed.path == "" and not parsed.query and not parsed.fragment
+                        and parsed.port in (None, 443)
+                        and value == f"https://{parsed.netloc}"
+                    )
+                except ValueError:
+                    return False
+
+            if not https_origin(self.ASSISTANT_API_ORIGIN) or any(
+                not https_origin(origin) for origin in self.ASSISTANT_WEB_ORIGINS
+            ):
+                raise ValueError("Assistant security requires explicit HTTPS origins without paths.")
+            if not self.ASSISTANT_WEB_ORIGINS:
+                raise ValueError("Configure at least one explicit assistant web origin.")
+            if "*" in self.CORS_ORIGINS:
+                raise ValueError("Assistant security requires explicit CORS origins.")
+            if not set(self.ASSISTANT_WEB_ORIGINS).issubset(set(self.CORS_ORIGINS)):
+                raise ValueError("Assistant web origins must also be allowed CORS origins.")
+
         if not self.STORAGE_MODE:
             r2_values = (
                 self.CLOUDFLARE_R2_ACCOUNT_ID,

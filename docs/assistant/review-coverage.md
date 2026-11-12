@@ -1,5 +1,7 @@
 # Assistant planning review coverage
 
+Follow-up: Phase 1A implementation was authorized on 2026-11-12. Current changes and verification are tracked in [Phase 1A checkpoint](phase-1a-progress.md) and [implementation details](phase-1a-security.md). The audit evidence and original path inventory below remain tied to their stated historical baseline.
+
 Review date: 2026-11-07 (Asia/Calcutta). Source baseline: `232546702f8195913d007842944b9873b0d58cfd`. Planning and documentation only; no implementation authorized.
 
 ## Evidence rules
@@ -24,7 +26,7 @@ Review date: 2026-11-07 (Asia/Calcutta). Source baseline: `232546702f8195913d007
 
 ## Checkpoint
 
-Planning and documentation complete. Await the user's architecture/phase approval before any implementation. Only the isolated security harness imported application code with fixture settings, disposable SQL/files and mocked providers. No configured application startup, dependency installation, build/deployment or production implementation occurred. Resume by rechecking HEAD and approved D1–D10 decisions, then the first authorized phase; do not rerun old audits or contact production by default.
+Planning was completed at the baseline below, and the user subsequently authorized Phase 1A on 2026-11-12. Resume current implementation from [Phase 1A checkpoint](phase-1a-progress.md). Historical audit checks used only fixture settings/disposable SQL/files and mocked providers; their results are not relabelled as current. Deployment and later execution capabilities remain outside this phase.
 
 ## Review method and scope
 

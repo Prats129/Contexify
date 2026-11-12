@@ -1,5 +1,7 @@
 # Device assistant feasibility
 
+2026-11-12 update: the repository observations below describe the planning baseline. Phase 1A has since added secure credential storage and a native device-key module; see [implementation and verification limits](phase-1a-security.md). Voice, task execution and platform capability claims remain gated as described here.
+
 Planning proposal, 2026-11-07. Source baseline and confidence labels: [review coverage](review-coverage.md). No assistant implementation exists in this change. Official documentation establishes API possibilities, not that Contexify has passed device tests or store review.
 
 ## Recommendation and existing foundation

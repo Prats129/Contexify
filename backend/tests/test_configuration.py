@@ -207,5 +207,28 @@ class ConfigurationTests(unittest.TestCase):
                     self.assertEqual(namespace[name](), expected)
 
 
+    def test_assistant_security_is_opt_in_and_requires_exact_https_origins(self):
+        self.assertFalse(self.config().ASSISTANT_SECURITY_ENABLED)
+        values = dict(ASSISTANT_SECURITY_ENABLED=True,
+                      ASSISTANT_API_ORIGIN="https://api.example.invalid",
+                      ASSISTANT_WEB_ORIGINS=["https://web.example.invalid"],
+                      CORS_ORIGINS=["https://web.example.invalid"])
+        self.assertTrue(self.config(**values).ASSISTANT_SECURITY_ENABLED)
+        for field, invalid in [
+            ("ASSISTANT_API_ORIGIN", "http://api.example.invalid"),
+            ("ASSISTANT_API_ORIGIN", "https://api.example.invalid/"),
+            ("ASSISTANT_API_ORIGIN", "https://private@api.example.invalid"),
+            ("ASSISTANT_API_ORIGIN", "https://api.example.invalid?secret=x"),
+            ("ASSISTANT_WEB_ORIGINS", ["*"]),
+            ("ASSISTANT_WEB_ORIGINS", []),
+            ("CORS_ORIGINS", ["*"]),
+            ("CORS_ORIGINS", ["https://another.example.invalid"]),
+            ("ASSISTANT_SESSION_TTL_SECONDS", 901),
+            ("ASSISTANT_FRESH_AUTH_SECONDS", 301),
+        ]:
+            with self.subTest(field=field, invalid=invalid), self.assertRaises(ValidationError):
+                self.config(**{**values, field: invalid})
+
+
 if __name__ == "__main__":
     unittest.main()

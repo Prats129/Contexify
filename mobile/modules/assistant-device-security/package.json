@@ -1,0 +1,7 @@
+{
+  "name": "assistant-device-security",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Contexify native device proof of possession",
+  "main": "index.ts"
+}

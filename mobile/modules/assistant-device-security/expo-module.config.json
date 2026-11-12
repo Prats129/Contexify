@@ -1,0 +1,5 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": { "modules": ["AssistantDeviceSecurityModule"] },
+  "android": { "modules": ["ai.contexify.security.AssistantDeviceSecurityModule"] }
+}

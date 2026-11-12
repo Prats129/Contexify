@@ -1,5 +1,7 @@
 # Proposed assistant architecture
 
+2026-11-12 implementation update: Phase 1A was authorized and its source security foundations are implemented. See [implemented scope and remaining native/release gates](phase-1a-security.md). The broader action architecture below remains the design for subsequent phases.
+
 Status: proposed for approval, 2026-11-07. [Verified foundation](review-coverage.md), [feasibility](feasibility.md), [authorization policies](permissions.md), [threat model](security-threat-model.md). This document specifies future work; no new runtime code or schema was installed.
 
 ## Structure and trust boundaries

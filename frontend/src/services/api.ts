@@ -1,4 +1,5 @@
 import { createAuthTransport } from "./auth_transport";
+import { createAssistantWebSecurity } from "./assistant_security";
 import type {
   User,
   ChatSession,
@@ -64,6 +65,7 @@ export function extractErrorMessage(
 
 const auth = createAuthTransport(async () => BACKEND_BASE);
 const { authenticatedFetch, acceptLogin } = auth;
+const assistantSecurity = createAssistantWebSecurity(async () => BACKEND_BASE, auth.authHeaders);
 
 export const apiService = {
   async getGoogleNonce(): Promise<string> {
@@ -80,7 +82,11 @@ export const apiService = {
   },
   onSessionExpired: auth.onSessionExpired,
   hasUserSession: auth.hasUserSession,
-  logout: auth.logout,
+  assistantSecurity,
+  async logout(): Promise<void> {
+    try { await assistantSecurity.disable(); } catch { /* Parent logout also revokes assistant authority. */ }
+    await auth.logout();
+  },
   // --- User Authentication Endpoints ---
   async register(
     displayName: string,

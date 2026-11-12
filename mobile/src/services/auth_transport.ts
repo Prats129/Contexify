@@ -1,5 +1,5 @@
 import type { User } from "../types";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { credentialStorage } from "./credential_storage";
 
 interface AuthSession {
   access_token: string;
@@ -10,7 +10,6 @@ interface AuthSession {
 
 /** Owns credential storage, guest issuance, expiry, and authenticated requests. */
 export function createAuthTransport(authHost: () => Promise<string>) {
-  const AUTH_KEY = "contexify_auth_session";
   const publicAuthPaths = new Set([
     "/user/register",
     "/user/login",
@@ -27,18 +26,19 @@ export function createAuthTransport(authHost: () => Promise<string>) {
   let authGeneration = 0;
 
   const readAuth = async (): Promise<AuthSession | null> => {
+    const stored = await credentialStorage.get();
     try {
-      return JSON.parse((await AsyncStorage.getItem(AUTH_KEY)) || "null");
+      return JSON.parse(stored || "null");
     } catch {
       return null;
     }
   };
   const saveAuth = async (session: AuthSession): Promise<void> => {
-    await AsyncStorage.setItem(AUTH_KEY, JSON.stringify(session));
+    await credentialStorage.set(JSON.stringify(session));
   };
   const clearAuth = async (): Promise<void> => {
     authGeneration++;
-    await AsyncStorage.removeItem(AUTH_KEY);
+    await credentialStorage.clear();
   };
 
   const getAuthSession = async (): Promise<AuthSession> => {
