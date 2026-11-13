@@ -279,50 +279,200 @@ export type VerifyOtpLoginRequest = {
 };
 
 export type ChallengeResponse = {
-  "challenge_id": string;
-  "payload": string;
-  "expires_at": number;
+  challenge_id: string;
+  payload: string;
+  expires_at: number;
 };
 
 export type DeviceResponse = {
-  "device_id": string;
-  "platform": "android" | "ios";
-  "revoked": boolean;
+  device_id: string;
+  platform: "android" | "ios";
+  revoked: boolean;
 };
 
 export type DeviceSessionResponse = {
-  "expires_at": number;
-  "scope"?: "security:manage";
-  "access_token": string;
-  "device_id": string;
+  expires_at: number;
+  scope?: "security:manage";
+  access_token: string;
+  device_id: string;
 };
 
-export type EmptySecurityRequest = {
-
-};
+export type EmptySecurityRequest = {};
 
 export type EnrollmentRequest = {
-  "installation_id": string;
-  "public_key": string;
-  "platform": "android" | "ios";
+  installation_id: string;
+  public_key: string;
+  platform: "android" | "ios";
 };
 
 export type ProofRequest = {
-  "challenge_id": string;
-  "signature": string;
+  challenge_id: string;
+  signature: string;
 };
 
 export type SecuritySessionResponse = {
-  "expires_at": number;
-  "scope"?: "security:manage";
+  expires_at: number;
+  scope?: "security:manage";
 };
 
 export type SessionChallengeRequest = {
-  "device_id": string;
+  device_id: string;
 };
 
 export type WebSessionResponse = {
-  "expires_at": number;
-  "scope"?: "security:manage";
-  "csrf_token": string;
+  expires_at: number;
+  scope?: "security:manage";
+  csrf_token: string;
+};
+
+export type ActionRevisionRequest = {
+  expected_revision: number;
+};
+
+export type AssistantProposal = {
+  protocol_version?: 1;
+  mode?: "simulation";
+  steps: Array<ProposalStep>;
+};
+
+export type BrightnessAction = {
+  capability_id: "brightness.set_app";
+  schema_version?: 1;
+  percent: number;
+};
+
+export type CapabilityDescriptor = {
+  capability_id: "media_volume.set" | "brightness.set_app" | "application.open";
+  schema_version?: 1;
+  policy_version?: 1;
+  risk?: "R1";
+  confirmation?: "exact_transaction";
+  platforms: Array<"web" | "android" | "ios">;
+  permissions: Array<string>;
+  retry_policy?: "never_after_claim";
+  timeout_seconds: number;
+  execution?: "simulation_only";
+};
+
+export type ClaimRequest = {
+  expected_revision: number;
+  challenge_id: string;
+  signature: string;
+  permit: string;
+};
+
+export type CreateTaskRequest = {
+  idempotency_key: string;
+  proposal: AssistantProposal;
+};
+
+export type OpenApplicationAction = {
+  capability_id: "application.open";
+  schema_version?: 1;
+  application_id: "spotify" | "clock";
+};
+
+export type ProposalStep = {
+  action: VolumeAction | BrightnessAction | OpenApplicationAction;
+  depends_on?: Array<number>;
+};
+
+export type SimulationActionView = {
+  action_id: string;
+  action: VolumeAction | BrightnessAction | OpenApplicationAction;
+  depends_on: Array<number>;
+  revision: number;
+  state:
+    | "awaiting_confirmation"
+    | "authorized"
+    | "executing"
+    | "simulated"
+    | "failed"
+    | "outcome_unknown"
+    | "cancelled"
+    | "expired";
+};
+
+export type SimulationChallenge = {
+  challenge_id: string;
+  payload: string;
+  expires_at: number;
+};
+
+export type SimulationClaim = {
+  claim_id: string;
+  action_revision: number;
+  execution?: "simulation_only";
+  expires_at: number;
+};
+
+export type SimulationEvent = {
+  event_id: number;
+  action_id: string | null;
+  state:
+    | "awaiting_confirmation"
+    | "authorized"
+    | "executing"
+    | "simulated"
+    | "failed"
+    | "outcome_unknown"
+    | "cancelled"
+    | "expired";
+  created_at: number;
+};
+
+export type SimulationPermit = {
+  permit: string;
+  claim_challenge: SimulationChallenge;
+  action_revision: number;
+  expires_at: number;
+};
+
+export type SimulationProofRequest = {
+  expected_revision: number;
+  challenge_id: string;
+  signature: string;
+};
+
+export type SimulationReceiptRequest = {
+  expected_revision: number;
+  claim_id: string;
+  outcome: "simulated" | "failed" | "outcome_unknown";
+  challenge_id: string;
+  signature: string;
+};
+
+export type SimulationResultRequest = {
+  expected_revision: number;
+  claim_id: string;
+  outcome: "simulated" | "failed" | "outcome_unknown";
+};
+
+export type SimulationSessionResponse = {
+  access_token: string;
+  expires_at: number;
+  scope?: "assistant:simulate";
+};
+
+export type SimulationTaskView = {
+  task_id: string;
+  protocol_version?: 1;
+  mode?: "simulation";
+  policy_version?: 1;
+  state:
+    | "awaiting_confirmation"
+    | "authorized"
+    | "executing"
+    | "simulated"
+    | "failed"
+    | "outcome_unknown"
+    | "cancelled"
+    | "expired";
+  actions: Array<SimulationActionView>;
+};
+
+export type VolumeAction = {
+  capability_id: "media_volume.set";
+  schema_version?: 1;
+  percent: number;
 };

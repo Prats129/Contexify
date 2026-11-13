@@ -18,8 +18,9 @@ class Settings(BaseSettings):
     # Security & CORS
     CORS_ORIGINS: list[str] = ["*"]
 
-    # Phase 1A security bootstrap only; no device action capability is enabled.
+    # Independent opt-in gates. Simulation never enables real device actions.
     ASSISTANT_SECURITY_ENABLED: bool = False
+    ASSISTANT_SIMULATION_ENABLED: bool = False
     ASSISTANT_API_ORIGIN: str = ""
     ASSISTANT_WEB_ORIGINS: list[str] = []
     ASSISTANT_SESSION_TTL_SECONDS: int = Field(default=900, ge=60, le=900)
@@ -234,6 +235,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_selected_backends(self) -> Self:
+        if self.ASSISTANT_SIMULATION_ENABLED and not self.ASSISTANT_SECURITY_ENABLED:
+            raise ValueError("Assistant simulation requires assistant security.")
         if self.ASSISTANT_SECURITY_ENABLED:
             from urllib.parse import urlsplit
 
@@ -241,9 +244,13 @@ class Settings(BaseSettings):
                 try:
                     parsed = urlsplit(value)
                     return (
-                        parsed.scheme == "https" and bool(parsed.hostname)
-                        and not parsed.username and not parsed.password
-                        and parsed.path == "" and not parsed.query and not parsed.fragment
+                        parsed.scheme == "https"
+                        and bool(parsed.hostname)
+                        and not parsed.username
+                        and not parsed.password
+                        and parsed.path == ""
+                        and not parsed.query
+                        and not parsed.fragment
                         and parsed.port in (None, 443)
                         and value == f"https://{parsed.netloc}"
                     )
@@ -253,13 +260,19 @@ class Settings(BaseSettings):
             if not https_origin(self.ASSISTANT_API_ORIGIN) or any(
                 not https_origin(origin) for origin in self.ASSISTANT_WEB_ORIGINS
             ):
-                raise ValueError("Assistant security requires explicit HTTPS origins without paths.")
+                raise ValueError(
+                    "Assistant security requires explicit HTTPS origins without paths."
+                )
             if not self.ASSISTANT_WEB_ORIGINS:
-                raise ValueError("Configure at least one explicit assistant web origin.")
+                raise ValueError(
+                    "Configure at least one explicit assistant web origin."
+                )
             if "*" in self.CORS_ORIGINS:
                 raise ValueError("Assistant security requires explicit CORS origins.")
             if not set(self.ASSISTANT_WEB_ORIGINS).issubset(set(self.CORS_ORIGINS)):
-                raise ValueError("Assistant web origins must also be allowed CORS origins.")
+                raise ValueError(
+                    "Assistant web origins must also be allowed CORS origins."
+                )
 
         if not self.STORAGE_MODE:
             r2_values = (

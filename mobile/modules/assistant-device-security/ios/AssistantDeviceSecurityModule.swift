@@ -5,6 +5,14 @@ import CryptoKit
 import UIKit
 
 public class AssistantDeviceSecurityModule: Module {
+  private struct Approval {
+    let snapshot: Data
+    let revision: Int
+    let deadline: Date
+  }
+  private var approvals: [String: Approval] = [:]
+  private var confirming = false
+  private var cancelConfirmation: (() -> Void)?
   private func failure() -> NSError {
     NSError(domain: "ContexifyDeviceSecurity", code: 1,
             userInfo: [NSLocalizedDescriptionKey: "Device security unavailable. Unlock this device or enroll again."])
@@ -50,8 +58,30 @@ public class AssistantDeviceSecurityModule: Module {
     return (bytes as Data).base64EncodedString()
   }
 
+  private func simulation(_ id: String, _ payload: String) throws -> SimulationPolicy.Envelope {
+    try unlocked()
+    let envelope = try SimulationPolicy.validate(payload)
+    guard envelope.fields["installation_id"] as? String == id,
+          envelope.fields["public_key"] as? String == (try publicKey(key(id))),
+          let origin = envelope.fields["origin"] as? String, let user = envelope.fields["user_id"] as? String,
+          try Data(contentsOf: marker(id)) == binding(origin, user) else { throw failure() }
+    approvals = approvals.filter { $0.value.deadline > Date() }
+    return envelope
+  }
+  private func sign(_ id: String, _ payload: String) throws -> String {
+    guard let signature = SecKeyCreateSignature(try key(id), .ecdsaSignatureMessageX962SHA256,
+                                               Data(payload.utf8) as CFData, nil) else { throw failure() }
+    return (signature as Data).base64EncodedString()
+  }
+  private func resetSimulation() {
+    approvals.removeAll()
+    cancelConfirmation?()
+  }
+
   public func definition() -> ModuleDefinition {
     Name("AssistantDeviceSecurity")
+    OnAppEntersBackground { self.resetSimulation() }
+    OnDestroy { DispatchQueue.main.async { self.resetSimulation() } }
 
     AsyncFunction("createKey") { (origin: String, userId: String) -> [String: String] in
       try self.unlocked()
@@ -105,11 +135,74 @@ public class AssistantDeviceSecurityModule: Module {
       return (signature as Data).base64EncodedString()
     }.runOnQueue(.main)
 
+    AsyncFunction("confirmSimulation") { (id: String, payload: String, promise: Promise) in
+      guard !self.confirming else { promise.reject(self.failure()); return }
+      do {
+        let envelope = try self.simulation(id, payload)
+        guard envelope.fields["purpose"] as? String == "assistant_simulation_authorize", envelope.revision == 1,
+              self.approvals.count < 32,
+              let scene = UIApplication.shared.connectedScenes.first(where: { $0.activationState == .foregroundActive }) as? UIWindowScene,
+              var presenter = scene.windows.first(where: { $0.isKeyWindow })?.rootViewController else { throw self.failure() }
+        while let presented = presenter.presentedViewController { presenter = presented }
+        guard !presenter.isBeingDismissed, presenter.viewIfLoaded?.window != nil else { throw self.failure() }
+        let dialog = UIAlertController(title: "Simulation only",
+          message: envelope.label + "\n\nNo device action will be performed.", preferredStyle: .alert)
+        self.confirming = true
+        var settled = false
+        var expiry: DispatchWorkItem?
+        func finish(_ signature: String?, error: Error? = nil) {
+          guard !settled else { return }
+          settled = true
+          expiry?.cancel()
+          expiry = nil
+          self.confirming = false
+          self.cancelConfirmation = nil
+          if let error { promise.reject(error) } else { promise.resolve(signature) }
+        }
+        dialog.addAction(UIAlertAction(title: "Approve simulation", style: .default) { _ in
+          guard !settled else { return }
+          do {
+            let current = try self.simulation(id, payload)
+            guard current.snapshot == envelope.snapshot, let action = current.fields["action_id"] as? String else { throw self.failure() }
+            let signature = try self.sign(id, payload)
+            self.approvals[action] = Approval(snapshot: current.snapshot, revision: 1, deadline: Date().addingTimeInterval(90))
+            finish(signature)
+          } catch { finish(nil, error: self.failure()) }
+        })
+        dialog.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in
+          finish(nil)
+        })
+        self.cancelConfirmation = { finish(nil); dialog.dismiss(animated: false) }
+        let timeout = DispatchWorkItem { self.cancelConfirmation?() }
+        expiry = timeout
+        presenter.present(dialog, animated: true)
+        let remaining = max(0, min(65, (envelope.fields["expires_at"] as? Double ?? 0) - Date().timeIntervalSince1970))
+        DispatchQueue.main.asyncAfter(deadline: .now() + remaining, execute: timeout)
+      } catch { self.confirming = false; promise.reject(self.failure()) }
+    }.runOnQueue(.main)
+
+    AsyncFunction("signSimulationStep") { (id: String, payload: String) -> String in
+      let envelope = try self.simulation(id, payload)
+      guard let action = envelope.fields["action_id"] as? String, let approval = self.approvals[action],
+            approval.snapshot == envelope.snapshot, envelope.revision == approval.revision + 1 else { throw self.failure() }
+      switch envelope.fields["purpose"] as? String {
+      case "assistant_simulation_claim":
+        guard approval.revision == 1 else { throw self.failure() }
+        self.approvals[action] = Approval(snapshot: approval.snapshot, revision: 2, deadline: approval.deadline)
+      case "assistant_simulation_receipt":
+        guard approval.revision == 2 else { throw self.failure() }
+        self.approvals.removeValue(forKey: action)
+      default: throw self.failure()
+      }
+      return try self.sign(id, payload)
+    }.runOnQueue(.main)
+
     AsyncFunction("deleteKey") { (id: String) in
+      self.resetSimulation()
       let status = SecItemDelete(try self.query(id) as CFDictionary)
       guard status == errSecSuccess || status == errSecItemNotFound else { throw self.failure() }
       let marker = try self.marker(id)
       if FileManager.default.fileExists(atPath: marker.path) { try FileManager.default.removeItem(at: marker) }
-    }
+    }.runOnQueue(.main)
   }
 }

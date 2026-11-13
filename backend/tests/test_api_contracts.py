@@ -116,6 +116,7 @@ export type Mode = (
                 project / platform / "src/types/api-contracts.ts"
                 for platform in ("frontend", "mobile")
             ]
+            files.append(project / "packages/assistant-core/src/contracts.ts")
             for path in files:
                 path.parent.mkdir(parents=True)
                 path.write_bytes(
@@ -125,7 +126,8 @@ export type Mode = (
             main = generator["main"]
             with (
                 patch.dict(
-                    main.__globals__, {"ROOT": project, "render": lambda: self.CONTRACT}
+                    main.__globals__,
+                    {"ROOT": project, "render": lambda *args: self.CONTRACT},
                 ),
                 patch.object(sys, "argv", ["generate_api_contracts.py", "--check"]),
                 redirect_stdout(io.StringIO()),
@@ -145,6 +147,12 @@ export type Mode = (
                 self.assertEqual(main(), 1)
                 self.assertIn("missing file", errors.getvalue())
                 self.assertFalse(files[1].exists())
+                files[2].unlink()
+                self.assertEqual(main(), 1)
+                self.assertIn(
+                    "packages/assistant-core/src/contracts.ts: missing file",
+                    errors.getvalue(),
+                )
 
     def test_parser_failure_and_timeout_cannot_report_success(self):
         for failure in (
@@ -186,12 +194,14 @@ export type Mode = (
                 project / platform / "src/types/api-contracts.ts"
                 for platform in ("frontend", "mobile")
             ]
+            files.append(project / "packages/assistant-core/src/contracts.ts")
             for path in files:
                 path.parent.mkdir(parents=True)
             main = generator["main"]
             with (
                 patch.dict(
-                    main.__globals__, {"ROOT": project, "render": lambda: self.CONTRACT}
+                    main.__globals__,
+                    {"ROOT": project, "render": lambda *args: self.CONTRACT},
                 ),
                 patch.object(sys, "argv", ["generate_api_contracts.py"]),
                 patch(
@@ -226,7 +236,20 @@ export type Mode = (
 
     def test_unknown_schema_is_rejected(self):
         with self.assertRaises(ValueError):
-            generator["typescript"]({"oneOf": [{"type": "string"}]})
+            generator["typescript"]({"allOf": [{"type": "string"}]})
+
+    def test_discriminated_union_is_generated(self):
+        self.assertEqual(
+            generator["typescript"](
+                {
+                    "oneOf": [
+                        {"$ref": "#/$defs/VolumeAction"},
+                        {"$ref": "#/$defs/BrightnessAction"},
+                    ]
+                }
+            ),
+            "VolumeAction | BrightnessAction",
+        )
 
 
 if __name__ == "__main__":
