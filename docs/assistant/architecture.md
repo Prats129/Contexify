@@ -1,5 +1,7 @@
 # Proposed assistant architecture
 
+**2026-11-16 planning update:** the [merged architecture and roadmap](merged-implementation-plan.md) is canonical for future dynamic planning. It retains the trust boundaries below, adds a private provider-planning path and validated plan snapshots, and requires stable step identity before resumable multi-step execution. A provider interface already exists; live UI integration is still pending. Simulation contracts remain separate from execution authority. See [requirement coverage](merged-plan-traceability.md); this revision changes documentation only.
+
 2026-11-12 implementation update: Phase 1A was authorized and its source security foundations are implemented. See [implemented scope and remaining native/release gates](phase-1a-security.md). The broader action architecture below remains the design for subsequent phases.
 
 Status: proposed for approval, 2026-11-07. [Verified foundation](review-coverage.md), [feasibility](feasibility.md), [authorization policies](permissions.md), [threat model](security-threat-model.md). This document specifies future work; no new runtime code or schema was installed.

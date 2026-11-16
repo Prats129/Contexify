@@ -1,5 +1,7 @@
 # Capability permissions and authorization
 
+**2026-11-16 merged-plan pointer:** retain this capability/risk matrix alongside the [canonical roadmap](merged-implementation-plan.md). Dynamic AI may propose registered capabilities but cannot create permissions or bypass native confirmation. Capability policy/catalog data and the shared execution gate replace any historical proposal for a separate environment switch per command. Reduced low-risk confirmation, offline authority and connectors have separate decisions D11-D13; none is enabled by this planning revision.
+
 Proposed policy, 2026-11-07. Platform evidence: [feasibility](feasibility.md). Enforcement protocol: [architecture](architecture.md). These are future requirements, not permissions already held by Contexify.
 
 ## Common rules

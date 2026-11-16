@@ -1,5 +1,7 @@
 # Assistant security threat model
 
+**2026-11-16 merged-plan pointer:** all TH-01..TH-20 remain tracked in the [coverage register](merged-plan-traceability.md). The [canonical plan](merged-implementation-plan.md) extends their application to dynamic provider output, immutable action snapshots, stable multi-step identities and optional connector trust. It does not treat model output as authorization or close residual risks/deferred acceptance. Historical baseline findings must be rechecked against current source.
+
 Planning threat model, 2026-11-07. Applies to the [proposed architecture](architecture.md), not a claim of implemented protections. Source-specific gaps are recorded in [review coverage](review-coverage.md). Security owner and independent assessor must approve residual risks before sensitive capabilities ship.
 
 ## Assets, actors and security invariants

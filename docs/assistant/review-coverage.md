@@ -1,5 +1,15 @@
 # Assistant planning review coverage
 
+## 2026-11-16 merged planning checkpoint
+
+The user requested one plan combining the original secure cross-platform assistant scope with dynamic AI planning/integration. The [canonical merged plan](merged-implementation-plan.md) and [traceability register](merged-plan-traceability.md) now preserve the original requirements, all 19 prior assistant documents, eight roadmap phases, integration steps I1-I6, D1-D10, gates A-F, ASST-001..010 and TH-01..20. New D11-D14 and scenarios S01-S45 make confirmation UX, offline authority, connector trust, context/recovery and budgets explicit.
+
+Current assistant paths reviewed: shared planner/provider interface and voice review, mobile volume/brightness transcript selection and preview UI, backend assistant schemas and chat-provider boundary, shared percentage service, native percentage execution and existing phase/acceptance records. The live flow still uses fixed grammar; simply adding a provider call would leave execution-side reparsing and per-invocation operation identity unresolved. M1/M2 connect a validated dynamic single-action path; M4 introduces stable coordination before resumable multi-step effects. Native handlers and independent authorization remain necessary.
+
+This is a focused assistant review, not a fresh whole-repository security audit. The revision changes documentation only and preserves existing staging. Validation checks local Markdown links and plan/source/scenario/decision/threat coverage. No runtime, provider, database, build, phone or production operation is part of this revision. Source/native compilation evidence and user-reported phone results remain in their phase documents; all postponed acceptance remains deferred until the user resumes it. No security certification or universal platform support is claimed.
+
+Documentation validation: all 19 pre-existing assistant documents are mapped; requirement R01-R17, stages M0-M8, decisions D1-D14, scenarios S01-S45, threats TH-01..20, findings ASST-001..010, integration steps I1-I6 and new requirements N01-N12 have complete ID coverage. Local link targets and Markdown structure were checked; the existing staged diff remained unchanged. No runtime tests were run for this documentation-only revision.
+
 Follow-up: Phase 1A implementation was authorized on 2026-11-12. Current changes and verification are tracked in [Phase 1A checkpoint](phase-1a-progress.md) and [implementation details](phase-1a-security.md). The audit evidence and original path inventory below remain tied to their stated historical baseline.
 
 Review date: 2026-11-07 (Asia/Calcutta). Source baseline: `232546702f8195913d007842944b9873b0d58cfd`. Planning and documentation only; no implementation authorized.

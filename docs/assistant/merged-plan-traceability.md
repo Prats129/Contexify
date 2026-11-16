@@ -1,0 +1,176 @@
+# Merged assistant plan: coverage and evidence register
+
+Reviewed: 2026-11-16. This register accompanies the [canonical merged plan](merged-implementation-plan.md). It is a requirement-to-work map, not proof that pending requirements are implemented or tested.
+
+Labels: **Old** = retained; **New** = added dynamic-planning/integration work; **Updated** = retained requirement with a changed method/order. **Done** applies only to the artifact named; source completion, automated checks, physical acceptance and release approval are separate states. For original wording, the user's supplied “Contexify — Secure Cross-Platform AI Device Assistant” request and the historical documents below remain the sources. Do not require the local attachment path to exist in another checkout.
+
+## 1. Original request coverage
+
+| Original section / requirement ID | Origin | Preserved requirement and merged destination | State / evidence owner |
+| --- | --- | --- | --- |
+| R01: product vision | Updated | Wake, reminders/alarms, calls/messages, media/display, apps, calendar, conversation and failure recovery: plan sections 2-3, M2-M8, S01-S45 | Partial source only; USER + capability owners |
+| R02: repository analysis | Old | Reuse existing packages/services/security; compatibility and no speculative frameworks: sections 1, 2, 9; all sources below | Audit artifacts Done; recheck changed implementation each batch; BE/MOBILE/WEB |
+| R03: cross-platform architecture | Updated | Separate speech/wake/planner/discovery/policy/executor/evidence/state; web/Android/iOS restrictions and future desktop: sections 2-3, M1-M8 | Existing controls partial; dynamic wiring Pending; SEC + platform owners |
+| R04: wake and voice | Old | Local bounded wake, explicit capture, indicator/disable/PTT, interruption/sleep, false triggers, battery/license/role: sections 3, 6-8; M8; S34-S36 | Foreground voice source Done; wake Pending/Conditional; MOBILE + QA |
+| R05: controlled AI execution | Updated | Typed registered tools; platform/schema/grant/risk/confirmation/revocation/audit metadata; untrusted model proposals: sections 2, 4; M1-M4 | Registry/protocol source partial; live planner Pending; BE + SEC |
+| R06: security | Old | Authentication, device/account binding, TLS, key storage/encryption, replay/SSRF/CSRF/XSS/abuse/supply-chain protections: sections 4, 7-8; TH-01..20 below | Partial implemented controls; open/deferred acceptance retained; SEC |
+| R07: sensitive actions | Updated | Exact destination/content, ambiguity resolution, transaction confirmation, step-up, spoofing defenses: section 2.5; M3/M7; S16-S18, S30-S32, S35 | Direct send/call Conditional; no approval inferred from OS grant; SEC + USER |
+| R08: privacy/governance | Old / Updated | Local-first, minimal external fields, no raw audio/history/analytics leakage, encryption/retention/export/delete/backup, regional review: section 4; D4/D8; S14/S38/S39 | Live processor and durable-content decisions Pending; PRIVACY + SEC + OPS |
+| R09: performance/scalability | Updated | Battery/memory/latency/network/model routing, local fast path, bounded costs/retries/load: section 6; D9/D14; S07-S10/S40 | Targets retained, not achieved claims; BE + QA |
+| R10: reliability/failure | Updated | Offline/permission/auth changes, duplicate/ambiguous commands, interruption/partial effects/lock/cancel/platform differences: sections 2.4, 7-8; M3/M4 | Existing one-action controls partial; multi-step coordinator Pending; BE + MOBILE |
+| R11: extensible capabilities | Updated | Versioned typed adapters, independent policy, narrow third-party trust; no unrestricted loader: sections 2.3, 2.6, 9; M1/M7; D13 | Existing native adapters retained; connectors Conditional; BE + SEC |
+| R12: testing/security verification | Old / Updated | Unit/integration/E2E/device/lifecycle/AI-adversarial/authorization/privacy/recovery/performance/static/dynamic/independent review: sections 7-8 | Code checks not device acceptance; deferred list unchanged; QA + SEC |
+| R13: implementation strategy | Updated | Eight old phases mapped below to M0-M8; incremental feature rollout with security foundations and genuine visible integration first | Roadmap document Done; execution stages Pending |
+| R14: engineering standards | Old | SOLID/DRY/KISS, strong types, safe errors, narrow boundaries, additive migration, versioned contracts, rollback and reproducible delivery: sections 2, 4, 8-9 | Per-batch review gate; engineering owners |
+| R15: required deliverables | Old | All original eight documents retained; this plan and register give one ordering and complete source map; review coverage updated | Documentation Done; continued evidence updates required |
+| R16: non-negotiable rules | Old | No unrestricted device control, bypass, secret exposure, silent sensitive effect, model authorization, unsafe production/real-data tests or absolute-security promise: sections 2, 4, 8, 10 | Invariants for every stage; SEC + USER |
+| R17: planning-only boundary | Old | This revision changes documentation only; implementation/provider/build/phone/production work requires its applicable authorization | Preserved; USER |
+
+### Representative original requests, with honest meanings
+
+| Request family | Required support/decision | Stage / scenario |
+| --- | --- | --- |
+| “Hey Contexify” | Wake feasibility/license/OS-role decision; not present foreground PTT and not identity proof | M8, D7, S35 |
+| “Remind me to call John tomorrow at 9” | Resolve date/time/time zone and reminder text; creating a reminder does not place a call | M3/M5, S28/S29 |
+| “Set an alarm for 6” / “cancel my next alarm” | Clarify AM/PM/date/owned target; platform handoff vs owned exact schedule distinguished | M5/M6, S28/S29 |
+| “Call Mom” | Resolve exact contact/number and dialer handoff first; direct call separately gated | M3/M7, D6, S30/S32 |
+| “Set volume to 70%” / “decrease brightness” | Existing absolute limits; dynamic planning plus trusted relative-state resolution; window vs system scope clear | M2/M3, S03/S04/S26/S27 |
+| “WhatsApp Alex I'll be late” / “SMS John ...” | Exact destination/content; composer is not sent/delivered; direct-provider send independently approved | M7, S30/S32 |
+| “Open Spotify” / “what is my schedule today?” / “read my reminders” | Reviewed handler, narrow calendar grant or owned reminder store; safe/private output | M5-M7, S06/S25/S31/S33 |
+| Follow-ups and compound instructions | Minimal session context, clarification, bounded dependency graph and stable effect identity | M3/M4, S05/S20-S24 |
+
+## 2. Every existing assistant document retained
+
+The following 19 files existed at the start of this merge. None is deleted; new canonical pointers do not overwrite their recorded results. Source assertions tied to historical commits are not automatically current security findings.
+
+| Existing document | Purpose retained | Merged use / status |
+| --- | --- | --- |
+| [implementation-plan.md](implementation-plan.md) | Original phases, integration steps, estimates, D1-D10 and authorization history | This merged roadmap supersedes future ordering/flag proposals only; all previous evidence retained |
+| [architecture.md](architecture.md) | Trust boundaries, interfaces, native authority and recovery | M1-M4 extend these boundaries; no wholesale architecture replacement |
+| [feasibility.md](feasibility.md) | Web/Android/iOS capability restrictions, API/entitlement alternatives | M5-M8 adapter selection; recheck official versions before implementation |
+| [permissions.md](permissions.md) | Capability catalog, risk, scopes, consent/confirmation and output limits | M1 catalog and M3/M5-M7 handlers; no model-created authority |
+| [privacy.md](privacy.md) | Data inventory, processor register, consent/retention/legal decisions | D4/D8 live-processing/storage gates; older legal/commercial facts require refresh |
+| [security-threat-model.md](security-threat-model.md) | Assets, attack surfaces, TH-01..TH-20, residual risks | All threat mappings below remain mandatory |
+| [testing-strategy.md](testing-strategy.md) | Full test matrix, measurements, device plan, gates A-F | M1-M8 evidence; targets not asserted as measurements |
+| [review-coverage.md](review-coverage.md) | Audit batches, source ledger, ASST findings and evidence rules | Current merge checkpoint added; historical findings rechecked where source changed |
+| [phase-1a-security.md](phase-1a-security.md) | Security implementation contract | Keep session/enrollment/cookie/native-key semantics; M1 uses, not bypasses them |
+| [phase-1a-progress.md](phase-1a-progress.md) | Security source checks and outstanding physical/operational evidence | D2 and gates A/C/F; open checks stay open |
+| [phase-2-implementation.md](phase-2-implementation.md) | Simulation schemas/protocol, one-use claims and ledger design | M1 new proposal DTO alongside v1 simulation; M4 extends stable coordination |
+| [phase-2-progress.md](phase-2-progress.md) | Actual core checks and known limits | Distinguishes planner port from actual integration |
+| [phase-3-progress.md](phase-3-progress.md) | Foreground speech, consent, lifecycle and platform fallback | M2 input integration and later acceptance; cloud/wake not implied |
+| [phase-4a-progress.md](phase-4a-progress.md) | Read-only support/catalog checks | Availability hint only; M1 catalog filtering never permission proof |
+| [phase-4b-volume.md](phase-4b-volume.md) | Real Android media-volume scope, native authority, test results/limits | M2 reuse, M4 compatibility and M5 remaining acceptance |
+| [phase-4c-brightness.md](phase-4c-brightness.md) | App-window scope, independent policy/schema, restoration and actual checks | M2/M5; source/native compilation not a built/installed/accepted brightness APK |
+| [android-acceptance.md](android-acceptance.md) | Manual acceptance checklist and user-reported evidence | **Deferred checks stay here** until user resumes; no duplicated completion claims |
+| [android-native-verification.md](android-native-verification.md) | Native compilation/artifact/security verification and remaining gates | Compatible binaries/native tests/signing/permissions; not replaced by web tests |
+| [local-android-testing.md](local-android-testing.md) | Isolated HTTPS practice backend, separate app identities and local test workflow | Preserve production isolation/no phone access, no unapproved cloud quota use |
+
+## 3. Old roadmap and integration sequence
+
+| Old phase | Origin / current truth | Merged destination and remaining work |
+| --- | --- | --- |
+| 1: Audit/design | Old; original eight-document audit exists | M0 refreshed source truth, merged decisions/ownership/traceability; retain platform/risks rather than repeat stale assertions |
+| 1A: Security readiness | Old; source exists, not blanket operational acceptance | M0/M1 reuse; D2/D8, gates A/C/F retain deployment, encryption/restore and physical evidence |
+| 2: Shared core and authorization | Updated; simulation, schema/proof/ledger and provider port exist | M1 new private proposal/adapter; M2 snapshot wiring; M4 stable multi-step coordinator; v1 simulation stays separate |
+| 3: Foreground voice | Updated; Android PTT/TTS source and reported speech success | M2 connects final transcript to dynamic planning; remaining lifecycle/privacy/device checks deferred/open |
+| 4: Low-risk Android MVP | Updated; 4A readiness, 4B volume and 4C window-brightness source exist | M2 prioritizes planner integration; M3 context; M5 finishes app opens/reminders/scheduling/acceptance/offline decision |
+| 5: iOS and native extensions | Old / Updated; not complete | M5/M6 supported Clock/AlarmKit/intents/shortcuts/calendar/contact experiments with per-platform review |
+| 6: Sensitive actions | Old; separately gated | M7 composers then approved direct integrations; exact review/step-up/history/unknown handling and independent assessment |
+| 7: Wake and production hardening | Old; not complete | M8 wake/license/battery/role/operations; security/privacy/CI obligations apply to earlier stages too |
+
+| Original integration step | Preserved method / corresponding work |
+| --- | --- |
+| I1: isolate assistant from existing chat | Dedicated input/planning/session/data path; preserve ChatMode, RAG, SSE, attachments and guest/temp regressions; M1/M2 |
+| I2: additive schema and compatibility | Versioned DTOs/migrations, feature support discovery, disabled defaults, old-client tests; M1/M4, no destructive ledger consolidation |
+| I3: secure native storage and enrollment | Existing SecureStore migration and nonexportable binding retained; origin/account change, reinstall/restore re-enrollment fail closed; D2 and gates C/F |
+| I4: shared contracts in separate packages | Reuse pure assistant core/generated contracts without npm workspace migration; native/Python/TS conformance; M1-M4 |
+| I5: native binary and delivery identity | Runtime/appVersion/channel/platform/signing/provenance checked; OTA cannot add native capability; pin tooling/avoid shell injection; all build/release gates |
+| I6: staged verification and enablement | Restore/schema checks -> fake adapters -> opted-in native acceptance -> capability-specific release; R3/cloud-STT/wake/remote have independent approvals |
+
+Historical timeline and pricing estimates stay historical. M0 must refresh staffing, provider terms and measured per-command cost before commitments. Dynamic integration is not assumed to fit an old estimate unchanged.
+
+## 4. Historical finding disposition
+
+These are the original IDs, not ten new vulnerabilities asserted against current HEAD. Closing a historical code gap does not close all deployment/device/privacy evidence. Owner SEC coordinates re-evaluation with the relevant implementation owner.
+
+| Finding | Historical issue | Current disposition / merged responsibility |
+| --- | --- | --- |
+| ASST-001 | Ordinary bearer storage exposure | Assistant SecureStore/web-cookie work exists; verify migration, non-assistant compatibility and XSS limits; D2, M1, gates A/C |
+| ASST-002 | Broad account bearer without device/action authority | Scoped assistant sessions/enrollment/native proof source exists; reuse and test ownership/replay; M1/M4, S12/S16-S22 |
+| ASST-003 | HTTP/backend override and host trust | HTTPS/origin policy source and isolated test trust need artifact/deployment verification; M1/M8, S12/S37 |
+| ASST-004 | Chat logging/history/title privacy path | Simulation isolation exists; new planner must not reuse chat persistence/logging/fallback; M1, S14 |
+| ASST-005 | Encryption/key decisions and web hardening | Some security controls exist; durable private history/key/retention/CSP/deployed topology evidence still needs decisions/checks; D8, M1/M5/M8 |
+| ASST-006 | Missing registry/native execution/state/voice | Significant source now exists; do not repeat the old absence claim. Dynamic wiring, more adapters and physical acceptance remain; M1-M8 |
+| ASST-007 | Build/CLI/shell/runtime/provenance risks | Reinspect current scripts/tool locks before delivery; do not infer all tooling fixed from a successful APK; M8 and every artifact gate |
+| ASST-008 | Migration/restore/versioning gaps | Assistant migrations through v4 exist in source; configured-database migration and restore/rollback evidence are separate; M4/M8 |
+| ASST-009 | Duplication/large components/dependency candidates | Shared core and percentage executor now reused; replace phrase reparsing and proven obsolete glue only, no speculative dependency deletion; M2 and cleanup review |
+| ASST-010 | Stale audit baseline | This merge rechecks assistant paths; broader audit findings remain baseline-specific and outside an automatic whole-repo refactor; M0/current review ledger |
+
+## 5. All original threats preserved
+
+The original residual-risk statements remain authoritative in [the threat model](security-threat-model.md). Model, device, provider and privileged-operator compromise cannot be eliminated by this design. New work must extend the threat model when it changes these assumptions.
+
+| Threat ID | Required invariant / merged work | Scenarios and owner |
+| --- | --- | --- |
+| TH-01 | Principal ownership on every plan/step/permit/receipt; reject forged user/device/session | S12; BE/SEC |
+| TH-02 | User-instruction provenance; hostile retrieved/tool text cannot grant authority or chain actions | S02/S11; BE/SEC |
+| TH-03 | Exact immutable snapshot, native confirmation, bound digest/revision and action-scoped step-up | S16; MOBILE/SEC |
+| TH-04 | Stable step identity, atomic consume and durable unknown handling; no exactly-once promise | S20-S24; BE/MOBILE |
+| TH-05 | Fresh-auth origin/account/install-bound enrollment, no remote dispatch or credential host switch | S12/S22; MOBILE/BE |
+| TH-06 | Restricted web cookie boundary plus XSS/CSP/safe rendering; no web hardware trust-anchor claim | S13; WEB/SEC |
+| TH-07 | CSRF/Origin/CORS, safe POST mutations, reviewed links/intents, no URL-param commands | S13; WEB/MOBILE/BE |
+| TH-08 | Wake is not identity, bounded capture, TTS echo/voice-spoof controls and trusted sensitive approval | S34/S35; MOBILE/QA |
+| TH-09 | Recheck grants/consent/lock/foreground/policy at dispatch and invalidate stale approval | S17/S18; MOBILE/BE |
+| TH-10 | Clarify contact/endpoint/time/DST/units/Unicode and freeze canonical target | S04/S05/S28/S30; MOBILE/BE/QA |
+| TH-11 | Catalog dispatch only; reviewed connector egress, URL/DNS/redirect/SSRF defenses | S06/S13/S15; MOBILE/BE/SEC |
+| TH-12 | Minimized approved provider payload and no private command/audio/contact telemetry | S14/S31; PRIVACY/BE/MOBILE |
+| TH-13 | Secure key storage, encrypted private records, backup exclusions and no restored grants | S22/S39; SEC/OPS/MOBILE |
+| TH-14 | Stop dependents on failure/unknown, read-only reconciliation, no unsafe replay or false undo | S19/S21/S24/S25/S32; BE/MOBILE |
+| TH-15 | Input/output/time/steps/queue/concurrency/spend bounds and circuit breakers | S07-S10/S40; BE/OPS |
+| TH-16 | Locked SDK/native dependencies, SBOM/license/secret scans, publisher/signing/update provenance | S37/S41; SEC/OPS |
+| TH-17 | Typed adapter receipts drive display, not tool text or model claims | S11/S21/S45; BE/MOBILE |
+| TH-18 | Logout/deletion revokes state, clears data and defines owned schedule/external draft limits | S18/S38/S39; MOBILE/BE/PRIVACY |
+| TH-19 | No accessibility automation/overlay bypass; accessible trusted approval and protected notifications | S18/S36; MOBILE/SEC/QA |
+| TH-20 | Least-privilege operators, bounded audit retention/integrity and deletion-aware restore drill | S39/S41/S42; OPS/SEC/PRIVACY |
+
+## 6. New requirements and exact integration gaps
+
+| ID / origin | Requirement | Source basis / implementation destination |
+| --- | --- | --- |
+| N01 / New | Wire a real approved planner, not only an interface | `packages/assistant-core/src/planner.ts` has `ProposalPlanner`/`planWithProvider`; M1 adapter/endpoint and M2 client wiring |
+| N02 / Updated | Stop using raw-language reparsing as the execution gate | `packages/assistant-core/src/voice.ts` uses `planCommand`; `mobile/src/services/assistant_volume.ts` and `assistant_brightness.ts` select percentages by reparsing; M2 consumes validated snapshot |
+| N03 / New | Separate plan proposals from simulation/authority | `backend/app/schemas/assistant.py` simulation-mode contract is not a live execution plan; M1 additive DTO/versioning |
+| N04 / New | Bind lifecycle cancellation through client, endpoint and SDK | Existing bounded provider helper has its own deadline; M1 links parent cancellation and suppresses late results |
+| N05 / New | Private cloud planner path with approved data/routing | `backend/app/services/llm_service.py` is a chat path with context/fallback/60-second SDK timeout; M1 separate adapter using approved pinned SDK patterns |
+| N06 / New | Minimal trusted state reads and relative/follow-up interpretation | Current absolute-only grammar cannot supply fresh device context; M3 adds bounded read/clarification contracts |
+| N07 / New | Stable plan/step identity before resumable orchestration | `PercentControlExecutor.kt` creates a fresh operation UUID per invocation; M4 needs coordinator/versioned native bridge, not retrying this method as a new task |
+| N08 / Updated | A useful confirmation flow without lowering trust | `mobile/src/components/AssistantPreview.tsx` is the manual test UI; M2 reduces redundant UI, D11 separately governs standing consent |
+| N09 / New | Model/prompt/schema/tool version evaluation and resource governance | M1 fixtures/privacy/semantic validation, M3 fixed context budget, M8 change-control and pilot evidence; D14 |
+| N10 / New | Optional connector trust and credential/egress boundaries | M7/D13, no MCP/framework dependency for M1/M2 and no arbitrary server installation |
+| N11 / Updated | Measured cleanup, no unused speculative abstractions or per-command environment gates | Plan section 9; retain existing shared gate, facade compatibility and independent native validators |
+| N12 / New clarification of Old goal | Honest offline execution and confirmation policy decisions | D11/D12 separate consent/authority reviews; local recognition does not make server-authorized effects offline |
+
+## 7. Deferred work, decisions and completion bookkeeping
+
+| Open work / state | Evidence record or decision | What it blocks; allowed independent progress |
+| --- | --- | --- |
+| Deferred manual microphone cleanup, close/reopen consent/text, lock/unlock, logout and remaining negative/lifecycle checks | [Android acceptance](android-acceptance.md), [volume phase](phase-4b-volume.md) | Dependent native/device release and confirmation-policy changes; not documentation or isolated planner development |
+| 90% visible-feedback change and newest test-APK acceptance not user-confirmed | [Android acceptance](android-acceptance.md) | Claim of physical UX fix; S03/S45 must remain open until observed |
+| Brightness binary, migration on the isolated configured test database, restoration/OEM/device checks not performed in source batch | [brightness phase](phase-4c-brightness.md), [native verification](android-native-verification.md) | Real brightness support/release claim; source/mock work can proceed |
+| iOS/OS matrix, deployed TLS/origin/cookie/CSP topology and broader compatibility | [Phase 1A progress](phase-1a-progress.md), [testing strategy](testing-strategy.md) | Those platform/deployment claims; no inference from Android success |
+| Processor/model/tier/region/retention and cloud-text consent | D4 + D8 | Live provider requests; fake-provider and contract tests remain possible after implementation authorization |
+| Staffing, spend/build quota and independent assessment | D9 | Live spend/builds or affected release; this planning task spends none |
+| Private-history/recovery keys, retention/export/delete/restore and legal review | D8 | Durable sensitive records and public privacy claims; no raw plaintext placeholder storage |
+| Friction/standing-consent policy | D11 | Reducing current native approval; dynamic language integration does not require that reduction |
+| Offline effect authority | D12 | Offline low-risk execution; do not replay queued effects upon reconnect |
+| Connector/provider/store/entitlement approvals | D6/D7/D13 and gate D | Direct communication, wake or relevant connector distribution, not local generic contracts |
+
+All original **D1-D10** are reproduced in canonical plan section 10. New **D11-D14** cover consent UX, offline authority, connector trust and measured budgets/change control. Old gates **A-F** remain in plan section 8. Scenario requirements **S01-S45** remain pending until environment-specific evidence is attached.
+
+For future batches, update the relevant phase evidence and this register only when a status changes. Record artifact/environment and actual checks; retain the user's deferral until explicitly resumed. Do not mark the whole roadmap complete because one coding batch, generated contract, native compile or APK build passes.
+
+## 8. This planning revision: review boundary
+
+Reviewed current assistant planner/voice, percentage selection, schemas, private planning integration boundary, shared percentage/native execution and existing documentation against the original request. Official function-calling, structured-output, AI threat, connector-security and ASVS/MASVS references are linked near the architectural claims in the canonical plan. They inform design; they do not certify this repository or establish device behavior.
+
+Changes in this revision are limited to two new planning documents, canonical-plan pointers in the existing design documents and the review-coverage checkpoint. No application code, environment, dependency, configured database, signing identity, running backend, APK, phone, cloud build or production setting is changed. Documentation validation checks local links, roadmap/scenario/decision/threat/source coverage and preservation of the existing staging index. Runtime tests are not a substitute for those documentation checks and are not needed to validate this documentation-only revision.

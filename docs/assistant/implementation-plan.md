@@ -1,5 +1,9 @@
 # Assistant implementation plan and approval record
 
+## Canonical merged roadmap — 2026-11-16
+
+Use the [merged implementation plan](merged-implementation-plan.md) for future ordering, dynamic AI integration, decisions D1-D14 and completion gates. The [coverage register](merged-plan-traceability.md) carries forward every original phase, document, finding and threat. This file retains the historical authorization and evidence record; its earlier ordering/estimates and any per-command rollout-flag proposals are superseded where the merged plan explicitly updates them. Existing deferred tests remain deferred, and current exact native confirmation remains unchanged. This merge authorizes documentation only.
+
 **2026-11-12 authorization:** the user approved starting Phase 1A. Local security implementation and tests are authorized; deployment, later phases and unresolved processor/region/retention decisions remain gated. See [Phase 1A implementation](phase-1a-security.md) and [verification checkpoint](phase-1a-progress.md).
 
 **Recommendation:** approve a security-foundation phase followed by an Android foreground push-to-talk MVP and restricted web companion. Keep the existing stack. Defer always-on wake, direct communication and cross-device control. This document is a proposal; implementation requires explicit approval.

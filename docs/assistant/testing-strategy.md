@@ -1,5 +1,7 @@
 # Assistant testing strategy and release gates
 
+**2026-11-16 merged-plan pointer:** retain this test matrix, measurement targets and gates A-F with the [canonical roadmap](merged-implementation-plan.md). New scenarios S01-S45 cover dynamic planning, context, coordination, provider privacy/budgets and the old platform/lifecycle requirements. Targets remain unverified until measured; postponed phone checks remain **Deferred**, not passed. The [coverage register](merged-plan-traceability.md) maps evidence sources and dependent release blockers. This revision runs documentation checks only.
+
 Proposed verification plan, 2026-11-07. Actual checks performed for this documentation-only review are in [review coverage](review-coverage.md). There is no implemented assistant to test yet. Passing existing chat tests does not prove device-action safety.
 
 ## Test environment and evidence
