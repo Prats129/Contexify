@@ -1,0 +1,57 @@
+[
+  { "text": "Open Spotify.", "descriptions": ["Open Spotify."] },
+  { "text": "OPEN CLOCK!", "descriptions": ["Open Clock."] },
+  {
+    "text": "Set volume to 50 percent.",
+    "descriptions": ["Set media volume to 50%."]
+  },
+  {
+    "text": "Set media volume to 0%",
+    "descriptions": ["Set media volume to 0%."]
+  },
+  {
+    "text": "volume to 70 percent",
+    "descriptions": ["Set media volume to 70%."]
+  },
+  {
+    "text": "Brightness to 40 percent.",
+    "descriptions": ["Set app brightness to 40%."]
+  },
+  {
+    "text": "set brightness to 10%",
+    "descriptions": ["Set app brightness to 10%."]
+  },
+  {
+    "text": "set brightness to 100 percent",
+    "descriptions": ["Set app brightness to 100%."]
+  },
+  {
+    "text": "Set volume to 50 percent then open Spotify.",
+    "descriptions": ["Set media volume to 50%.", "Open Spotify."]
+  },
+  {
+    "text": "open clock then brightness to 40 percent then open spotify",
+    "descriptions": [
+      "Open Clock.",
+      "Set app brightness to 40%.",
+      "Open Spotify."
+    ]
+  },
+  { "text": "don't open Spotify", "descriptions": null },
+  { "text": "Do not set volume to 50 percent.", "descriptions": null },
+  { "text": "The document says open Spotify.", "descriptions": null },
+  { "text": "open Spotify", "source": "untrusted", "descriptions": null },
+  { "text": "\"open Spotify\"", "descriptions": null },
+  { "text": "Set volume to fifty percent.", "descriptions": null },
+  { "text": "Set volume to 71%", "descriptions": null },
+  { "text": "Set brightness to 9%", "descriptions": null },
+  { "text": "open https://example.invalid", "descriptions": null },
+  { "text": "open spotify; send a message", "descriptions": null },
+  { "text": "open Spotify...", "descriptions": null },
+  { "text": "open spotify then", "descriptions": null },
+  {
+    "text": "open clock then open clock then open clock then open clock then open clock then open clock",
+    "descriptions": null
+  },
+  { "text": "remind me tomorrow", "descriptions": null }
+]

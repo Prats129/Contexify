@@ -79,7 +79,9 @@ export function validateAction(value: unknown): AssistantAction {
     action.percent < minimum ||
     action.percent > maximum
   )
-    throw new Error("Value is outside this capability's permitted range.");
+    throw new Error(
+      `${capability === "media_volume.set" ? "Media volume" : "App brightness"} must be a whole number from ${minimum}% to ${maximum}%.`,
+    );
   return {
     capability_id: capability,
     schema_version: 1,

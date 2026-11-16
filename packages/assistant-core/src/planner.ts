@@ -23,12 +23,14 @@ export function planCommand(
     };
   const steps = [];
   for (const [index, part] of parts.entries()) {
+    // Local ASR may append sentence punctuation; keep the whole-command grammar.
+    const command = part.trim().replace(/[.!]$/, "").trim();
     let action;
     const numeric =
       /^(?:set\s+)?(media volume|volume|brightness)\s+to\s+(\d{1,3})\s*(?:%|percent)$/i.exec(
-        part.trim(),
+        command,
       );
-    const open = /^open\s+(spotify|clock)$/i.exec(part.trim());
+    const open = /^open\s+(spotify|clock)$/i.exec(command);
     if (numeric)
       action = {
         capability_id: /brightness/i.test(numeric[1])
@@ -50,10 +52,13 @@ export function planCommand(
   }
   try {
     return { status: "proposed", proposal: validateProposal({ steps }) };
-  } catch {
+  } catch (error) {
     return {
       status: "needs_clarification",
-      message: "That command exceeds the permitted capability limits.",
+      message:
+        error instanceof Error
+          ? error.message
+          : "That command exceeds the permitted capability limits.",
     };
   }
 }

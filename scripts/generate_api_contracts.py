@@ -17,9 +17,31 @@ sys.path.insert(0, str(ROOT / "backend"))
 
 from pydantic.json_schema import models_json_schema  # noqa: E402
 
-from app.schemas import assistant, assistant_security, chat, document, media, session, user  # noqa: E402
+from app.schemas import (  # noqa: E402
+    assistant,
+    assistant_brightness,
+    assistant_security,
+    assistant_volume,
+    chat,
+    document,
+    media,
+    session,
+    user,
+)
 
 MODELS = (
+    assistant_brightness.BrightnessSessionResponse,
+    assistant_brightness.BrightnessTaskRequest,
+    assistant_brightness.BrightnessTaskView,
+    assistant_brightness.BrightnessClaim,
+    assistant_brightness.BrightnessReceiptRequest,
+    assistant_brightness.BrightnessResultRequest,
+    assistant_volume.VolumeSessionResponse,
+    assistant_volume.VolumeTaskRequest,
+    assistant_volume.VolumeTaskView,
+    assistant_volume.VolumeClaim,
+    assistant_volume.VolumeReceiptRequest,
+    assistant_volume.VolumeResultRequest,
     assistant.AssistantProposal,
     assistant.CapabilityDescriptor,
     assistant.CreateTaskRequest,
@@ -175,13 +197,17 @@ def main() -> int:
         else:
             target.write_text(generated, encoding="utf-8")
     core = ROOT / "packages/assistant-core/src/contracts.ts"
-    core_generated = render(tuple(model for model in MODELS if model.__module__ == "app.schemas.assistant"))
+    core_generated = render(
+        tuple(model for model in MODELS if model.__module__ == "app.schemas.assistant")
+    )
     core_sources = {}
     if args.check:
         if not core.exists():
             stale.append("packages/assistant-core/src/contracts.ts: missing file")
         else:
-            core_sources["packages/assistant-core/src/contracts.ts"] = core.read_text(encoding="utf-8-sig")
+            core_sources["packages/assistant-core/src/contracts.ts"] = core.read_text(
+                encoding="utf-8-sig"
+            )
     else:
         core.parent.mkdir(parents=True, exist_ok=True)
         core.write_text(core_generated, encoding="utf-8")

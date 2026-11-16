@@ -16,7 +16,9 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.v1.endpoints import (
     assistant,
+    assistant_brightness,
     assistant_security,
+    assistant_volume,
     chat,
     document,
     health,
@@ -119,6 +121,17 @@ app.include_router(
     assistant.router,
     prefix=f"{settings.API_V1_STR}/assistant",
     tags=["Assistant simulation"],
+)
+app.include_router(
+    assistant_volume.router,
+    prefix=f"{settings.API_V1_STR}/assistant/volume",
+    tags=["Assistant volume"],
+)
+
+app.include_router(
+    assistant_brightness.router,
+    prefix=f"{settings.API_V1_STR}/assistant/brightness",
+    tags=["Assistant brightness"],
 )
 
 # Check for production frontend build

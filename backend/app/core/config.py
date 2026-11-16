@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     # Independent opt-in gates. Simulation never enables real device actions.
     ASSISTANT_SECURITY_ENABLED: bool = False
     ASSISTANT_SIMULATION_ENABLED: bool = False
+    ASSISTANT_EXECUTION_ENABLED: bool = False
     ASSISTANT_API_ORIGIN: str = ""
     ASSISTANT_WEB_ORIGINS: list[str] = []
     ASSISTANT_SESSION_TTL_SECONDS: int = Field(default=900, ge=60, le=900)
@@ -237,6 +238,8 @@ class Settings(BaseSettings):
     def validate_selected_backends(self) -> Self:
         if self.ASSISTANT_SIMULATION_ENABLED and not self.ASSISTANT_SECURITY_ENABLED:
             raise ValueError("Assistant simulation requires assistant security.")
+        if self.ASSISTANT_EXECUTION_ENABLED and not self.ASSISTANT_SECURITY_ENABLED:
+            raise ValueError("Assistant execution requires assistant security.")
         if self.ASSISTANT_SECURITY_ENABLED:
             from urllib.parse import urlsplit
 
@@ -328,7 +331,17 @@ class Settings(BaseSettings):
     )
 
 
-settings = Settings()
+def _configuration_env_file():
+    selected = os.environ.get("CONTEXIFY_ENV_FILE")
+    if selected is None:
+        return Settings.model_config["env_file"]
+    path = Path(selected).resolve(strict=True)
+    if not path.is_file():
+        raise ValueError("The selected configuration file must be a regular file.")
+    return path
+
+
+settings = Settings(_env_file=_configuration_env_file())
 
 # Ensure directories exist
 settings.DATA_DIR.mkdir(parents=True, exist_ok=True)

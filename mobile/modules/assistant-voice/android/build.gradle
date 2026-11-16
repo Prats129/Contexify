@@ -1,0 +1,26 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'ai.contexify.voice'
+version = '0.1.0'
+
+android {
+  namespace 'ai.contexify.voice'
+  defaultConfig {
+    versionCode 1
+    versionName '0.1.0'
+  }
+  testOptions {
+    unitTests.all {
+      testLogging {
+        events 'passed', 'failed', 'skipped'
+      }
+    }
+  }
+}
+
+dependencies {
+  testImplementation 'junit:junit:4.13.2'
+}

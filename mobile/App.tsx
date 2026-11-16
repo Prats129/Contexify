@@ -61,6 +61,7 @@ import { AuthModal } from "./src/components/AuthModal";
 import { ProfileModal } from "./src/components/ProfileModal";
 import { ServerConfigModal } from "./src/components/ServerConfigModal";
 import { AttachmentsModal } from "./src/components/AttachmentsModal";
+import { AssistantPreview } from "./src/components/AssistantPreview";
 
 function generateGuestSessionId(): string {
   return (
@@ -96,6 +97,7 @@ export default function App() {
 
   // Global State
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [isAssistantOpen, setIsAssistantOpen] = useState(false);
   const currentUserRef = useRef<User | null>(null);
   const authVersionRef = useRef(0);
   const [isAuthReady, setIsAuthReady] = useState(false);
@@ -1786,6 +1788,7 @@ export default function App() {
 
           {/* Top Native Header */}
           <Header
+            onOpenAssistant={() => setIsAssistantOpen(true)}
             onOpenDrawer={handleOpenDrawer}
             onNewChat={handleNewChat}
             isDark={isDark}
@@ -2439,6 +2442,18 @@ export default function App() {
             isDark={isDark}
             theme={theme}
           />
+
+          {isAssistantOpen && (
+            <AssistantPreview
+              key={currentUser?.id ?? "guest"}
+              voiceAllowed={isAuthReady && currentUser !== null}
+              deviceChecksAllowed={isAuthReady && currentUser !== null}
+              volumeControls={apiService.assistantSecurity}
+              volumeUserId={isAuthReady ? currentUser?.id : undefined}
+              theme={theme}
+              onClose={() => setIsAssistantOpen(false)}
+            />
+          )}
 
           {/* Auth Modal */}
           <AuthModal

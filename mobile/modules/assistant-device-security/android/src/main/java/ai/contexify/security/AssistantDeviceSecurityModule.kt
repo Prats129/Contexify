@@ -31,13 +31,27 @@ class AssistantDeviceSecurityModule : Module() {
   private var confirmationDialog: AlertDialog? = null
   private var cancelConfirmation: (() -> Unit)? = null
   private val mainHandler = Handler(Looper.getMainLooper())
+  private val controlRunning = java.util.concurrent.atomic.AtomicBoolean(false)
+  private val brightnessEffect = AppBrightnessControl()
+  private val volume by lazy {
+    PercentControlExecutor(::context, { appContext.currentActivity }, { origin, user, installation ->
+      require(marker(installation).isFile && marker(installation).readText(Charsets.UTF_8) == binding(origin, user))
+    }, ::publicKey, ::sign, MediaVolumeControl(), controlRunning)
+  }
+  private val brightness by lazy {
+    PercentControlExecutor(::context, { appContext.currentActivity }, { origin, user, installation ->
+      require(marker(installation).isFile && marker(installation).readText(Charsets.UTF_8) == binding(origin, user))
+    }, ::publicKey, ::sign, brightnessEffect, controlRunning)
+  }
   private val keyStore: KeyStore get() = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
   private fun context(): Context = requireNotNull(appContext.reactContext)
   private fun unlocked() {
     val manager = context().getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
     check(manager.isDeviceSecure && !manager.isDeviceLocked) { "Unlock a passcode-protected device to manage assistant security." }
-    check(appContext.currentActivity?.hasWindowFocus() == true ||
-      confirmationDialog?.window?.decorView?.hasWindowFocus() == true) { "Assistant security requires a foreground activity." }
+    val activity = appContext.currentActivity
+    check(activity != null && !activity.isFinishing && !activity.isDestroyed &&
+      (activity as? androidx.lifecycle.LifecycleOwner)?.lifecycle?.currentState
+        ?.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED) == true) { "Assistant security requires a foreground activity." }
   }
   private fun id(value: String): String {
     require(UUID.fromString(value).toString() == value) { "Invalid installation identifier." }
@@ -74,12 +88,38 @@ class AssistantDeviceSecurityModule : Module() {
     }.sign(), Base64.NO_WRAP)
   }
   private fun resetSimulation() {
+    volume.cancel()
+    brightness.cancel()
+    brightnessEffect.restore()
     approvals.clear()
     cancelConfirmation?.invoke()
   }
 
   override fun definition() = ModuleDefinition {
     Name("AssistantDeviceSecurity")
+    // Separate from signing/enrollment. This method cannot authorize or dispatch actions.
+    AsyncFunction("deviceControlReadiness") {
+      DeviceControlReadiness.inspect(context(), appContext.currentActivity)
+    }.runOnQueue(Queues.MAIN)
+    // The native worker obtains and consumes authority directly over HTTPS.
+    AsyncFunction("executeVolume") { origin: String, user: String, installation: String, management: String, percent: Int, promise: Promise ->
+      // Capture cancellation ownership in bridge order, before the worker can be delayed.
+      val ticket = volume.begin()
+      kotlin.concurrent.thread(name = "AssistantVolume", isDaemon = true) {
+        try { promise.resolve(volume.execute(origin, user, installation, management, percent, ticket)) }
+        catch (_: Exception) { promise.reject("ERR_VOLUME", "Volume control is unavailable. Check media volume before trying again.", null) }
+      }
+    }.runOnQueue(Queues.MAIN)
+    AsyncFunction("cancelVolume") { volume.cancel() }.runOnQueue(Queues.MAIN)
+    AsyncFunction("executeBrightness") { origin: String, user: String, installation: String, management: String, percent: Int, promise: Promise ->
+      val ticket = brightness.begin()
+      kotlin.concurrent.thread(name = "AssistantBrightness", isDaemon = true) {
+        try { promise.resolve(brightness.execute(origin, user, installation, management, percent, ticket)) }
+        catch (_: Exception) { promise.reject("ERR_BRIGHTNESS", "App brightness is unavailable. Review the app window before trying again.", null) }
+      }
+    }.runOnQueue(Queues.MAIN)
+    AsyncFunction("cancelBrightness") { brightness.cancel() }.runOnQueue(Queues.MAIN)
+
     OnActivityEntersBackground { mainHandler.post { resetSimulation() } }
     OnActivityDestroys { mainHandler.post { resetSimulation() } }
     OnDestroy { mainHandler.post { resetSimulation() } }
@@ -204,6 +244,8 @@ class AssistantDeviceSecurityModule : Module() {
       resetSimulation()
       keyStore.deleteEntry(alias(installation))
       marker(installation).delete()
+      volume.forget(installation)
+      brightness.forget(installation)
       Unit
     }.runOnQueue(Queues.MAIN)
   }

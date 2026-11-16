@@ -1,0 +1,7 @@
+{
+  "name": "assistant-voice",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Foreground on-device English speech for command previews",
+  "main": "index.ts"
+}

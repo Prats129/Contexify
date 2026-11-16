@@ -7,17 +7,18 @@ import ast
 import os
 import tempfile
 import unittest
+import warnings
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
-from pydantic import ValidationError
+from pydantic import PydanticDeprecatedSince20, ValidationError
 
 BACKEND = Path(__file__).resolve().parents[1]
 
 
-def settings_class():
+def settings_namespace():
     path = BACKEND / "app/core/config.py"
     tree = ast.parse(path.read_text(encoding="utf-8"))
     nodes = []
@@ -29,8 +30,17 @@ def settings_class():
             break
         nodes.append(node)
     namespace = {"__file__": str(path), "__name__": "isolated_settings"}
-    exec(compile(ast.Module(body=nodes, type_ignores=[]), str(path), "exec"), namespace)
-    return namespace["Settings"]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", PydanticDeprecatedSince20)
+        exec(
+            compile(ast.Module(body=nodes, type_ignores=[]), str(path), "exec"),
+            namespace,
+        )
+    return namespace
+
+
+def settings_class():
+    return settings_namespace()["Settings"]
 
 
 Settings = settings_class()
@@ -46,6 +56,34 @@ class ConfigurationTests(unittest.TestCase):
 
     def config(self, **values):
         return Settings(_env_file=None, DATA_DIR=Path(self.directory.name), **values)
+
+    def test_explicit_configuration_file_does_not_merge_default_dotenv(self):
+        namespace = settings_namespace()
+        cls = namespace["Settings"]
+        directory = Path(self.directory.name)
+        default = directory / "default.env"
+        default.write_text("GEMINI_API_KEY=fixture-must-not-load\n", encoding="utf-8")
+        selected = directory / "test.env"
+        selected.write_text(
+            f"DATA_DIR={directory.as_posix()}\nDB_MODE=local\n", encoding="utf-8"
+        )
+        cls.model_config["env_file"] = str(default)
+        with patch.dict(os.environ, {"CONTEXIFY_ENV_FILE": str(selected)}):
+            config = cls(_env_file=namespace["_configuration_env_file"]())
+        self.assertEqual(config.DATA_DIR, directory)
+        self.assertEqual(config.GEMINI_API_KEY, "")
+
+    def test_missing_selected_configuration_file_never_falls_back(self):
+        namespace = settings_namespace()
+        with patch.dict(
+            os.environ,
+            {"CONTEXIFY_ENV_FILE": str(Path(self.directory.name) / "missing.env")},
+        ):
+            with self.assertRaises(FileNotFoundError):
+                namespace["_configuration_env_file"]()
+        with patch.dict(os.environ, {"CONTEXIFY_ENV_FILE": self.directory.name}):
+            with self.assertRaises(ValueError):
+                namespace["_configuration_env_file"]()
 
     def cloud(self):
         return dict(
@@ -209,6 +247,9 @@ class ConfigurationTests(unittest.TestCase):
     def test_assistant_security_is_opt_in_and_requires_exact_https_origins(self):
         self.assertFalse(self.config().ASSISTANT_SECURITY_ENABLED)
         self.assertFalse(self.config().ASSISTANT_SIMULATION_ENABLED)
+        self.assertFalse(self.config().ASSISTANT_EXECUTION_ENABLED)
+        with self.assertRaises(ValidationError):
+            self.config(ASSISTANT_EXECUTION_ENABLED=True)
         with self.assertRaises(ValidationError):
             self.config(ASSISTANT_SIMULATION_ENABLED=True)
         values = dict(
@@ -218,6 +259,11 @@ class ConfigurationTests(unittest.TestCase):
             CORS_ORIGINS=["https://web.example.invalid"],
         )
         self.assertTrue(self.config(**values).ASSISTANT_SECURITY_ENABLED)
+        self.assertTrue(
+            self.config(
+                **values, ASSISTANT_EXECUTION_ENABLED=True
+            ).ASSISTANT_EXECUTION_ENABLED
+        )
         self.assertTrue(
             self.config(
                 **values, ASSISTANT_SIMULATION_ENABLED=True

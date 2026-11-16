@@ -1,5 +1,11 @@
 import React from "react";
-import { LuPlus, LuX, LuPaperclip, LuMessageCircle } from "react-icons/lu";
+import {
+  LuPlus,
+  LuX,
+  LuPaperclip,
+  LuMessageCircle,
+  LuMic,
+} from "react-icons/lu";
 import { FiSidebar } from "react-icons/fi";
 import { UserProfileCard } from "./UserProfileCard";
 import { SessionHistory } from "./SessionHistory";
@@ -33,6 +39,7 @@ interface SidebarProps {
   onSearchChange: (query: string) => void;
   onLoadMore: () => void;
   onOpenAttachmentsModal?: () => void;
+  onOpenAssistant?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -60,6 +67,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSearchChange,
   onLoadMore,
   onOpenAttachmentsModal,
+  onOpenAssistant,
 }) => {
   return (
     <aside
@@ -163,6 +171,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {isOpen && <span>New Conversation</span>}
           </button>
         </div>
+      )}
+
+      {onOpenAssistant && (
+        <button
+          type="button"
+          onClick={onOpenAssistant}
+          title="Assistant preview"
+          aria-label="Open assistant preview"
+          className={`flex items-center justify-center gap-2 rounded-lg border border-(--border-subtle) text-sm text-(--text-main) hover:bg-(--border-subtle) cursor-pointer shrink-0 ${isOpen ? "w-full px-3 py-2" : "w-9 h-9"}`}
+        >
+          <LuMic size={16} />
+          {isOpen && <span>Assistant preview</span>}
+        </button>
       )}
 
       {/* Attachments & Media Button (Logged-in users only) */}

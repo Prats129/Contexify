@@ -23,6 +23,7 @@ interface HeaderProps {
   isTemporaryChat?: boolean;
   onToggleTemporaryChat?: () => void;
   onClearChat?: () => void;
+  onOpenAssistant?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -33,6 +34,7 @@ export const Header: React.FC<HeaderProps> = ({
   isTemporaryChat = false,
   onToggleTemporaryChat,
   onClearChat,
+  onOpenAssistant,
 }) => {
   const theme = customTheme || getAppTheme(isDark);
   const { width, height } = useWindowDimensions();
@@ -195,6 +197,18 @@ export const Header: React.FC<HeaderProps> = ({
               { maxWidth: width - 16 },
             ]}
           >
+            {onOpenAssistant && (
+              <TouchableOpacity
+                style={styles.menuItem}
+                accessibilityRole="menuitem"
+                onPress={() => selectMenuAction(onOpenAssistant)}
+              >
+                <Feather name="mic" size={18} color={theme.textMain} />
+                <Text style={[styles.menuText, { color: theme.textMain }]}>
+                  Assistant preview
+                </Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity
               style={[styles.menuItem, !onClearChat && styles.disabledItem]}
               disabled={!onClearChat}

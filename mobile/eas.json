@@ -19,6 +19,40 @@
         "EXPO_PUBLIC_API_URL": "https://contexify-backend.onrender.com"
       }
     },
+    "assistant-verification": {
+      "distribution": "internal",
+      "environment": "preview",
+      "channel": "assistant-verification",
+      "android": {
+        "buildType": "apk",
+        "withoutCredentials": true,
+        "gradleCommand": ":assistant-voice:testDebugUnitTest :assistant-device-security:testDebugUnitTest :app:assembleRelease"
+      },
+      "env": {
+        "APP_VARIANT": "assistant-verification",
+        "EXPO_PUBLIC_ASSISTANT_NATIVE_TEST": "true",
+        "EXPO_PUBLIC_ASSISTANT_VOICE_ENABLED": "true",
+        "EXPO_PUBLIC_APP_ENV": "production",
+        "EXPO_PUBLIC_API_URL": "https://assistant-verification.invalid"
+      }
+    },
+    "assistant-volume-verification": {
+      "distribution": "internal",
+      "environment": "preview",
+      "channel": "assistant-volume-verification",
+      "android": {
+        "buildType": "apk",
+        "withoutCredentials": true,
+        "gradleCommand": ":assistant-voice:testDebugUnitTest :assistant-device-security:testDebugUnitTest :app:assembleRelease"
+      },
+      "env": {
+        "APP_VARIANT": "assistant-volume-test",
+        "EXPO_PUBLIC_ASSISTANT_NATIVE_TEST": "false",
+        "EXPO_PUBLIC_ASSISTANT_EXECUTION_ENABLED": "true",
+        "EXPO_PUBLIC_ASSISTANT_VOICE_ENABLED": "true",
+        "EXPO_PUBLIC_APP_ENV": "production"
+      }
+    },
     "production": {
       "channel": "production",
       "autoIncrement": true,

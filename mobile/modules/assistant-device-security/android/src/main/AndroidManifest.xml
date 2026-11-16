@@ -1,1 +1,13 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" />
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+  <application>
+    <meta-data android:name="ai.contexify.assistant.EXECUTION_ENABLED" android:value="false" />
+  </application>
+  <!-- Only the reviewed launch catalog is visible; never enumerate installed apps. -->
+  <queries>
+    <package android:name="com.spotify.music" />
+    <package android:name="com.google.android.deskclock" />
+    <package android:name="com.android.deskclock" />
+    <package android:name="com.sec.android.app.clockpackage" />
+  </queries>
+</manifest>

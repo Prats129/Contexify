@@ -5,6 +5,9 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 const ts = require("../frontend/node_modules/typescript");
 const { webcrypto } = require("node:crypto");
+const { createTypeScriptLoader } = require("./helpers/typescript_modules.cjs");
+const volumeSupport = createTypeScriptLoader()("mobile/src/services/assistant_volume.ts");
+const brightnessSupport = createTypeScriptLoader()("mobile/src/services/assistant_brightness.ts");
 
 function load(filename, imports, globals = {}) {
   const exports = {};
@@ -14,6 +17,8 @@ function load(filename, imports, globals = {}) {
   vm.runInNewContext(code, {
     exports, URL, Date, console, setTimeout, clearTimeout, AbortController, TextEncoder, crypto: webcrypto,
     require: (name) => {
+      if (name === "./assistant_volume") return volumeSupport;
+      if (name === "./assistant_brightness") return brightnessSupport;
       if (!(name in imports)) throw new Error(`Unexpected import: ${name}`);
       return imports[name];
     },

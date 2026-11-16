@@ -5,7 +5,34 @@ export interface DeviceKey {
   public_key: string;
 }
 
+export interface PercentExecutionResult {
+  outcome: "verified" | "failed" | "outcome_unknown" | "cancelled";
+  requested_percent: number;
+  observed_percent: number | null;
+  receipt_recorded: boolean;
+}
+
+export type VolumeExecutionResult = PercentExecutionResult;
+
 interface SecurityModule {
+  executeVolume?(
+    origin: string,
+    userId: string,
+    installationId: string,
+    managementToken: string,
+    percent: number,
+  ): Promise<unknown>;
+  cancelVolume?(): Promise<void>;
+  executeBrightness?(
+    origin: string,
+    userId: string,
+    installationId: string,
+    managementToken: string,
+    percent: number,
+  ): Promise<unknown>;
+  cancelBrightness?(): Promise<void>;
+  /** Android-only, read-only hints. A report never grants execution authority. */
+  deviceControlReadiness?(): Promise<unknown>;
   createKey(origin: string, userId: string): Promise<DeviceKey>;
   signChallenge(installationId: string, payload: string): Promise<string>;
   deleteKey(installationId: string): Promise<void>;

@@ -1,33 +1,28 @@
 // Real shared code with synthetic transports/providers; no OS or network access.
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
-const ts = require("../frontend/node_modules/typescript");
-const cache = new Map();
-function load(name) {
-  const filename = path.resolve("packages/assistant-core/src", name + ".ts");
-  if (cache.has(filename)) return cache.get(filename);
-  const module = { exports: {} };
-  cache.set(filename, module.exports);
-  const code = ts.transpileModule(fs.readFileSync(filename, "utf8"), {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2020,
-    },
-  }).outputText;
-  new Function("module", "exports", "require", code)(
-    module,
-    module.exports,
-    (reference) => {
-      if (!reference.startsWith("./"))
-        throw Error("Unexpected dependency " + reference);
-      return load(reference.slice(2));
-    },
+const { createTypeScriptLoader } = require("./helpers/typescript_modules.cjs");
+const core = createTypeScriptLoader()("packages/assistant-core/src/index.ts");
+
+test("out-of-range commands explain the exact capability range", () => {
+  const volume = core.planCommand("set volume to 90%");
+  assert.equal(volume.status, "needs_clarification");
+  assert.equal(
+    volume.message,
+    "Media volume must be a whole number from 0% to 70%.",
   );
-  return module.exports;
-}
-const core = load("index");
+  const brightness = core.planCommand("brightness to 9 percent");
+  assert.equal(brightness.status, "needs_clarification");
+  assert.equal(
+    brightness.message,
+    "App brightness must be a whole number from 10% to 100%.",
+  );
+  assert.equal(core.planCommand("set volume to 70%").status, "proposed");
+  assert.equal(
+    core.planCommand("brightness to 100 percent").status,
+    "proposed",
+  );
+});
 const action = {
   capability_id: "media_volume.set",
   schema_version: 1,

@@ -476,3 +476,121 @@ export type VolumeAction = {
   schema_version?: 1;
   percent: number;
 };
+
+export type VolumeClaim = {
+  claim_id: string;
+  action_revision: number;
+  execution?: "android_media_volume";
+  expires_at: number;
+};
+
+export type VolumeEvidence = {
+  outcome: "verified" | "failed" | "outcome_unknown";
+  observed_index?: number | null;
+  max_index?: number | null;
+};
+
+export type VolumeReceiptRequest = {
+  outcome: "verified" | "failed" | "outcome_unknown";
+  observed_index?: number | null;
+  max_index?: number | null;
+  expected_revision: number;
+  challenge_id: string;
+  signature: string;
+  claim_id: string;
+};
+
+export type VolumeSessionResponse = {
+  access_token: string;
+  expires_at: number;
+  scope?: "assistant:volume";
+};
+
+export type VolumeTaskRequest = {
+  idempotency_key: string;
+  action: VolumeAction;
+};
+
+export type VolumeTaskView = {
+  task_id: string;
+  mode?: "volume";
+  action: VolumeAction;
+  revision: number;
+  state:
+    | "awaiting_confirmation"
+    | "authorized"
+    | "executing"
+    | "verified"
+    | "failed"
+    | "outcome_unknown"
+    | "cancelled"
+    | "expired";
+  result?: VolumeEvidence | null;
+};
+
+export type VolumeResultRequest = {
+  outcome: "verified" | "failed" | "outcome_unknown";
+  observed_index?: number | null;
+  max_index?: number | null;
+  expected_revision: number;
+  claim_id: string;
+};
+
+export type BrightnessClaim = {
+  claim_id: string;
+  action_revision: number;
+  execution?: "android_app_brightness";
+  expires_at: number;
+};
+
+export type BrightnessEvidence = {
+  outcome: "verified" | "failed" | "outcome_unknown";
+  observed_index?: number | null;
+  max_index?: number | null;
+};
+
+export type BrightnessReceiptRequest = {
+  outcome: "verified" | "failed" | "outcome_unknown";
+  observed_index?: number | null;
+  max_index?: number | null;
+  expected_revision: number;
+  challenge_id: string;
+  signature: string;
+  claim_id: string;
+};
+
+export type BrightnessResultRequest = {
+  outcome: "verified" | "failed" | "outcome_unknown";
+  observed_index?: number | null;
+  max_index?: number | null;
+  expected_revision: number;
+  claim_id: string;
+};
+
+export type BrightnessSessionResponse = {
+  access_token: string;
+  expires_at: number;
+  scope?: "assistant:brightness";
+};
+
+export type BrightnessTaskRequest = {
+  idempotency_key: string;
+  action: BrightnessAction;
+};
+
+export type BrightnessTaskView = {
+  task_id: string;
+  mode?: "brightness";
+  action: BrightnessAction;
+  revision: number;
+  state:
+    | "awaiting_confirmation"
+    | "authorized"
+    | "executing"
+    | "verified"
+    | "failed"
+    | "outcome_unknown"
+    | "cancelled"
+    | "expired";
+  result?: BrightnessEvidence | null;
+};

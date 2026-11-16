@@ -6,6 +6,7 @@ import { Sidebar } from "./components/Sidebar/Sidebar";
 import { ChatWorkspace } from "./components/Chat/ChatWorkspace";
 import { UserModal } from "./components/Modals/UserModal";
 import { AttachmentsModal } from "./components/Modals/AttachmentsModal";
+import { AssistantPreview } from "./components/Modals/AssistantPreview";
 import { useChatSessions } from "./hooks/useChatSessions";
 import type {
   User,
@@ -161,6 +162,7 @@ export const App: React.FC = () => {
 
   // --- Interaction States ---
   const [isUserModalOpen, setIsUserModalOpen] = useState(false);
+  const [isAssistantOpen, setIsAssistantOpen] = useState(false);
   const [userModalTab, setUserModalTab] = useState<"login" | "register">(
     "login",
   );
@@ -1472,6 +1474,10 @@ export const App: React.FC = () => {
         activeSessionId={activeSessionId}
         onSelectSession={selectSession}
         onNewSession={handleNewSession}
+        onOpenAssistant={() => {
+          if (window.innerWidth < 768) setIsSidebarOpen(false);
+          setIsAssistantOpen(true);
+        }}
         onDeleteSession={handleDeleteSession}
         onRenameSession={handleRenameSession}
         onOpenAttachmentsModal={
@@ -1535,6 +1541,14 @@ export const App: React.FC = () => {
         onCancelReply={() => setReplyingTo(null)}
         onReply={handleReplyMessage}
       />
+
+      {isAssistantOpen && (
+        <AssistantPreview
+          key={currentUser?.id ?? "guest"}
+          voiceAllowed={isAuthReady && currentUser !== null}
+          onClose={() => setIsAssistantOpen(false)}
+        />
+      )}
 
       <UserModal
         isOpen={isUserModalOpen}

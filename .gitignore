@@ -8,6 +8,9 @@ dist-ssr/
 .vite/
 *.tsbuildinfo
 
+# Generated outputs from the local assistant Android modules
+/mobile/modules/*/android/build/
+
 # Python Virtual Environment
 backend/venv/
 venv/

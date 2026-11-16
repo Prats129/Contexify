@@ -626,7 +626,7 @@ class AssistantSecurityTests(AssistantSecurityFixture):
             memory.execute("SELECT COUNT(*) FROM assistant_schema_versions").fetchone()[
                 0
             ],
-            2,
+            4,
         )
         restored = sqlite3.connect(":memory:")
         self.addCleanup(restored.close)
