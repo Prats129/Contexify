@@ -1,5 +1,13 @@
 # Assistant planning review coverage
 
+## 2026-11-16 M0 implementation baseline
+
+The user authorized implementing the merged roadmap one stage at a time, confirmed free-tier Gemini API and asked to set the budget accordingly. [M0 baseline](m0-baseline.md) records current contracts, first single-volume-action target, engineering/user/release-review ownership, synthetic-only initial cloud-test scope and **INR 0/month paid assistant-planning budget**. Live activation/private-data/production gates and postponed phone acceptance stay open; no billing setting, secret or configured service was accessed.
+
+Source recheck found the UI/percentage selectors still use fixed grammar, simulation descriptors are not a real-execution catalog, and native v1 per-invocation UUIDs are not resumable-plan identities. Installed SDK 2.22.0 has structured-JSON and automatic-execution controls, but default HTTP retries/automatic function calling must be overridden in M1. Official provider references identify the chat default's deprecated model alias; M0 chooses explicit `gemini-3.6-flash` for future development while preserving the existing chat configuration. This records a model choice, not live compatibility or model-quality evidence.
+
+The [synthetic acceptance corpus](../../tests/fixtures/assistant-planner-evaluation.json) defines future planner expectations rather than runtime phrase dispatch. M0 changes documentation/test data only; M1 supplies the actual backend connection and M2 supplies the user-facing dynamic behavior. Baseline check results are recorded in the M0 checkpoint after execution; no model call, APK/EAS job, phone test or production operation is used to validate this stage.
+
 ## 2026-11-16 merged planning checkpoint
 
 The user requested one plan combining the original secure cross-platform assistant scope with dynamic AI planning/integration. The [canonical merged plan](merged-implementation-plan.md) and [traceability register](merged-plan-traceability.md) now preserve the original requirements, all 19 prior assistant documents, eight roadmap phases, integration steps I1-I6, D1-D10, gates A-F, ASST-001..010 and TH-01..20. New D11-D14 and scenarios S01-S45 make confirmation UX, offline authority, connector trust, context/recovery and budgets explicit.

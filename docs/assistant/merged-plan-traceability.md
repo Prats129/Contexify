@@ -2,6 +2,8 @@
 
 Reviewed: 2026-11-16. This register accompanies the [canonical merged plan](merged-implementation-plan.md). It is a requirement-to-work map, not proof that pending requirements are implemented or tested.
 
+**M0 implementation checkpoint, 2026-11-16:** subsequent user authorization starts local implementation in sequence. [M0](m0-baseline.md) freezes baseline `4f2ac1f`, selects the first dynamic volume action, records free-tier Gemini / INR 0 paid budget / synthetic-only initial cloud scope, and links [24 acceptance examples](../../tests/fixtures/assistant-planner-evaluation.json). M0's development baseline/initial choices are complete; M1 code, live activation, private-data approval and previously deferred phone/release evidence are not completed by this checkpoint. The original 19-document inventory below remains the historical merge inventory.
+
 Labels: **Old** = retained; **New** = added dynamic-planning/integration work; **Updated** = retained requirement with a changed method/order. **Done** applies only to the artifact named; source completion, automated checks, physical acceptance and release approval are separate states. For original wording, the user's supplied “Contexify — Secure Cross-Platform AI Device Assistant” request and the historical documents below remain the sources. Do not require the local attachment path to exist in another checkout.
 
 ## 1. Original request coverage
