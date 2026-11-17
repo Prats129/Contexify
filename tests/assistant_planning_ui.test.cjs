@@ -21,7 +21,12 @@ const draft = (
     steps,
   },
 });
-function setup(t, platform = "android", reply = async () => draft()) {
+function setup(
+  t,
+  platform = "android",
+  reply = async () => draft(),
+  overrides = {},
+) {
   const old = process.env.EXPO_PUBLIC_ASSISTANT_EXECUTION_ENABLED;
   process.env.EXPO_PUBLIC_ASSISTANT_EXECUTION_ENABLED = "true";
   t.after(() => {
@@ -63,6 +68,7 @@ function setup(t, platform = "android", reply = async () => draft()) {
     },
     cancel() {},
   };
+  Object.assign(controls, overrides);
   const ui = assistantUI(platform, {
     onClose() {},
     voiceAllowed: true,
@@ -243,4 +249,173 @@ test("browser shows the dynamic plan without a device effect and clears it on bl
   f.ui.emit("blur");
   assert.equal(f.ui.find("textarea").props.value, "");
   assert.equal(f.ui.find("input").props.checked, false);
+});
+
+const localContextId = "33333333-3333-4333-8333-333333333333";
+const localReading = () => ({
+  protocol_version: 1,
+  capability_id: "media_volume.set",
+  context_id: localContextId,
+  min_index: 0,
+  max_index: 100,
+  current_index: 50,
+  expires_in_ms: 30000,
+});
+const clarificationReply = (device) => ({
+  ...draft(device),
+  proposal: {
+    mode: "proposal",
+    status: "needs_clarification",
+    reason: "relative_value",
+  },
+});
+function chooseRelative(f, amount = "10") {
+  f.ui.find("TouchableOpacity", "Media volume").props.onPress();
+  f.ui.render();
+  f.ui.find("TouchableOpacity", "Decrease by").props.onPress();
+  f.ui.render();
+  f.ui.find("TextInput", "Clarification amount").props.onChangeText(amount);
+  f.ui.render();
+  f.ui.find("TouchableOpacity", "Percentage points").props.onPress();
+  f.ui.render();
+}
+
+test("clarification asks for explicit fields and local-read consent before a conditional native change", async (t) => {
+  const conditional = [];
+  let reads = 0;
+  const f = setup(t, "android", async () => clarificationReply(deviceId), {
+    readVolumeContext: async () => {
+      reads++;
+      return localReading();
+    },
+    changeVolumeFromContext: async (user, percent, context) => {
+      conditional.push({ user, percent, context });
+      return {
+        outcome: "verified",
+        requested_percent: percent,
+        observed_percent: percent,
+        receipt_recorded: true,
+      };
+    },
+  });
+  f.send();
+  await f.ui.flush();
+  assert.match(f.ui.text(), /Clarify your command/);
+  f.ui.find("TouchableOpacity", "Review clarified command").props.onPress();
+  f.ui.render();
+  assert.match(f.ui.text(), /whole-number/);
+  assert.equal(reads, 0);
+  chooseRelative(f);
+  f.ui.find("TouchableOpacity", "Review clarified command").props.onPress();
+  await f.ui.flush();
+  assert.match(f.ui.text(), /Allow the one local/);
+  assert.equal(reads, 0);
+  f.ui.find("TouchableOpacity", "Allow one local").props.onPress();
+  f.ui.render();
+  f.ui.find("TouchableOpacity", "Review clarified command").props.onPress();
+  await f.ui.flush();
+  assert.equal(reads, 1);
+  assert.deepEqual(conditional, [
+    { user: userId, percent: 40, context: localContextId },
+  ]);
+  assert.equal(f.calls.length, 0); // The legacy absolute bridge is not substituted.
+  assert.match(f.ui.text(), /Current media volume: step 50 of 100/);
+  assert.equal(
+    f.requests.filter((value) => value.path === "/proposals").length,
+    1,
+  );
+  assert.doesNotMatch(
+    JSON.stringify(f.requests.map((value) => value.body)),
+    /current_index|context_id/,
+  );
+});
+
+test("out-of-range clarification is visible and neither clamped nor executed", async (t) => {
+  let reads = 0;
+  const f = setup(t, "android", async () => clarificationReply(deviceId), {
+    readVolumeContext: async () => {
+      reads++;
+      return localReading();
+    },
+    changeVolumeFromContext: async () => assert.fail("No effect"),
+  });
+  f.send();
+  await f.ui.flush();
+  chooseRelative(f, "60");
+  f.ui.find("TouchableOpacity", "Allow one local").props.onPress();
+  f.ui.render();
+  f.ui.find("TouchableOpacity", "Review clarified command").props.onPress();
+  await f.ui.flush();
+  assert.match(f.ui.text(), /0–70% media-volume limit/);
+  assert.equal(f.calls.length, 0);
+  assert.equal(reads, 1);
+  assert.equal(
+    f.ui.find("TouchableOpacity", "Allow one local").props.accessibilityState
+      .checked,
+    false,
+  );
+});
+
+test("cancelled clarification discards a late local reading before native execution", async (t) => {
+  let resolve;
+  const f = setup(t, "android", async () => clarificationReply(deviceId), {
+    readVolumeContext: () =>
+      new Promise((yes) => {
+        resolve = yes;
+      }),
+    changeVolumeFromContext: async () => assert.fail("No effect"),
+  });
+  f.send();
+  await f.ui.flush();
+  chooseRelative(f);
+  f.ui.find("TouchableOpacity", "Allow one local").props.onPress();
+  f.ui.render();
+  f.ui.find("TouchableOpacity", "Review clarified command").props.onPress();
+  await f.ui.flush();
+  f.ui.find("TouchableOpacity", "Clear / cancel").props.onPress();
+  f.ui.render();
+  resolve(localReading());
+  await f.ui.flush();
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.ui.find("TextInput").props.value, "");
+  assert.doesNotMatch(f.ui.text(), /Current media volume:/);
+});
+
+test("old context builds never fall back to an absolute effect after relative clarification", async (t) => {
+  const f = setup(t, "android", async () => clarificationReply(deviceId));
+  f.send();
+  await f.ui.flush();
+  chooseRelative(f);
+  f.ui.find("TouchableOpacity", "Allow one local").props.onPress();
+  f.ui.render();
+  f.ui.find("TouchableOpacity", "Review clarified command").props.onPress();
+  await f.ui.flush();
+  assert.match(f.ui.text(), /compatible Android/);
+  assert.equal(f.calls.length, 0);
+});
+
+test("browser clarification can choose an exact preview but cannot invent a phone reading", async (t) => {
+  const f = setup(t, "web", async () => clarificationReply(null));
+  f.send();
+  await f.ui.flush();
+  f.ui
+    .find("select", "Clarification target")
+    .props.onChange({ target: { value: "media_volume.set" } });
+  f.ui.render();
+  f.ui
+    .find("select", "Clarification operation")
+    .props.onChange({ target: { value: "set" } });
+  f.ui.render();
+  f.ui
+    .find("input", "Clarification amount")
+    .props.onChange({ target: { value: "40" } });
+  f.ui.render();
+  f.ui.find("button", "Review clarified command").props.onClick();
+  await f.ui.flush();
+  assert.match(f.ui.text(), /Set media volume to 40%/);
+  assert.equal(f.calls.length, 0);
+  assert.equal(
+    f.requests.filter((value) => value.path === "/proposals").length,
+    1,
+  );
 });

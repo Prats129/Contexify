@@ -4,6 +4,8 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.app.KeyguardManager
 import android.content.Context
+import android.media.AudioManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -38,16 +40,52 @@ internal class PercentControlExecutor(
   private val generation = AtomicLong(0)
   private val main = Handler(Looper.getMainLooper())
   private var dialog: AlertDialog? = null // Access only on the main thread.
+  private val contexts = VolumeContextStore()
 
   fun cancel() {
-    generation.incrementAndGet()
-    main.post { dialog?.dismiss() }
+    val cancelled = generation.incrementAndGet()
+    main.post {
+      contexts.invalidateBefore(cancelled)
+      dialog?.dismiss()
+    }
   }
 
   fun begin(): Long {
     check(Looper.myLooper() == Looper.getMainLooper())
     check(running.compareAndSet(false, true)) { "A device-control confirmation is already in progress." }
+    contexts.clear()
     return generation.get()
+  }
+
+  private fun volumeState(): Triple<Int, Int, Int> {
+    check(control.mode == "volume")
+    val audio = context().getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    check(!audio.isVolumeFixed)
+    val minimum = if (Build.VERSION.SDK_INT >= 28) audio.getStreamMinVolume(AudioManager.STREAM_MUSIC) else 0
+    return Triple(minimum, audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC), audio.getStreamVolume(AudioManager.STREAM_MUSIC))
+  }
+
+  fun readVolumeContext(origin: String, user: String, installation: String): Map<String, Any> {
+    check(Looper.myLooper() == Looper.getMainLooper() && !running.get())
+    enabled(); active(generation.get()); binding(origin, user, uuid(installation))
+    val state = volumeState()
+    val snapshot = VolumeContext(UUID.randomUUID().toString(), origin, user, installation,
+      state.first, state.second, state.third, generation.get(), SystemClock.elapsedRealtime() + 30000)
+    contexts.put(snapshot)
+    return mapOf("protocol_version" to 1, "capability_id" to "media_volume.set", "context_id" to snapshot.id,
+      "current_index" to snapshot.index, "min_index" to snapshot.minimum, "max_index" to snapshot.maximum, "expires_in_ms" to 30000)
+  }
+
+  fun beginWithContext(id: String): Pair<Long, VolumeContext> {
+    check(Looper.myLooper() == Looper.getMainLooper())
+    val snapshot = contexts.take(uuid(id), generation.get(), SystemClock.elapsedRealtime())
+    return begin() to snapshot
+  }
+
+  private fun checkContext(snapshot: VolumeContext?, origin: String, user: String, installation: String, ticket: Long) {
+    if (snapshot == null) return
+    val state = volumeState()
+    snapshot.requireCurrent(origin, user, installation, state.first, state.second, state.third, ticket, SystemClock.elapsedRealtime())
   }
 
   private fun <T> onMain(block: () -> T): T {
@@ -161,7 +199,7 @@ internal class PercentControlExecutor(
     return payload
   }
 
-  private fun confirm(percent: Int, target: Int, maximum: Int, expiry: Double, ticket: Long): Boolean {
+  private fun confirm(percent: Int, target: Int, maximum: Int, expiry: Double, ticket: Long, contextDetails: String = "", checkContext: () -> Unit = {}): Boolean {
     val approved = AtomicBoolean(false)
     val done = CountDownLatch(1)
     val valid = AtomicBoolean(true)
@@ -171,10 +209,10 @@ internal class PercentControlExecutor(
       check(dialog == null)
       val shown = AlertDialog.Builder(requireNotNull(activity()))
         .setTitle(control.title)
-        .setMessage(control.confirmation(percent, target, maximum))
+        .setMessage(control.confirmation(percent, target, maximum) + contextDetails)
         .setPositiveButton(control.confirmationButton) { _, _ ->
           if (valid.get() && System.currentTimeMillis() / 1000.0 < expiry) {
-            approved.set(runCatching { active(ticket); true }.getOrDefault(false))
+            approved.set(runCatching { active(ticket); checkContext(); true }.getOrDefault(false))
           }
         }.setNegativeButton("Cancel", null).create()
       dialog = shown
@@ -232,7 +270,7 @@ internal class PercentControlExecutor(
     check(directory.delete())
   }
 
-  fun execute(origin: String, user: String, installation: String, management: String, percent: Int, ticket: Long): Map<String, Any?> {
+  fun execute(origin: String, user: String, installation: String, management: String, percent: Int, ticket: Long, expectedContext: VolumeContext? = null): Map<String, Any?> {
     var claimed = false
     var outcome = "failed"
     var observed: Int? = null
@@ -246,6 +284,7 @@ internal class PercentControlExecutor(
       onMain { enabled(); active(ticket); binding(origin, user, installation) }
       val limits = onMain {
         active(ticket)
+        checkContext(expectedContext, origin, user, installation, ticket)
         control.inspect(context(), requireNotNull(activity()), percent)
       }
       maximum = limits.second
@@ -265,11 +304,20 @@ internal class PercentControlExecutor(
         .put("expected_revision", revision).put("challenge_id", challenge.getString("challenge_id")).put("signature", sign(installation, payload))
       val challenge = request("/authorization-challenge", JSONObject().put("expected_revision", 1))
       val authorization = validate(challenge, "assistant_${control.mode}_authorize", 1)
-      if (!confirm(percent, limits.third, limits.second, challenge.getDouble("expires_at"), ticket)) {
+      val confirmationExpiry = expectedContext?.let {
+        minOf(challenge.getDouble("expires_at"), System.currentTimeMillis() / 1000.0 +
+          (it.deadline - SystemClock.elapsedRealtime()).coerceAtLeast(0) / 1000.0)
+      } ?: challenge.getDouble("expires_at")
+      val contextDetails = expectedContext?.let {
+        "\n\nBased on media-volume step ${it.index} of ${it.maximum}. If that reading changes, this request stops."
+      }.orEmpty()
+      if (!confirm(percent, limits.third, limits.second, confirmationExpiry, ticket, contextDetails) {
+          checkContext(expectedContext, origin, user, installation, ticket)
+        }) {
         outcome = "cancelled"
         if (ticket == generation.get()) runCatching { request("/cancel", JSONObject()) }
       } else {
-        onMain { active(ticket); binding(origin, user, installation) }
+        onMain { active(ticket); binding(origin, user, installation); checkContext(expectedContext, origin, user, installation, ticket) }
         val permit = request("/authorize", proof(challenge, authorization, 1))
         require(permit.getInt("action_revision") == 2)
         val claimChallenge = permit.getJSONObject("claim_challenge")
@@ -288,6 +336,7 @@ internal class PercentControlExecutor(
         onMain {
           active(ticket); enabled(); binding(origin, user, installation)
           check(SystemClock.elapsedRealtime() < monotonicExpiry && System.currentTimeMillis() / 1000.0 < claimExpiry)
+          checkContext(expectedContext, origin, user, installation, ticket)
           val observation = control.apply(context(), requireNotNull(activity()), percent, limits)
           observed = observation.second
           outcome = observation.first

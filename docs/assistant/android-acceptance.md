@@ -50,3 +50,13 @@ Cancellation after approval may race an already-dispatched effect. In that case 
 ## Completion boundary
 
 The source implementation batch can be closed **with deferred acceptance**. Do not mark the full verification checkpoint or production readiness complete from the basic volume success, automated totals or user-directed postponement. Physical privacy/lifecycle/key/restore tests, iOS and deployed operational gates remain on [the implementation plan](implementation-plan.md). No permission to simplify confirmation policy or enable production execution is inferred from this deferral.
+
+## M3 additional physical acceptance — deferred
+
+The M3 settings-context source and native unit compilation are recorded in [M3](m3-context-clarification.md). These checks are **Deferred** until the user resumes device testing and a compatible binary is separately delivered; they do not replace the existing checklist above.
+
+- Verify one local media-volume read occurs only after the separate consent, and the reported indexes match the phone. Raw context/relative-answer fields must not enter AI/planning requests or persist as new context history. The existing execution backend still receives the final target and result evidence.
+- From the same baseline, compare 10 percentage points versus 10 percent of current value; inspect rounding/Android-step disclosure and the exact native target. No out-of-policy clamping or unrepresentable/no-op success is allowed.
+- Change physical/media volume or device limits while native confirmation is open; approval must not apply a target derived from a mismatched baseline. Check context expiry, Cancel, lock, background/return and account/key changes. There must be no automatic recomputation or effect replay.
+- Check one-use/replaced context IDs and an old APK: relative requests must fail safely without substituting an absolute write. Existing absolute volume/brightness controls must retain their own scopes and native confirmation.
+- Verify ambiguous inputs and prior-target references require explicit selection; brightness/browser restrictions and Clear/Close/local-read withdrawal guidance remain visible and accessible. Test actual AudioManager/routing races; unit tests do not establish hardware guarantees.

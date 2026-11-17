@@ -111,6 +111,16 @@ class AssistantDeviceSecurityModule : Module() {
       }
     }.runOnQueue(Queues.MAIN)
     AsyncFunction("cancelVolume") { volume.cancel() }.runOnQueue(Queues.MAIN)
+    AsyncFunction("readVolumeContext") { origin: String, user: String, installation: String ->
+      volume.readVolumeContext(origin, user, installation)
+    }.runOnQueue(Queues.MAIN)
+    AsyncFunction("executeVolumeFromContext") { origin: String, user: String, installation: String, management: String, percent: Int, contextId: String, promise: Promise ->
+      val (ticket, snapshot) = volume.beginWithContext(contextId)
+      kotlin.concurrent.thread(name = "AssistantContextVolume", isDaemon = true) {
+        try { promise.resolve(volume.execute(origin, user, installation, management, percent, ticket, snapshot)) }
+        catch (_: Exception) { promise.reject("ERR_VOLUME_CONTEXT", "Volume context expired or changed. Review a fresh command.", null) }
+      }
+    }.runOnQueue(Queues.MAIN)
     AsyncFunction("executeBrightness") { origin: String, user: String, installation: String, management: String, percent: Int, promise: Promise ->
       val ticket = brightness.begin()
       kotlin.concurrent.thread(name = "AssistantBrightness", isDaemon = true) {

@@ -26,9 +26,10 @@ export interface CommandPlanner {
   close(): void;
 }
 export interface ReviewedCommand {
-  readonly source: "local" | "planner";
+  readonly source: "local" | "planner" | "clarification";
   readonly expiresAt: number;
   readonly actions: readonly Readonly<AssistantAction>[];
+  readonly contextId?: string;
 }
 
 export class PlanningError extends Error {
@@ -44,8 +45,7 @@ const uuid =
 const reasons: Record<PlanningFeedback["reason"], string> = {
   missing_target: "Which supported target do you mean?",
   missing_value: "What exact percentage do you want?",
-  relative_value:
-    "Use an exact percentage. Relative changes are not available yet.",
+  relative_value: "Choose the target, amount and units for this change.",
   ambiguous_request:
     "Please give one clear command with an exact target and value.",
   unsupported_request:
@@ -163,10 +163,12 @@ export function reviewedCommand(
   actions: readonly AssistantAction[],
   source: ReviewedCommand["source"],
   expiresAt: number,
+  contextId?: string,
 ): ReviewedCommand {
   return Object.freeze({
     source,
     expiresAt,
+    ...(contextId ? { contextId } : {}),
     actions: Object.freeze(
       actions.map((action) => Object.freeze(validateAction(action))),
     ),
@@ -185,7 +187,7 @@ export function reviewedPercent(
     review.expiresAt <= Date.now() ||
     !Array.isArray(review.actions) ||
     review.actions.length !== 1 ||
-    (review.source === "planner" && capability !== "media_volume.set")
+    (review.source !== "local" && capability !== "media_volume.set")
   )
     return null;
   try {

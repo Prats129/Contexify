@@ -6,6 +6,7 @@ import {
   type PlanningAccess,
 } from "@contexify/assistant-core";
 import { createBrowserVoiceAdapter } from "../../services/assistant_voice";
+import { ClarificationForm } from "./ClarificationForm";
 
 export function AssistantPreview({
   onClose,
@@ -91,6 +92,20 @@ export function AssistantPreview({
           Close
         </button>
       </div>
+      {state?.clarification && (
+        <ClarificationForm
+          key={state.clarification.id}
+          pending={state.clarification}
+          busy={busy}
+          onSubmit={(answer, consent) => {
+            void sessionRef.current?.clarify(
+              answer,
+              consent,
+              state.clarification!.id,
+            );
+          }}
+        />
+      )}
       <p className="text-sm text-(--text-muted) mb-4">
         Type or dictate a command, then review the steps. This preview cannot
         change your phone or open apps.

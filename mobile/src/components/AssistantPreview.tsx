@@ -32,6 +32,7 @@ import {
   describeBrightnessResult,
   reviewedBrightnessPercent,
 } from "../services/assistant_brightness";
+import { ClarificationForm } from "./ClarificationForm";
 
 export function AssistantPreview({
   theme,
@@ -97,11 +98,12 @@ export function AssistantPreview({
       AppState.currentState !== "active"
     )
       return;
-    const percent = setup
+    const selected = setup
       ? null
-      : (sessionRef.current?.takeReviewedPercent(
+      : (sessionRef.current?.takeReviewedControl(
           kind === "volume" ? "media_volume.set" : "brightness.set_app",
         ) ?? null);
+    const percent = selected?.percent ?? null;
     if (!setup && percent === null) return;
     controlRunning.current = true;
     const operation = ++controlOperation.current;
@@ -120,8 +122,17 @@ export function AssistantPreview({
             "Device enrollment is ready. Review one supported command, then request its confirmation.",
           );
       } else {
-        const result =
-          kind === "volume"
+        const result = selected?.contextId
+          ? await (volumeControls.changeVolumeFromContext
+              ? volumeControls.changeVolumeFromContext(
+                  volumeUserId,
+                  percent!,
+                  selected.contextId,
+                )
+              : Promise.reject(
+                  new Error("A compatible context-aware build is required."),
+                ))
+          : kind === "volume"
             ? await volumeControls.changeVolume(volumeUserId, percent!)
             : await volumeControls.changeBrightness!(volumeUserId, percent!);
         if (operation === controlOperation.current)
@@ -146,7 +157,8 @@ export function AssistantPreview({
   useEffect(() => {
     if (
       volumeAllowed &&
-      state?.reviewed?.source === "planner" &&
+      state?.reviewed &&
+      state.reviewed.source !== "local" &&
       reviewedVolumePercent(state.reviewed) !== null
     )
       void runControl(false);
@@ -224,6 +236,9 @@ export function AssistantPreview({
         ? createCommandPlanner((signal) =>
             volumeControls.planningContext!(volumeUserId, signal),
           )
+        : undefined,
+      volumeUserId && volumeControls?.readVolumeContext
+        ? (signal) => volumeControls.readVolumeContext!(volumeUserId, signal)
         : undefined,
     );
     sessionRef.current = session;
@@ -389,6 +404,21 @@ export function AssistantPreview({
               )}
               {button("Clear / cancel", clearCommand)}
             </View>
+            {state?.clarification && (
+              <ClarificationForm
+                key={state.clarification.id}
+                pending={state.clarification}
+                theme={theme}
+                busy={busy}
+                onSubmit={(answer, consent) => {
+                  void sessionRef.current?.clarify(
+                    answer,
+                    consent,
+                    state.clarification!.id,
+                  );
+                }}
+              />
+            )}
             {volumeUserId &&
               volumeControls?.planningContext &&
               Platform.OS === "android" && (

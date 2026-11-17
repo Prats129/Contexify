@@ -169,8 +169,20 @@ export function createAssistantDeviceSecurity(
     mode: "volume" | "brightness",
     userId: string,
     percent: number,
+    contextId?: string,
   ): Promise<VolumeExecutionResult> {
     const bridge = controlBridge(mode);
+    if (
+      contextId !== undefined &&
+      (mode !== "volume" ||
+        typeof bridge.executeVolumeFromContext !== "function" ||
+        !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(
+          contextId,
+        ))
+    )
+      throw new Error(
+        "Relative control requires a fresh context and compatible Android build.",
+      );
     if (
       !Number.isInteger(percent) ||
       percent < (mode === "volume" ? 0 : 10) ||
@@ -195,21 +207,30 @@ export function createAssistantDeviceSecurity(
         throw new Error("Device control request was cancelled.");
       // The native module obtains its own real scope and owns every authorization/OS step.
       const result =
-        mode === "volume"
-          ? await bridge.executeVolume!(
+        contextId !== undefined
+          ? await bridge.executeVolumeFromContext!(
               binding.host,
               userId,
               binding.installationId,
               management.access_token,
               percent,
+              contextId,
             )
-          : await bridge.executeBrightness!(
-              binding.host,
-              userId,
-              binding.installationId,
-              management.access_token,
-              percent,
-            );
+          : mode === "volume"
+            ? await bridge.executeVolume!(
+                binding.host,
+                userId,
+                binding.installationId,
+                management.access_token,
+                percent,
+              )
+            : await bridge.executeBrightness!(
+                binding.host,
+                userId,
+                binding.installationId,
+                management.access_token,
+                percent,
+              );
       if (generation !== version)
         throw new Error(
           "The session changed. Check the device setting before trying again.",
@@ -222,6 +243,58 @@ export function createAssistantDeviceSecurity(
     }
   }
   const api = {
+    async readVolumeContext(
+      userId: string,
+      signal: AbortSignal,
+    ): Promise<unknown> {
+      const bridge = controlBridge("volume");
+      if (
+        !bridge.readVolumeContext ||
+        !bridge.executeVolumeFromContext ||
+        controlBusy ||
+        busy ||
+        signal.aborted
+      )
+        throw new Error(
+          "Fresh context requires a compatible idle Android build.",
+        );
+      const generation = version;
+      const binding = await readBinding(userId);
+      const selectedHost = await host();
+      const url = `${selectedHost}/api/v1/assistant/security/device-session`;
+      const parent = (await authHeaders(url)).Authorization;
+      if (
+        !binding ||
+        !parent ||
+        generation !== version ||
+        signal.aborted ||
+        controlBusy ||
+        busy
+      )
+        throw new Error("Context reading cancelled.");
+      const result = await bridge.readVolumeContext(
+        binding.host,
+        userId,
+        binding.installationId,
+      );
+      if (
+        generation !== version ||
+        signal.aborted ||
+        selectedHost !== (await host()) ||
+        parent !== (await authHeaders(url)).Authorization ||
+        generation !== version ||
+        signal.aborted
+      )
+        throw new Error("Context reading cancelled.");
+      return result;
+    },
+    async changeVolumeFromContext(
+      userId: string,
+      percent: number,
+      contextId: string,
+    ): Promise<VolumeExecutionResult> {
+      return changeControl("volume", userId, percent, contextId);
+    },
     async planningContext(
       userId: string,
       signal: AbortSignal,

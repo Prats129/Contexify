@@ -8,6 +8,8 @@ const { createTypeScriptLoader } = require("./typescript_modules.cjs");
 function assistantUI(platform, props) {
   const slots = [],
     events = new Map();
+  let frame = slots;
+  const children = new Map();
   let index = 0,
     dirty = false,
     effects = [],
@@ -19,10 +21,10 @@ function assistantUI(platform, props) {
     a.every((value, i) => Object.is(value, b[i]));
   const react = {
     useRef(value) {
-      return (slots[index++] ||= { current: value });
+      return (frame[index++] ||= { current: value });
     },
     useState(initial) {
-      const slot = (slots[index++] ||= { value: initial });
+      const slot = (frame[index++] ||= { value: initial });
       return [
         slot.value,
         (value) => {
@@ -33,12 +35,13 @@ function assistantUI(platform, props) {
     },
     useEffect(run, deps) {
       const i = index++;
-      if (!slots[i] || !same(slots[i].deps, deps)) {
-        const previous = slots[i];
-        slots[i] = { deps };
+      const active = frame;
+      if (!active[i] || !same(active[i].deps, deps)) {
+        const previous = active[i];
+        active[i] = { deps };
         effects.push(() => {
           previous?.cleanup?.();
-          slots[i].cleanup = run();
+          active[i].cleanup = run();
         });
       }
     },
@@ -50,7 +53,21 @@ function assistantUI(platform, props) {
   };
   const appState = { currentState: "active", addEventListener: add };
   const dialog = { showModal() {}, close() {} };
-  const jsx = (type, props) => {
+  const jsx = (type, props, key) => {
+    if (typeof type === "function") {
+      const id = `${type.name}:${key ?? ""}`;
+      if (!children.has(id)) children.set(id, []);
+      const parentFrame = frame,
+        parentIndex = index;
+      frame = children.get(id);
+      index = 0;
+      try {
+        return type(props);
+      } finally {
+        frame = parentFrame;
+        index = parentIndex;
+      }
+    }
     if (props?.ref) props.ref.current = dialog;
     return { type, props: props || {} };
   };
@@ -101,6 +118,37 @@ function assistantUI(platform, props) {
     document,
     window,
     require(name) {
+      if (name === "./ClarificationForm") {
+        const filename =
+          platform === "android"
+            ? "mobile/src/components/ClarificationForm.tsx"
+            : "frontend/src/components/Modals/ClarificationForm.tsx";
+        const code = ts.transpileModule(fs.readFileSync(filename, "utf8"), {
+          compilerOptions: {
+            module: ts.ModuleKind.CommonJS,
+            target: ts.ScriptTarget.ES2020,
+            jsx: ts.JsxEmit.ReactJSX,
+          },
+        }).outputText;
+        const output = {};
+        vm.runInNewContext(code, {
+          exports: output,
+          require(name) {
+            if (name === "react") return react;
+            if (name === "react/jsx-runtime") return { jsx, jsxs: jsx };
+            if (name === "@contexify/assistant-core") return core;
+            if (name === "react-native")
+              return {
+                Text: "Text",
+                TextInput: "TextInput",
+                TouchableOpacity: "TouchableOpacity",
+                View: "View",
+              };
+            throw Error("Unexpected clarification UI import " + name);
+          },
+        });
+        return output;
+      }
       if (name === "react") return react;
       if (name === "react/jsx-runtime") return { jsx, jsxs: jsx };
       if (name === "@contexify/assistant-core") return core;
@@ -160,7 +208,12 @@ function assistantUI(platform, props) {
       .join(" ");
   const find = (type, label) =>
     nodes(tree).find(
-      (node) => node?.type === type && (!label || text(node).includes(label)),
+      (node) =>
+        node?.type === type &&
+        (!label ||
+          text(node).includes(label) ||
+          node.props.accessibilityLabel === label ||
+          node.props["aria-label"] === label),
     );
   render();
   return {
@@ -180,6 +233,7 @@ function assistantUI(platform, props) {
     },
     unmount() {
       slots.forEach((slot) => slot?.cleanup?.());
+      children.forEach((slots) => slots.forEach((slot) => slot?.cleanup?.()));
     },
   };
 }

@@ -1,6 +1,12 @@
 import { planCommand } from "./planner";
 import { VoiceInputError } from "./voice-errors";
 import {
+  resolveClarification,
+  type PendingClarification,
+  type PercentTarget,
+  type VolumeContextReader,
+} from "./clarification";
+import {
   PlanningError,
   planningFeedback,
   reviewedCommand,
@@ -45,6 +51,7 @@ export interface CommandSessionState {
   consent: boolean;
   planningConsent: boolean;
   reviewed: ReviewedCommand | null;
+  clarification: PendingClarification | null;
   preview: readonly CommandPreview[] | null;
   message: string;
   availability: VoiceAvailability;
@@ -67,6 +74,7 @@ export function createCommandSession(
   adapter: ForegroundVoiceAdapter,
   platform: AssistantPlatform,
   planner?: CommandPlanner,
+  readVolumeContext?: VolumeContextReader,
 ) {
   let state: CommandSessionState = {
     transcript: "",
@@ -75,6 +83,7 @@ export function createCommandSession(
     consent: false,
     planningConsent: false,
     reviewed: null,
+    clarification: null,
     preview: null,
     message: "",
     availability: {
@@ -88,6 +97,16 @@ export function createCommandSession(
   let timer: ReturnType<typeof setTimeout> | undefined;
   let rejectPending: ((error: Error) => void) | undefined;
   let planningRequest: AbortController | null = null;
+  let previousTarget: { capability: PercentTarget; expiresAt: number } | null =
+    null;
+  function remember(review: ReviewedCommand | null) {
+    const capability =
+      review?.actions.length === 1 ? review.actions[0].capability_id : null;
+    previousTarget =
+      capability === "media_volume.set" || capability === "brightness.set_app"
+        ? { capability, expiresAt: Date.now() + 60000 }
+        : null;
+  }
   const subscribers = new Set<() => void>();
   function update(patch: Partial<CommandSessionState>) {
     if (disposed) return;
@@ -110,7 +129,7 @@ export function createCommandSession(
     rejectPending = undefined;
     clearTimeout(timer);
     stopAdapter();
-    update({ reviewed: null });
+    update({ reviewed: null, clarification: null });
   }
   function deadline(milliseconds: number) {
     clearTimeout(timer);
@@ -193,7 +212,10 @@ export function createCommandSession(
     setPlanningConsent(consent: boolean) {
       if (disposed) return;
       invalidate();
-      if (!consent) planner?.close();
+      if (!consent) {
+        planner?.close();
+        previousTarget = null;
+      }
       update({
         planningConsent: consent === true && Boolean(planner),
         phase: "idle",
@@ -252,9 +274,27 @@ export function createCommandSession(
                   response.expires_at * 1000,
                 )
               : null;
+          if (review) remember(review);
           update({
             phase: "idle",
             reviewed: review,
+            clarification:
+              proposal.status === "needs_clarification" &&
+              [
+                "missing_target",
+                "missing_value",
+                "relative_value",
+                "ambiguous_request",
+              ].includes(proposal.reason)
+                ? Object.freeze({
+                    id: version,
+                    expiresAt: Date.now() + 60000,
+                    previousTarget:
+                      previousTarget && previousTarget.expiresAt > Date.now()
+                        ? previousTarget.capability
+                        : null,
+                  })
+                : null,
             preview: review
               ? review.actions.map((action) => ({
                   description: describeAction(action),
@@ -288,17 +328,19 @@ export function createCommandSession(
         return;
       }
       const result = planCommand(state.transcript, "user");
+      const localReview =
+        result.status === "proposed"
+          ? reviewedCommand(
+              result.proposal.steps.map((step) => step.action),
+              "local",
+              Date.now() + 180000,
+            )
+          : null;
+      if (localReview) remember(localReview);
       update({
         phase: "idle",
         partial: "",
-        reviewed:
-          result.status === "proposed"
-            ? reviewedCommand(
-                result.proposal.steps.map((step) => step.action),
-                "local",
-                Date.now() + 180000,
-              )
-            : null,
+        reviewed: localReview,
         preview:
           result.status === "proposed"
             ? result.proposal.steps.map((step) => ({
@@ -315,11 +357,96 @@ export function createCommandSession(
     takeReviewedPercent(
       capability: "media_volume.set" | "brightness.set_app",
     ): number | null {
+      if (state.reviewed?.contextId) return null; // Never discard a required native precondition.
+      return session.takeReviewedControl(capability)?.percent ?? null;
+    },
+    takeReviewedControl(
+      capability: "media_volume.set" | "brightness.set_app",
+    ): { percent: number; contextId?: string } | null {
       if (disposed || state.phase !== "idle" || platform !== "android")
         return null;
       const percent = reviewedPercent(state.reviewed, capability);
-      if (percent !== null) update({ reviewed: null });
-      return percent;
+      if (percent === null) return null;
+      const contextId = state.reviewed?.contextId;
+      update({ reviewed: null });
+      return { percent, ...(contextId ? { contextId } : {}) };
+    },
+    async clarify(
+      answer: unknown,
+      allowLocalRead: boolean,
+      questionId: number,
+    ) {
+      const pending = state.clarification;
+      if (
+        disposed ||
+        state.phase !== "idle" ||
+        !state.planningConsent ||
+        !pending
+      )
+        return;
+      if (questionId !== pending.id) {
+        update({
+          message: "The clarification changed. Review the current question.",
+        });
+        return;
+      }
+      if (pending.expiresAt <= Date.now()) {
+        update({
+          clarification: null,
+          message: "The clarification expired. Submit a new command.",
+        });
+        return;
+      }
+      invalidate();
+      const version = generation;
+      const controller = new AbortController();
+      planningRequest = controller;
+      update({
+        phase: "processing",
+        clarification: pending,
+        preview: null,
+        message: "Resolving the clarified command locally…",
+      });
+      try {
+        const result = await resolveClarification(
+          answer,
+          platform === "android" ? readVolumeContext : undefined,
+          allowLocalRead,
+          controller.signal,
+        );
+        if (disposed || version !== generation || controller.signal.aborted)
+          return;
+        if (pending.expiresAt <= Date.now())
+          throw new PlanningError(
+            "The clarification expired. Submit a new command.",
+          );
+        remember(result.review);
+        update({
+          phase: "idle",
+          reviewed: result.review,
+          clarification: null,
+          preview: result.review.actions.map((action) => ({
+            description: describeAction(action) + " " + result.summary,
+            availableOnPlatform:
+              platform === "android" &&
+              action.capability_id === "media_volume.set",
+          })),
+          message: result.summary,
+        });
+      } catch (error) {
+        if (!disposed && version === generation && !controller.signal.aborted)
+          update({
+            phase: "idle",
+            reviewed: null,
+            clarification: pending.expiresAt > Date.now() ? pending : null,
+            message:
+              error instanceof PlanningError
+                ? error.message
+                : "Local context is unavailable. Choose an exact percentage instead.",
+          });
+      } finally {
+        if (planningRequest === controller) planningRequest = null;
+      }
     },
     async listen() {
       if (disposed || state.phase !== "idle") return;
@@ -337,6 +464,7 @@ export function createCommandSession(
         partial: "",
         preview: null,
         reviewed: null,
+        clarification: null,
         message: "Starting microphone…",
       });
       try {
@@ -435,6 +563,7 @@ export function createCommandSession(
       if (disposed) return;
       invalidate();
       planner?.close();
+      previousTarget = null;
       update({
         transcript: "",
         partial: "",

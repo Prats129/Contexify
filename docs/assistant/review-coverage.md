@@ -1,5 +1,11 @@
 # Assistant planning review coverage
 
+## 2026-11-17 M3 settings-context checkpoint
+
+Starting from `652ad70`, reviewed/implemented typed local clarification, one-read consent, explicit units/rounding/range handling, bounded previous-target references, shared review/precondition consumption, native/web form wiring and Android context read/conditional execution. [M3 evidence](m3-context-clarification.md) records 157 assistant JavaScript cases, both client type checks, contract verification and offline native-module compilation with 17 passing JUnit cases. Native state stays local; there is no additional AI call or backend data model.
+
+This completes the current settings clarification/source slice, not broader contact/calendar/time integration, free-form conversational memory, live-model evaluation or physical acceptance. No new permission, dependency, configured-data/production action, APK/cloud build, phone access or resumption of deferred acceptance occurred. New context methods require a future compatible delivered binary. Historical audit findings and counts below retain their stated baselines.
+
 ## 2026-11-17 M2 source-integration checkpoint
 
 Starting from `ab37e44`, reviewed/implemented the shared authenticated planning client, strict owner/device/expiry/action validation, immutable consumed review snapshot, native/web parent-bound transport, opt-in command-screen wiring and lifecycle cancellation. Percentage execution now selects the reviewed action rather than reparsing text. AI-mode single-volume review reaches the existing native confirmation directly; browser, compound and dynamic non-volume paths stay previews. [M2 evidence and open acceptance](m2-dynamic-volume.md) records 138 JavaScript and 56 backend cases, both client type checks, focused Ruff/ty, contract/format/syntax/document checks and remaining live/device/privacy gates.
