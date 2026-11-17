@@ -1546,6 +1546,8 @@ export const App: React.FC = () => {
         <AssistantPreview
           key={currentUser?.id ?? "guest"}
           voiceAllowed={isAuthReady && currentUser !== null}
+          planningAccess={apiService.assistantSecurity}
+          planningUserId={isAuthReady ? currentUser?.id : undefined}
           onClose={() => setIsAssistantOpen(false)}
         />
       )}

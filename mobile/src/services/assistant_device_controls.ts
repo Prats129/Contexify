@@ -1,6 +1,8 @@
 import type { PercentExecutionResult } from "../../modules/assistant-device-security";
+import type { PlanningAccess } from "@contexify/assistant-core";
 
 export interface DeviceControls {
+  planningContext?: PlanningAccess["planningContext"];
   enableVolume(userId: string): Promise<void>;
   changeVolume(
     userId: string,

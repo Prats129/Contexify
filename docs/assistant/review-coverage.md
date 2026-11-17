@@ -1,5 +1,11 @@
 # Assistant planning review coverage
 
+## 2026-11-17 M2 source-integration checkpoint
+
+Starting from `ab37e44`, reviewed/implemented the shared authenticated planning client, strict owner/device/expiry/action validation, immutable consumed review snapshot, native/web parent-bound transport, opt-in command-screen wiring and lifecycle cancellation. Percentage execution now selects the reviewed action rather than reparsing text. AI-mode single-volume review reaches the existing native confirmation directly; browser, compound and dynamic non-volume paths stay previews. [M2 evidence and open acceptance](m2-dynamic-volume.md) records 138 JavaScript and 56 backend cases, both client type checks, focused Ruff/ty, contract/format/syntax/document checks and remaining live/device/privacy gates.
+
+Interactive requests no longer have to falsely claim a synthetic case ID: it is optional on the wire, and missing IDs are denied before SDK creation by the unchanged synthetic-only processing policy. No live provider, real settings/database access, native build, phone access or production deployment was used. M2 source completion does not close real language-quality, deployed security/privacy or previously deferred physical acceptance.
+
 ## 2026-11-17 M1 non-live development checkpoint
 
 Starting from M0 commit `189f75c`, implemented/reviewed the separate planning schema, truthful source catalog, consent/parent authorization, endpoint, bounded generation and synthetic-only Gemini adapter; additive v5 metadata migration; generated web/mobile/core types; opt-in configuration and isolated tests. [M1 evidence and remaining gates](m1-planning.md) records 605 backend tests, 111 JavaScript cases, both client type checks and contract verification. New provider settings do not affect chat, and no live provider is bound to the runtime.

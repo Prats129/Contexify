@@ -86,7 +86,8 @@ function fixture(t, overrides = {}) {
     "mobile/src/services/assistant_security.ts",
   ).createAssistantDeviceSecurity(
     overrides.getHost || (async () => binding.host),
-    async () => ({ Authorization: "Bearer fixture-parent" }),
+    overrides.authHeaders ||
+      (async () => ({ Authorization: "Bearer fixture-parent" })),
   );
   return {
     api,

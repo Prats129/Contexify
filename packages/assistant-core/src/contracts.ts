@@ -99,7 +99,7 @@ export type PlanningRequest = {
   grant_id: string;
   source: "user" | "untrusted";
   text: string;
-  synthetic_case_id: string;
+  synthetic_case_id?: string | null;
 };
 
 export type PlanningResponse = {

@@ -1,16 +1,22 @@
 import { useEffect, useRef, useState } from "react";
 import {
   createCommandSession,
+  createCommandPlanner,
   type CommandSessionState,
+  type PlanningAccess,
 } from "@contexify/assistant-core";
 import { createBrowserVoiceAdapter } from "../../services/assistant_voice";
 
 export function AssistantPreview({
   onClose,
   voiceAllowed = false,
+  planningAccess,
+  planningUserId,
 }: {
   onClose: () => void;
   voiceAllowed?: boolean;
+  planningAccess?: PlanningAccess;
+  planningUserId?: string;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const sessionRef = useRef<ReturnType<typeof createCommandSession> | null>(
@@ -23,6 +29,11 @@ export function AssistantPreview({
         voiceAllowed && import.meta.env.VITE_ASSISTANT_VOICE_ENABLED === "true",
       ),
       "web",
+      planningAccess && planningUserId
+        ? createCommandPlanner((signal) =>
+            planningAccess.planningContext(planningUserId, signal),
+          )
+        : undefined,
     );
     sessionRef.current = session;
     setState(session.getSnapshot());
@@ -48,9 +59,13 @@ export function AssistantPreview({
       window.removeEventListener("blur", clear);
       dialog.close();
     };
-  }, [voiceAllowed]);
+  }, [voiceAllowed, planningAccess, planningUserId]);
   const busy = state?.phase !== "idle";
   const capturing = state?.phase === "starting" || state?.phase === "listening";
+  function closePreview() {
+    sessionRef.current?.clear();
+    onClose();
+  }
   const buttonClass =
     "rounded-lg border border-(--border-subtle) px-3 py-2 text-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed";
   return (
@@ -60,7 +75,7 @@ export function AssistantPreview({
       className="m-auto w-[calc(100%-2rem)] max-w-lg max-h-[85dvh] overflow-y-auto rounded-2xl border border-(--border-subtle) bg-(--bg-app) text-(--text-main) p-5 shadow-2xl backdrop:bg-black/60"
       onCancel={(event) => {
         event.preventDefault();
-        onClose();
+        closePreview();
       }}
     >
       <div className="flex items-center justify-between gap-3 mb-3">
@@ -70,7 +85,7 @@ export function AssistantPreview({
         <button
           type="button"
           className={buttonClass}
-          onClick={onClose}
+          onClick={closePreview}
           aria-label="Close assistant preview"
         >
           Close
@@ -91,13 +106,15 @@ export function AssistantPreview({
         autoFocus
         maxLength={1024}
         rows={3}
-        disabled={capturing || state?.phase === "processing"}
+        disabled={
+          capturing || (state?.phase === "processing" && !state.planningConsent)
+        }
         className="w-full rounded-lg border border-(--border-subtle) bg-(--bg-card) p-3 text-sm resize-y"
         value={state?.transcript ?? ""}
         onChange={(event) =>
           sessionRef.current?.setTranscript(event.target.value)
         }
-        placeholder="Set volume to 50% then open Spotify"
+        placeholder="Set media volume to 50%"
       />
       {state?.partial && (
         <p className="text-sm my-2" role="status">
@@ -108,10 +125,10 @@ export function AssistantPreview({
         <button
           type="button"
           className={buttonClass}
-          onClick={() => sessionRef.current?.review()}
+          onClick={() => void sessionRef.current?.review()}
           disabled={busy || !state?.transcript.trim()}
         >
-          Review command
+          {state?.planningConsent ? "Send command" : "Review command"}
         </button>
         <button
           type="button"
@@ -121,6 +138,26 @@ export function AssistantPreview({
           Clear / cancel
         </button>
       </div>
+      {planningAccess && planningUserId && (
+        <label className="flex items-start gap-2 text-sm my-3">
+          <input
+            type="checkbox"
+            checked={state?.planningConsent ?? false}
+            onChange={(event) =>
+              sessionRef.current?.setPlanningConsent(event.target.checked)
+            }
+          />
+          <span>
+            Allow AI planning in this session.
+            <span className="block text-xs text-(--text-muted)">
+              Currently limited to approved public test commands. Do not enter
+              personal information. This browser only shows plans; it cannot
+              change your phone. Voice transcripts are submitted after you
+              finish speaking.
+            </span>
+          </span>
+        </label>
+      )}
       <p className="text-xs text-(--text-muted) mb-3">
         Examples: “open clock”, “brightness to 40 percent”, “set volume to 50%”.
         Preview ranges: media volume 0–70%, app brightness 10–100%. Nothing is

@@ -53,8 +53,8 @@ class PlanningRequest(SecurityModel):
     grant_id: Identifier
     source: Literal["user", "untrusted"]
     text: str = Field(min_length=1, max_length=1024)
-    synthetic_case_id: str = Field(
-        min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$"
+    synthetic_case_id: str | None = Field(
+        default=None, min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$"
     )
 
     @field_validator("text")

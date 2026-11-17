@@ -30,7 +30,7 @@ class ProviderDataScopeError(Exception):
 @dataclass(frozen=True)
 class PlanningInput:
     text: str
-    synthetic_case_id: str
+    synthetic_case_id: str | None
     platform: Platform
 
 
@@ -92,7 +92,10 @@ class GeminiPlanningProvider:
     def validate_input(self, value: PlanningInput) -> None:
         if self._closed:
             raise ProviderUnavailable()
-        if self._cases.get(value.synthetic_case_id) != value.text:
+        if (
+            value.synthetic_case_id is None
+            or self._cases.get(value.synthetic_case_id) != value.text
+        ):
             raise ProviderDataScopeError()
 
     async def propose(

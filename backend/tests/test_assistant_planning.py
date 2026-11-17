@@ -330,6 +330,22 @@ class AssistantPlanningTests(bootstrap.AssistantSecurityFixture):
         self.assertNotIn("synthetic-private-marker", response.text)
         factory.assert_not_called()
 
+    def test_interactive_request_cannot_claim_synthetic_approval(self):
+        body = self.body()
+        body.pop("synthetic_case_id")
+        result = self.send("POST", "/proposals", json=body)
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertIsNone(self.provider.calls[0][0].synthetic_case_id)
+        factory = Mock()
+        self.engine = PlanningEngine(
+            GeminiPlanningProvider(
+                approved_cases={"M0-01": TEXT}, client_factory=factory
+            )
+        )
+        result = self.send("POST", "/proposals", json=body)
+        self.assertEqual(result.status_code, 403)
+        factory.assert_not_called()
+
     def test_device_revocation_and_gate_change_invalidate_late_results(self):
         def revoke_device():
             with database.get_db_connection(write=True) as conn:
@@ -644,6 +660,7 @@ class GeminiAdapterTests(unittest.IsolatedAsyncioTestCase):
         for value in [
             PlanningInput("synthetic-private-marker", "M0-01", "android"),
             PlanningInput(TEXT, "M0-99", "web"),
+            PlanningInput(TEXT, None, "android"),
         ]:
             with self.assertRaises(ProviderDataScopeError):
                 await provider.propose(value, repair=False, timeout=1)

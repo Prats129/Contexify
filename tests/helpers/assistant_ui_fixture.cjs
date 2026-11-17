@@ -1,0 +1,186 @@
+// Render the real assistant components with deterministic hooks and host views.
+// This exercises handlers/lifecycle wiring, not DOM layout or an Android device.
+const fs = require("node:fs");
+const vm = require("node:vm");
+const ts = require("../../frontend/node_modules/typescript");
+const { createTypeScriptLoader } = require("./typescript_modules.cjs");
+
+function assistantUI(platform, props) {
+  const slots = [],
+    events = new Map();
+  let index = 0,
+    dirty = false,
+    effects = [],
+    tree;
+  const same = (a, b) =>
+    a &&
+    b &&
+    a.length === b.length &&
+    a.every((value, i) => Object.is(value, b[i]));
+  const react = {
+    useRef(value) {
+      return (slots[index++] ||= { current: value });
+    },
+    useState(initial) {
+      const slot = (slots[index++] ||= { value: initial });
+      return [
+        slot.value,
+        (value) => {
+          slot.value = typeof value === "function" ? value(slot.value) : value;
+          dirty = true;
+        },
+      ];
+    },
+    useEffect(run, deps) {
+      const i = index++;
+      if (!slots[i] || !same(slots[i].deps, deps)) {
+        const previous = slots[i];
+        slots[i] = { deps };
+        effects.push(() => {
+          previous?.cleanup?.();
+          slots[i].cleanup = run();
+        });
+      }
+    },
+  };
+  const add = (name, fn) => {
+    if (!events.has(name)) events.set(name, new Set());
+    events.get(name).add(fn);
+    return { remove: () => events.get(name).delete(fn) };
+  };
+  const appState = { currentState: "active", addEventListener: add };
+  const dialog = { showModal() {}, close() {} };
+  const jsx = (type, props) => {
+    if (props?.ref) props.ref.current = dialog;
+    return { type, props: props || {} };
+  };
+  const load = createTypeScriptLoader();
+  const core = load("packages/assistant-core/src/index.ts");
+  const voice = {
+    availability: async () => ({
+      recognition: false,
+      synthesis: false,
+      message: "Voice disabled",
+    }),
+    listen: async () => "",
+    stop() {},
+    cancel() {},
+    speak: async () => {},
+    dispose() {},
+  };
+  const document = {
+    visibilityState: "visible",
+    addEventListener: add,
+    removeEventListener: (name, fn) => events.get(name)?.delete(fn),
+  };
+  const window = {
+    addEventListener: add,
+    removeEventListener: document.removeEventListener,
+  };
+  const filename =
+    platform === "android"
+      ? "mobile/src/components/AssistantPreview.tsx"
+      : "frontend/src/components/Modals/AssistantPreview.tsx";
+  const source = fs
+    .readFileSync(filename, "utf8")
+    .replaceAll("import.meta.env.VITE_ASSISTANT_VOICE_ENABLED", '"false"');
+  const code = ts.transpileModule(source, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2020,
+      jsx: ts.JsxEmit.ReactJSX,
+    },
+  }).outputText;
+  const exports = {};
+  vm.runInNewContext(code, {
+    exports,
+    process,
+    AbortController,
+    setTimeout,
+    clearTimeout,
+    document,
+    window,
+    require(name) {
+      if (name === "react") return react;
+      if (name === "react/jsx-runtime") return { jsx, jsxs: jsx };
+      if (name === "@contexify/assistant-core") return core;
+      if (name === "react-native")
+        return {
+          Platform: { OS: "android" },
+          AppState: appState,
+          Keyboard: { dismiss() {} },
+          Modal: "Modal",
+          KeyboardAvoidingView: "KeyboardAvoidingView",
+          View: "View",
+          Text: "Text",
+          TextInput: "TextInput",
+          TouchableOpacity: "TouchableOpacity",
+          ScrollView: "ScrollView",
+        };
+      if (name === "react-native-safe-area-context")
+        return { useSafeAreaInsets: () => ({ top: 0, bottom: 0 }) };
+      if (name.endsWith("/assistant_voice"))
+        return {
+          createMobileVoiceAdapter: () => voice,
+          createBrowserVoiceAdapter: () => voice,
+        };
+      if (name.endsWith("/assistant_volume"))
+        return load("mobile/src/services/assistant_volume.ts");
+      if (name.endsWith("/assistant_brightness"))
+        return load("mobile/src/services/assistant_brightness.ts");
+      if (name.endsWith("/assistant_device_readiness"))
+        return {
+          readDeviceControlReadiness: async () => ({}),
+          describeDeviceControlReadiness: () => "checked",
+        };
+      throw Error("Unexpected assistant UI import: " + name);
+    },
+  });
+  function render(changes) {
+    props = { ...props, ...changes };
+    for (let iteration = 0; iteration < 20; iteration++) {
+      index = 0;
+      dirty = false;
+      effects = [];
+      tree = exports.AssistantPreview(props);
+      effects.forEach((run) => run());
+      if (!dirty) return tree;
+    }
+    throw Error("Assistant render did not settle");
+  }
+  function nodes(value) {
+    if (value == null || typeof value === "boolean") return [];
+    if (Array.isArray(value)) return value.flatMap((item) => nodes(item));
+    if (typeof value !== "object") return [value];
+    return [value, ...nodes(value.props.children)];
+  }
+  const text = (value) =>
+    nodes(value)
+      .filter((item) => typeof item === "string" || typeof item === "number")
+      .join(" ");
+  const find = (type, label) =>
+    nodes(tree).find(
+      (node) => node?.type === type && (!label || text(node).includes(label)),
+    );
+  render();
+  return {
+    render,
+    find,
+    text: () => text(tree),
+    async flush() {
+      await new Promise((resolve) => setImmediate(resolve));
+      render();
+      await new Promise((resolve) => setImmediate(resolve));
+      render();
+    },
+    emit(name, value) {
+      if (name === "change") appState.currentState = value;
+      events.get(name)?.forEach((fn) => fn(value));
+      render();
+    },
+    unmount() {
+      slots.forEach((slot) => slot?.cleanup?.());
+    },
+  };
+}
+module.exports = { assistantUI };

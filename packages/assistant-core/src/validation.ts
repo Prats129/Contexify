@@ -38,6 +38,9 @@ function record(
   return value as Record<string, unknown>;
 }
 
+/** @internal Strict plain-data checks shared by the planning wire contract. */
+export { record as dataRecord };
+
 export function validateAction(value: unknown): AssistantAction {
   const action = record(
     value,

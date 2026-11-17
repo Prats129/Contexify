@@ -1,13 +1,14 @@
-import { planCommand } from "@contexify/assistant-core";
+import {
+  reviewedPercent,
+  type ReviewedCommand,
+} from "@contexify/assistant-core";
 import type { VolumeExecutionResult } from "../../modules/assistant-device-security";
 
 /** A multi-step preview must never silently execute just its first action. */
-export function reviewedVolumePercent(transcript: string): number | null {
-  const plan = planCommand(transcript);
-  if (plan.status !== "proposed" || plan.proposal.steps.length !== 1)
-    return null;
-  const action = plan.proposal.steps[0].action;
-  return action.capability_id === "media_volume.set" ? action.percent : null;
+export function reviewedVolumePercent(
+  review: ReviewedCommand | null | undefined,
+): number | null {
+  return reviewedPercent(review, "media_volume.set");
 }
 
 export { percentControlResult as volumeResult } from "./assistant_device_controls";

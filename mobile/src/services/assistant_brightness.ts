@@ -1,13 +1,14 @@
-import { planCommand } from "@contexify/assistant-core";
+import {
+  reviewedPercent,
+  type ReviewedCommand,
+} from "@contexify/assistant-core";
 import { percentControlResult } from "./assistant_device_controls";
 import type { PercentExecutionResult } from "../../modules/assistant-device-security";
 
-export function reviewedBrightnessPercent(transcript: string): number | null {
-  const plan = planCommand(transcript);
-  if (plan.status !== "proposed" || plan.proposal.steps.length !== 1)
-    return null;
-  const action = plan.proposal.steps[0].action;
-  return action.capability_id === "brightness.set_app" ? action.percent : null;
+export function reviewedBrightnessPercent(
+  review: ReviewedCommand | null | undefined,
+): number | null {
+  return reviewedPercent(review, "brightness.set_app");
 }
 
 export function brightnessResult(

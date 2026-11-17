@@ -8,6 +8,11 @@ import type {
 } from "../types/api-contracts";
 import { volumeResult } from "./assistant_volume";
 import { brightnessResult } from "./assistant_brightness";
+import {
+  planningJson,
+  planningPath,
+  type PlanningContext,
+} from "@contexify/assistant-core";
 import type { VolumeExecutionResult } from "../../modules/assistant-device-security";
 
 const BINDING_KEY = "contexify_assistant_binding_v1";
@@ -217,6 +222,92 @@ export function createAssistantDeviceSecurity(
     }
   }
   const api = {
+    async planningContext(
+      userId: string,
+      signal: AbortSignal,
+    ): Promise<PlanningContext> {
+      const generation = version;
+      const selectedHost = await host();
+      const parentUrl = `${selectedHost}/api/v1/assistant/security/device-session`;
+      const authorization = (await authHeaders(parentUrl)).Authorization;
+      const binding = await readBinding(userId);
+      if (
+        !binding ||
+        !authorization ||
+        signal.aborted ||
+        generation !== version
+      )
+        throw new Error(
+          "Enroll this account and device before using AI planning.",
+        );
+      const abort = () => api.cancel();
+      signal.addEventListener("abort", abort, { once: true });
+      let management: DeviceSessionResponse;
+      try {
+        management = await api.openSession(userId);
+      } finally {
+        signal.removeEventListener("abort", abort);
+      }
+      if (
+        signal.aborted ||
+        generation !== version ||
+        management.scope !== "security:manage" ||
+        typeof management.access_token !== "string" ||
+        !management.access_token ||
+        !Number.isFinite(management.expires_at)
+      )
+        throw new Error("Planning sign-in changed.");
+      async function current(requestSignal: AbortSignal, revoking = false) {
+        if (
+          requestSignal.aborted ||
+          (!revoking && generation !== version) ||
+          management.expires_at * 1000 <= Date.now() ||
+          selectedHost !== (await host()) ||
+          authorization !== (await authHeaders(parentUrl)).Authorization ||
+          requestSignal.aborted ||
+          (!revoking && generation !== version)
+        )
+          throw new Error("Planning sign-in changed.");
+      }
+      await current(signal);
+      return {
+        userId,
+        deviceId: binding.deviceId,
+        async request(path, body, parent) {
+          const endpoint = planningPath(path);
+          // Cancellation must still allow best-effort withdrawal of the old grant.
+          // Host, parent login, expiry and the server's grant ownership remain checked.
+          const revoking = path.endsWith("/revoke");
+          await current(parent, revoking);
+          const controller = new AbortController();
+          const abort = () => controller.abort();
+          parent.addEventListener("abort", abort, { once: true });
+          requests.add(controller);
+          if (parent.aborted) controller.abort();
+          try {
+            const result = await planningJson(
+              selectedHost + endpoint,
+              {
+                method: "POST",
+                credentials: "omit",
+                headers: {
+                  Authorization: `Bearer ${management.access_token}`,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify(body),
+              },
+              controller.signal,
+            );
+            await current(controller.signal, revoking);
+            return result;
+          } finally {
+            parent.removeEventListener("abort", abort);
+            requests.delete(controller);
+            controller.abort();
+          }
+        },
+      };
+    },
     async enableVolume(userId: string): Promise<void> {
       controlBridge("volume");
       const generation = version;

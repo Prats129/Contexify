@@ -8,6 +8,8 @@ Reviewed: 2026-11-16. This register accompanies the [canonical merged plan](merg
 
 Labels: **Old** = retained; **New** = added dynamic-planning/integration work; **Updated** = retained requirement with a changed method/order. **Done** applies only to the artifact named; source completion, automated checks, physical acceptance and release approval are separate states. For original wording, the user's supplied “Contexify — Secure Cross-Platform AI Device Assistant” request and the historical documents below remain the sources. Do not require the local attachment path to exist in another checkout.
 
+**M2 source-integration checkpoint, 2026-11-17:** [M2](m2-dynamic-volume.md) records client/endpoint wiring and reviewed snapshot consumption (N01/N02), client/lifecycle cancellation (N04), direct transition from single-volume proposal to exact native confirmation (N08), and isolated wire/authentication/UI regression evidence (N09). These source paths are implemented; real model quality/activation and physical acceptance remain open. Web gains only non-executing planning. General requests carry no synthetic approval ID and the free-tier adapter rejects them before SDK creation. Original requirement/phase/decision/scenario/deferral mappings below remain retained; M3-M8 are not closed by this source checkpoint.
+
 ## 1. Original request coverage
 
 | Original section / requirement ID  | Origin        | Preserved requirement and merged destination                                                                                                                                                | State / evidence owner                                                            |

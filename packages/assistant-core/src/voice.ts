@@ -1,6 +1,14 @@
 import { planCommand } from "./planner";
 import { VoiceInputError } from "./voice-errors";
 import {
+  PlanningError,
+  planningFeedback,
+  reviewedCommand,
+  reviewedPercent,
+  type CommandPlanner,
+  type ReviewedCommand,
+} from "./planning";
+import {
   supported,
   validateAction,
   type AssistantAction,
@@ -35,6 +43,8 @@ export interface CommandSessionState {
   partial: string;
   phase: "idle" | "starting" | "listening" | "processing" | "speaking";
   consent: boolean;
+  planningConsent: boolean;
+  reviewed: ReviewedCommand | null;
   preview: readonly CommandPreview[] | null;
   message: string;
   availability: VoiceAvailability;
@@ -52,16 +62,19 @@ export function describeAction(value: AssistantAction): string {
   }
 }
 
-/** A memory-only input/review session. It has no transport, executor or storage port. */
+/** Memory-only review state. Its optional planner has no executor or storage port. */
 export function createCommandSession(
   adapter: ForegroundVoiceAdapter,
   platform: AssistantPlatform,
+  planner?: CommandPlanner,
 ) {
   let state: CommandSessionState = {
     transcript: "",
     partial: "",
     phase: "idle",
     consent: false,
+    planningConsent: false,
+    reviewed: null,
     preview: null,
     message: "",
     availability: {
@@ -74,6 +87,7 @@ export function createCommandSession(
     disposed = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let rejectPending: ((error: Error) => void) | undefined;
+  let planningRequest: AbortController | null = null;
   const subscribers = new Set<() => void>();
   function update(patch: Partial<CommandSessionState>) {
     if (disposed) return;
@@ -90,10 +104,13 @@ export function createCommandSession(
   }
   function invalidate() {
     generation++;
+    planningRequest?.abort();
+    planningRequest = null;
     rejectPending?.(new Error("Voice cancelled."));
     rejectPending = undefined;
     clearTimeout(timer);
     stopAdapter();
+    update({ reviewed: null });
   }
   function deadline(milliseconds: number) {
     clearTimeout(timer);
@@ -173,6 +190,18 @@ export function createCommandSession(
       }
       update({ consent: true });
     },
+    setPlanningConsent(consent: boolean) {
+      if (disposed) return;
+      invalidate();
+      if (!consent) planner?.close();
+      update({
+        planningConsent: consent === true && Boolean(planner),
+        phase: "idle",
+        partial: "",
+        preview: null,
+        message: "",
+      });
+    },
     setTranscript(text: string) {
       if (disposed) return;
       invalidate();
@@ -194,13 +223,82 @@ export function createCommandSession(
         message: "",
       });
     },
-    review() {
-      if (disposed) return;
+    async review() {
+      if (disposed || state.phase !== "idle") return;
       invalidate();
+      if (state.planningConsent && planner) {
+        const version = generation;
+        const controller = new AbortController();
+        planningRequest = controller;
+        update({
+          phase: "processing",
+          preview: null,
+          partial: "",
+          message: "Understanding your command…",
+        });
+        try {
+          const response = await planner.plan(
+            state.transcript,
+            controller.signal,
+          );
+          if (disposed || version !== generation || controller.signal.aborted)
+            return;
+          const proposal = response.proposal;
+          const review =
+            proposal.status === "proposed"
+              ? reviewedCommand(
+                  proposal.steps.map((step) => step.action),
+                  "planner",
+                  response.expires_at * 1000,
+                )
+              : null;
+          update({
+            phase: "idle",
+            reviewed: review,
+            preview: review
+              ? review.actions.map((action) => ({
+                  description: describeAction(action),
+                  availableOnPlatform:
+                    platform === "android" &&
+                    action.capability_id === "media_volume.set" &&
+                    review.actions.length === 1,
+                }))
+              : null,
+            message:
+              proposal.status !== "proposed"
+                ? planningFeedback(proposal)
+                : review!.actions.length !== 1
+                  ? "Multiple actions are preview only. No part of this plan will be executed."
+                  : "Plan reviewed. No device action has been performed.",
+          });
+        } catch (error) {
+          if (!disposed && version === generation && !controller.signal.aborted)
+            update({
+              phase: "idle",
+              preview: null,
+              reviewed: null,
+              message:
+                error instanceof PlanningError
+                  ? error.message
+                  : "AI planning is unavailable. No device action was performed.",
+            });
+        } finally {
+          if (planningRequest === controller) planningRequest = null;
+        }
+        return;
+      }
       const result = planCommand(state.transcript, "user");
       update({
         phase: "idle",
         partial: "",
+        reviewed:
+          result.status === "proposed"
+            ? reviewedCommand(
+                result.proposal.steps.map((step) => step.action),
+                "local",
+                Date.now() + 180000,
+              )
+            : null,
         preview:
           result.status === "proposed"
             ? result.proposal.steps.map((step) => ({
@@ -213,6 +311,15 @@ export function createCommandSession(
             ? "Preview only. No device action has been performed."
             : result.message,
       });
+    },
+    takeReviewedPercent(
+      capability: "media_volume.set" | "brightness.set_app",
+    ): number | null {
+      if (disposed || state.phase !== "idle" || platform !== "android")
+        return null;
+      const percent = reviewedPercent(state.reviewed, capability);
+      if (percent !== null) update({ reviewed: null });
+      return percent;
     },
     async listen() {
       if (disposed || state.phase !== "idle") return;
@@ -229,6 +336,7 @@ export function createCommandSession(
         phase: "starting",
         partial: "",
         preview: null,
+        reviewed: null,
         message: "Starting microphone…",
       });
       try {
@@ -268,6 +376,7 @@ export function createCommandSession(
           phase: "idle",
           message: "Check or edit the transcript, then choose Review command.",
         });
+        if (state.planningConsent) await session.review();
       } catch (error) {
         if (!disposed && version === generation) {
           generation++;
@@ -325,12 +434,14 @@ export function createCommandSession(
     clear() {
       if (disposed) return;
       invalidate();
+      planner?.close();
       update({
         transcript: "",
         partial: "",
         phase: "idle",
         preview: null,
         consent: false,
+        planningConsent: false,
         message: "",
       });
     },

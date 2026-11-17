@@ -14,6 +14,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   createCommandSession,
+  createCommandPlanner,
   type CommandSessionState,
 } from "@contexify/assistant-core";
 import { createMobileVoiceAdapter } from "../services/assistant_voice";
@@ -96,16 +97,20 @@ export function AssistantPreview({
       AppState.currentState !== "active"
     )
       return;
-    const percent = state?.preview
-      ? kind === "volume"
-        ? reviewedVolumePercent(state.transcript)
-        : reviewedBrightnessPercent(state.transcript)
-      : null;
+    const percent = setup
+      ? null
+      : (sessionRef.current?.takeReviewedPercent(
+          kind === "volume" ? "media_volume.set" : "brightness.set_app",
+        ) ?? null);
     if (!setup && percent === null) return;
     controlRunning.current = true;
     const operation = ++controlOperation.current;
     setControlBusy(true);
-    setControlMessage("");
+    setControlMessage(
+      setup
+        ? ""
+        : "Review the exact volume or brightness change in Android confirmation.",
+    );
     try {
       if (setup) {
         if (kind === "volume") await volumeControls.enableVolume(volumeUserId);
@@ -138,11 +143,23 @@ export function AssistantPreview({
       setControlBusy(false);
     }
   }
+  useEffect(() => {
+    if (
+      volumeAllowed &&
+      state?.reviewed?.source === "planner" &&
+      reviewedVolumePercent(state.reviewed) !== null
+    )
+      void runControl(false);
+  }, [state?.reviewed, volumeAllowed]);
   function clearCommand() {
     controlOperation.current++;
     volumeControls?.cancel();
     setControlMessage("");
     sessionRef.current?.clear();
+  }
+  function closePreview() {
+    clearCommand();
+    onClose();
   }
   function clearDeviceCheck() {
     readinessRequest.current?.abort();
@@ -201,6 +218,13 @@ export function AssistantPreview({
           process.env.EXPO_PUBLIC_ASSISTANT_VOICE_ENABLED === "true",
       ),
       platform,
+      volumeUserId &&
+        volumeControls?.planningContext &&
+        Platform.OS === "android"
+        ? createCommandPlanner((signal) =>
+            volumeControls.planningContext!(volumeUserId, signal),
+          )
+        : undefined,
     );
     sessionRef.current = session;
     setState(session.getSnapshot());
@@ -217,7 +241,7 @@ export function AssistantPreview({
       session.dispose();
       sessionRef.current = null;
     };
-  }, [voiceAllowed]);
+  }, [voiceAllowed, volumeUserId, volumeControls]);
   const capturing = state?.phase === "starting" || state?.phase === "listening";
   const busy = state?.phase !== "idle" || controlBusy;
   function button(label: string, action: () => void, disabled = false) {
@@ -248,7 +272,7 @@ export function AssistantPreview({
       visible
       transparent
       animationType="fade"
-      onRequestClose={onClose}
+      onRequestClose={closePreview}
       statusBarTranslucent
     >
       <KeyboardAvoidingView
@@ -296,7 +320,7 @@ export function AssistantPreview({
             >
               Assistant preview
             </Text>
-            {button("Close", onClose)}
+            {button("Close", closePreview)}
           </View>
           <ScrollView
             style={{ flexShrink: 1 }}
@@ -304,9 +328,13 @@ export function AssistantPreview({
             contentContainerStyle={{ gap: 12, paddingBottom: 8 }}
           >
             <Text style={{ color: theme.textMuted }}>
-              {volumeAllowed
-                ? "Review a command, then request confirmation for media volume or Contexify app-window brightness. Other actions remain previews."
-                : "Type or dictate a command, then review the steps. This preview cannot change your phone or open apps."}
+              {state?.planningConsent
+                ? volumeAllowed
+                  ? "Give one media-volume command, then review Android confirmation. Other actions remain previews."
+                  : "Send a command to review its plan. Device actions are unavailable in this build."
+                : volumeAllowed
+                  ? "Review a command, then request confirmation for media volume or Contexify app-window brightness. Other actions remain previews."
+                  : "Type or dictate a command, then review the steps. Device actions are unavailable here."}
             </Text>
             <Text style={{ color: theme.textMain, fontWeight: "600" }}>
               Your command or transcript
@@ -317,14 +345,16 @@ export function AssistantPreview({
               maxLength={1024}
               autoCorrect={false}
               editable={
-                !controlBusy && !capturing && state?.phase !== "processing"
+                !controlBusy &&
+                !capturing &&
+                (state?.phase !== "processing" || state.planningConsent)
               }
               value={state?.transcript ?? ""}
               onChangeText={(text) => {
                 setControlMessage("");
                 sessionRef.current?.setTranscript(text);
               }}
-              placeholder="Set volume to 50% then open Spotify"
+              placeholder="Set media volume to 50%"
               placeholderTextColor={theme.textMuted}
               textAlignVertical="top"
               style={{
@@ -349,16 +379,47 @@ export function AssistantPreview({
             )}
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
               {button(
-                "Review command",
+                state?.planningConsent ? "Send command" : "Review command",
                 () => {
                   Keyboard.dismiss();
                   setControlMessage("");
-                  sessionRef.current?.review();
+                  void sessionRef.current?.review();
                 },
                 busy || !state?.transcript.trim(),
               )}
               {button("Clear / cancel", clearCommand)}
             </View>
+            {volumeUserId &&
+              volumeControls?.planningContext &&
+              Platform.OS === "android" && (
+                <TouchableOpacity
+                  accessibilityRole="checkbox"
+                  accessibilityState={{
+                    checked: state?.planningConsent ?? false,
+                  }}
+                  onPress={() => {
+                    controlOperation.current++;
+                    volumeControls.cancel();
+                    setControlMessage("");
+                    sessionRef.current?.setPlanningConsent(
+                      !state?.planningConsent,
+                    );
+                  }}
+                  style={{ minHeight: 44, justifyContent: "center", gap: 4 }}
+                >
+                  <Text style={{ color: theme.textMain }}>
+                    {state?.planningConsent ? "☑" : "☐"} Allow AI planning in
+                    this session.
+                  </Text>
+                  <Text style={{ color: theme.textMuted, fontSize: 12 }}>
+                    Currently limited to approved public test commands. Do not
+                    enter personal information. Enroll this device first. A
+                    single volume action opens Android confirmation; other plans
+                    stay previews. Voice transcripts are submitted after you
+                    finish speaking.
+                  </Text>
+                </TouchableOpacity>
+              )}
             {state?.phase === "idle" &&
               state.preview === null &&
               Boolean(state.message) && (
@@ -384,8 +445,7 @@ export function AssistantPreview({
                 </Text>
                 {!step.availableOnPlatform && (
                   <Text style={{ color: theme.textMuted, fontSize: 12 }}>
-                    Device control is unavailable on this platform. This is a
-                    preview only.
+                    This action is preview only in this flow.
                   </Text>
                 )}
               </View>
@@ -429,18 +489,19 @@ export function AssistantPreview({
                   },
                   controlBusy || busy,
                 )}
-                {button(
-                  controlBusy
-                    ? "Waiting for volume result..."
-                    : "Confirm volume change",
-                  () => {
-                    void runControl(false);
-                  },
-                  controlBusy ||
-                    busy ||
-                    !state?.preview ||
-                    reviewedVolumePercent(state.transcript) === null,
-                )}
+                {!state?.planningConsent &&
+                  button(
+                    controlBusy
+                      ? "Waiting for volume result..."
+                      : "Confirm volume change",
+                    () => {
+                      void runControl(false);
+                    },
+                    controlBusy ||
+                      busy ||
+                      !state?.preview ||
+                      reviewedVolumePercent(state.reviewed) === null,
+                  )}
               </View>
             )}
             {brightnessAllowed && (
@@ -468,7 +529,7 @@ export function AssistantPreview({
                   controlBusy ||
                     busy ||
                     !state?.preview ||
-                    reviewedBrightnessPercent(state.transcript) === null,
+                    reviewedBrightnessPercent(state.reviewed) === null,
                 )}
               </View>
             )}
