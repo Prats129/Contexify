@@ -1,5 +1,11 @@
 # Assistant planning review coverage
 
+## 2026-11-17 M1 non-live development checkpoint
+
+Starting from M0 commit `189f75c`, implemented/reviewed the separate planning schema, truthful source catalog, consent/parent authorization, endpoint, bounded generation and synthetic-only Gemini adapter; additive v5 metadata migration; generated web/mobile/core types; opt-in configuration and isolated tests. [M1 evidence and remaining gates](m1-planning.md) records 605 backend tests, 111 JavaScript cases, both client type checks and contract verification. New provider settings do not affect chat, and no live provider is bound to the runtime.
+
+This is a focused change review with isolated automated evidence, not a whole-repository security certification, live model evaluation or native/device acceptance. No real API call, configured database migration, production restart, account/billing change, APK/EAS job or phone access was performed. M2 UI/snapshot wiring, deployed logging/provider compatibility and previously deferred phone/release checks remain open. The historical source inventories below retain their original baseline.
+
 ## 2026-11-16 M0 implementation baseline
 
 The user authorized implementing the merged roadmap one stage at a time, confirmed free-tier Gemini API and asked to set the budget accordingly. [M0 baseline](m0-baseline.md) records current contracts, first single-volume-action target, engineering/user/release-review ownership, synthetic-only initial cloud-test scope and **INR 0/month paid assistant-planning budget**. Live activation/private-data/production gates and postponed phone acceptance stay open; no billing setting, secret or configured service was accessed.

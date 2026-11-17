@@ -594,3 +594,59 @@ export type BrightnessTaskView = {
     | "expired";
   result?: BrightnessEvidence | null;
 };
+
+export type PlanningActions = {
+  "protocol_version"?: 1;
+  "mode": "proposal";
+  "status": "proposed";
+  "steps": Array<ProposalStep>;
+};
+
+export type PlanningCapability = {
+  "capability_id": "media_volume.set" | "brightness.set_app" | "application.open";
+  "schema_version"?: 1;
+  "policy_version"?: 1;
+  "native_source_platforms": Array<"web" | "android" | "ios">;
+  "native_availability"?: "unverified";
+  "presentation": "native_source_available" | "preview_only";
+  "confirmation"?: "exact_transaction";
+  "execution"?: "not_authorized";
+};
+
+export type PlanningFeedback = {
+  "protocol_version"?: 1;
+  "mode": "proposal";
+  "status": "needs_clarification" | "unsupported" | "refused" | "non_action";
+  "reason": "missing_target" | "missing_value" | "relative_value" | "ambiguous_request" | "unsupported_request" | "policy_limit" | "not_a_command" | "model_refusal";
+};
+
+export type PlanningGrant = {
+  "grant_id": string;
+  "scope"?: "assistant:plan";
+  "consent_policy_version"?: 1;
+  "data_scope"?: "synthetic_evaluation";
+  "expires_at": number;
+};
+
+export type PlanningGrantRequest = {
+  "consent": true;
+  "consent_policy_version": 1;
+  "data_scope": "synthetic_evaluation";
+};
+
+export type PlanningRequest = {
+  "grant_id": string;
+  "source": "user" | "untrusted";
+  "text": string;
+  "synthetic_case_id": string;
+};
+
+export type PlanningResponse = {
+  "plan_id": string;
+  "revision"?: 1;
+  "owner_user_id": string;
+  "owner_device_id": string | null;
+  "expires_at": number;
+  "execution"?: "not_authorized";
+  "proposal": PlanningActions | PlanningFeedback;
+};

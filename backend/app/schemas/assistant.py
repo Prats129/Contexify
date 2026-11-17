@@ -57,6 +57,14 @@ class ProposalStep(SecurityModel):
     depends_on: list[int] = Field(default_factory=list, max_length=4)
 
 
+def validate_step_dependencies(steps: list[ProposalStep]) -> None:
+    for index, step in enumerate(steps):
+        if len(step.depends_on) != len(set(step.depends_on)) or any(
+            dependency < 0 or dependency >= index for dependency in step.depends_on
+        ):
+            raise ValueError("Dependencies must refer to distinct earlier steps.")
+
+
 class AssistantProposal(SecurityModel):
     protocol_version: VersionOne = 1
     mode: Literal["simulation"] = "simulation"
@@ -64,11 +72,7 @@ class AssistantProposal(SecurityModel):
 
     @model_validator(mode="after")
     def validate_dependencies(self):
-        for index, step in enumerate(self.steps):
-            if len(step.depends_on) != len(set(step.depends_on)) or any(
-                dependency < 0 or dependency >= index for dependency in step.depends_on
-            ):
-                raise ValueError("Dependencies must refer to distinct earlier steps.")
+        validate_step_dependencies(self.steps)
         return self
 
 

@@ -192,6 +192,7 @@ def create_app():
     from app.api.v1.endpoints import (
         assistant,
         assistant_brightness,
+        assistant_planning,
         assistant_security,
         assistant_volume,
         health,
@@ -271,6 +272,8 @@ def create_app():
     app.include_router(
         assistant_brightness.router, prefix="/api/v1/assistant/brightness"
     )
+    # Gate remains off; no provider binding or external network is added to this host.
+    app.include_router(assistant_planning.router, prefix="/api/v1/assistant/planning")
     return app
 
 

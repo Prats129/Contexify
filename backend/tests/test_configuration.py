@@ -108,6 +108,21 @@ class ConfigurationTests(unittest.TestCase):
         self.assertFalse(config.is_cloudflare_r2_configured)
         self.assertFalse(config.CHROMA_PERSIST_DIR.exists())
 
+    def test_planning_requires_security_but_neither_simulation_nor_execution(self):
+        self.assertFalse(self.config().ASSISTANT_PLANNING_ENABLED)
+        with self.assertRaises(ValidationError):
+            self.config(ASSISTANT_PLANNING_ENABLED=True)
+        config = self.config(
+            ASSISTANT_PLANNING_ENABLED=True,
+            ASSISTANT_SECURITY_ENABLED=True,
+            ASSISTANT_API_ORIGIN="https://api.fixture.invalid",
+            ASSISTANT_WEB_ORIGINS=["https://web.fixture.invalid"],
+            CORS_ORIGINS=["https://web.fixture.invalid"],
+        )
+        self.assertTrue(config.ASSISTANT_PLANNING_ENABLED)
+        self.assertFalse(config.ASSISTANT_SIMULATION_ENABLED)
+        self.assertFalse(config.ASSISTANT_EXECUTION_ENABLED)
+
     def test_request_budgets_are_configurable_and_cannot_be_disabled_with_zero(self):
         names = [
             name for name in Settings.model_fields if name.startswith("RATE_LIMIT_")

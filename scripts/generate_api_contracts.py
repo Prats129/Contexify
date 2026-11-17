@@ -20,6 +20,7 @@ from pydantic.json_schema import models_json_schema  # noqa: E402
 from app.schemas import (  # noqa: E402
     assistant,
     assistant_brightness,
+    assistant_planning,
     assistant_security,
     assistant_volume,
     chat,
@@ -30,6 +31,13 @@ from app.schemas import (  # noqa: E402
 )
 
 MODELS = (
+    assistant_planning.PlanningGrantRequest,
+    assistant_planning.PlanningGrant,
+    assistant_planning.PlanningRequest,
+    assistant_planning.PlanningActions,
+    assistant_planning.PlanningFeedback,
+    assistant_planning.PlanningResponse,
+    assistant_planning.PlanningCapability,
     assistant_brightness.BrightnessSessionResponse,
     assistant_brightness.BrightnessTaskRequest,
     assistant_brightness.BrightnessTaskView,
@@ -198,7 +206,12 @@ def main() -> int:
             target.write_text(generated, encoding="utf-8")
     core = ROOT / "packages/assistant-core/src/contracts.ts"
     core_generated = render(
-        tuple(model for model in MODELS if model.__module__ == "app.schemas.assistant")
+        tuple(
+            model
+            for model in MODELS
+            if model.__module__
+            in ("app.schemas.assistant", "app.schemas.assistant_planning")
+        )
     )
     core_sources = {}
     if args.check:

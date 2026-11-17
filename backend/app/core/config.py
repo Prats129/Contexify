@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     ASSISTANT_SECURITY_ENABLED: bool = False
     ASSISTANT_SIMULATION_ENABLED: bool = False
     ASSISTANT_EXECUTION_ENABLED: bool = False
+    # Separate external-processing purpose, not a device-command enable switch.
+    ASSISTANT_PLANNING_ENABLED: bool = False
     ASSISTANT_API_ORIGIN: str = ""
     ASSISTANT_WEB_ORIGINS: list[str] = []
     ASSISTANT_SESSION_TTL_SECONDS: int = Field(default=900, ge=60, le=900)
@@ -240,6 +242,8 @@ class Settings(BaseSettings):
             raise ValueError("Assistant simulation requires assistant security.")
         if self.ASSISTANT_EXECUTION_ENABLED and not self.ASSISTANT_SECURITY_ENABLED:
             raise ValueError("Assistant execution requires assistant security.")
+        if self.ASSISTANT_PLANNING_ENABLED and not self.ASSISTANT_SECURITY_ENABLED:
+            raise ValueError("Assistant planning requires assistant security.")
         if self.ASSISTANT_SECURITY_ENABLED:
             from urllib.parse import urlsplit
 

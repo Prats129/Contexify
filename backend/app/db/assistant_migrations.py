@@ -181,7 +181,7 @@ def _migrate_volume_v3(conn) -> None:
     conn.execute("INSERT INTO assistant_schema_versions(version) VALUES(3)")
 
 
-def migrate_assistant_security(conn) -> None:
+def _migrate_brightness_v4(conn) -> None:
     _migrate_volume_v3(conn)
     if conn.execute(
         "SELECT 1 FROM assistant_schema_versions WHERE version=4"
@@ -226,3 +226,32 @@ def migrate_assistant_security(conn) -> None:
         "CREATE INDEX idx_brightness_tasks_device ON assistant_brightness_tasks(device_id)"
     )
     conn.execute("INSERT INTO assistant_schema_versions(version) VALUES(4)")
+
+
+def migrate_assistant_security(conn) -> None:
+    _migrate_brightness_v4(conn)
+    if conn.execute(
+        "SELECT 1 FROM assistant_schema_versions WHERE version=5"
+    ).fetchone():
+        return
+    conn.execute("""CREATE TABLE assistant_planning_grants (
+        id TEXT PRIMARY KEY, user_id TEXT NOT NULL, session_hash TEXT NOT NULL,
+        device_id TEXT, policy_version INTEGER NOT NULL,
+        created_at REAL NOT NULL, expires_at REAL NOT NULL,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY(session_hash) REFERENCES assistant_security_sessions(token_hash) ON DELETE CASCADE,
+        FOREIGN KEY(device_id) REFERENCES assistant_devices(id) ON DELETE CASCADE
+    )""")
+    conn.execute(
+        "CREATE INDEX idx_planning_grants_session ON assistant_planning_grants(session_hash)"
+    )
+    conn.execute(
+        "CREATE INDEX idx_planning_grants_user ON assistant_planning_grants(user_id,expires_at)"
+    )
+    conn.execute(
+        "CREATE INDEX idx_planning_grants_device ON assistant_planning_grants(device_id)"
+    )
+    conn.execute(
+        "CREATE INDEX idx_planning_grants_expiry ON assistant_planning_grants(expires_at)"
+    )
+    conn.execute("INSERT INTO assistant_schema_versions(version) VALUES(5)")
