@@ -1,5 +1,7 @@
 # Android volume acceptance checkpoint
 
+**Latest code-3 manual checkpoint, 2026-11-18:** user-confirmed compound execution, positive partial-cancellation report, read-only history after reopening, quick duplicate Send protection, basic relative-volume clarification, current-flow lock-before-approval cancellation, volume-limit/negation checks, idle sign-out/sign-in protection and unsupported mixed-plan blocking. Remaining changed/expired context, in-flight interruption, key/backup/restore and other unperformed acceptance cases remain open. The dated entries below preserve their original checkpoint status.
+
 Updated 2026-11-17. Applies only to **Contexify Volume Test** (`ai.contexify.app.assistantvolumetest`) on the user's Samsung S25, reported Android 17 / One UI 9. No USB/debugging, remote phone access, cloud build or production enablement is authorized. The user performs phone checks. Keep the PC hotspot and isolated HTTPS backend running.
 
 **2026-11-17 status:** the user resumed the M2/M3 live-connection, compatible-APK and manual S25 checkpoint. The [new APK and isolated service](live-public-evaluation.md) passed local inspection/probes. After the original-model failures and reviewed Flash-Lite switch, the user confirmed the live single-volume AI path: native approval, actual volume change and inline result. M3 relative-state and remaining release checks are still pending. Preserve every individual result below. The earlier deferral remains historical; resumption alone adds no PASS, cloud-build or production authorization. Unperformed recovery/privacy/lifecycle cases remain open.
@@ -68,3 +70,54 @@ The M3 settings-context source and native unit compilation are recorded in [M3](
 - Change physical/media volume or device limits while native confirmation is open; approval must not apply a target derived from a mismatched baseline. Check context expiry, Cancel, lock, background/return and account/key changes. There must be no automatic recomputation or effect replay.
 - Check one-use/replaced context IDs and an old APK: relative requests must fail safely without substituting an absolute write. Existing absolute volume/brightness controls must retain their own scopes and native confirmation.
 - Verify ambiguous inputs and prior-target references require explicit selection; brightness/browser restrictions and Clear/Close/local-read withdrawal guidance remain visible and accessible. Test actual AudioManager/routing races; unit tests do not establish hardware guarantees.
+
+
+## M4 additional physical acceptance - delivered, remaining checks pending
+
+[M4 source evidence](m4-operation-recovery.md) adds a versioned native coordinator and encrypted recovery. The code-2 artifact is historical M2/M3 evidence. The later authorized code-3 APK was delivered and installation is user-confirmed; the latest compound happy-path result is recorded below. No agent phone access was used. Earlier confirmed results above remain valid, and unperformed M2/M3 and M4 negative/recovery cases remain open.
+
+- Run a wholly supported volume/window-brightness graph: each step gets a separate exact native confirmation. Cancel a later step; retain earlier observed success and mark the remainder unstarted. Mixed app-open/unsupported plans must remain whole-plan previews.
+- Verify repeated callbacks/taps and concurrent submissions cannot replay a retained identity; explicitly new commands remain separately confirmable. No v2-to-v1 fallback on an older APK.
+- Interrupt the process or network during claim/effect/receipt in controlled tests, then sign in and deliberately Check previous actions. Show matching historical evidence or uncertainty; no new task, confirmation, claim or OS write during reconciliation. No automatic resume on reconnect/restart/sign-in.
+- Verify lock/background/Close/Clear/logout and changed/expired relative context stop pending steps. Restore the app-window brightness on background and label historical results accurately.
+- Test unavailable/corrupt recovery files or keys, capacity/retention, explicit device forgetting and backup/device-transfer exclusion with synthetic data. Wrong account/origin/installation cannot read earlier evidence. Confirm actual Android Keystore behavior; host cipher tests do not establish it.
+
+
+**2026-11-18 code-3 follow-up:** installation is user-confirmed. The first compound command showed planning unavailable before native approval; multi-step hardware acceptance is not passed. A metadata-only public diagnostic reproduced MAX_TOKENS truncation at the old reasoning/output cap. The bounded server-side allowance/complete-finish check was corrected, 67 offline cases passed, and one public model verification returned the correct two-step proposal. After the user restored the missing PC hotspot address, the fixed isolated backend started and its certificate-verified health/protected-route checks passed; the installed APK does not need rebuilding. See [M4 planning follow-up](m4-operation-recovery.md#installed-apk-planning-follow-up---2026-11-18); per-step native effects and remaining physical cases still require the user's result.
+
+
+**2026-11-18 repeated planning follow-up:** the next phone attempt still showed unavailable, so no physical PASS was added. A startup-only Google-IP allowlist flaw was corrected while retaining fixed-host HTTPS/model/TLS restrictions; 19 offline boundary cases and a credential-free real TLS refresh check passed. The complete isolated Android authentication/consent/proposal path returned the correct 40-then-50 steps using a temporary synthetic device, which was revoked afterward. The fixed test backend is running and the APK is unchanged. See [authenticated/network evidence](m4-operation-recovery.md#authenticated-planningnetwork-follow-up---2026-11-18). Phone execution remains unverified until the user reports the new result.
+
+
+**2026-11-18 latest S25 result - compound happy path user-confirmed working:** following the latest backend update, the user's corrected report was **working completely fine and correct** in the context of the requested `set media volume to 40 percent then set it to 50 percent` test. Record that requested two-step flow as a user-reported happy-path PASS. This does not supply independent numerical readback measurements or pass cancellation, duplicate dispatch, restart/reconciliation, relative-context, account/key or backup cases. The next manual case is approving the first 40% step and cancelling the second 50% step; its result is pending.
+
+
+**2026-11-18 partial-cancellation response:** after clarifying that the earlier 40-then-50 result approved both steps, the user was specifically asked to approve 40% and Cancel the 50% popup, expecting the first change to remain. The user replied **perfect**. Record this as a positive user-reported cancellation result in that test context, not an independent numerical readback or broader recovery PASS. The next check is reopening the test app and deliberately viewing saved results without an approval popup or any setting write. Duplicate dispatch, remaining lifecycle/privacy/context/key/backup cases remain open.
+
+
+**2026-11-18 reopen/read-only history - user-confirmed PASS:** the user replied **correct** to the explicit close/swipe-away/reopen/Check previous actions case, whose expected result was saved results with no native approval popup and no media-volume change. Record that specific read-only reopening case as passed. This is not a force-stop/reboot test or interruption during an in-flight claim/effect/receipt. Duplicate taps, relative-context and remaining lifecycle/privacy/key/backup acceptance still require their own results.
+
+
+**2026-11-18 quick double-tap Send - user-confirmed PASS:** for the single public `set volume to 50%` command with AI planning enabled, the user answered **yes** to the expected one confirmation popup and one completed action after tapping Send twice before the first request finished. This confirms that specific in-flight UI duplicate case only; it does not establish every native replay/concurrency/crash scenario. The next pending test is M3 relative-volume clarification/local-read consent using `turn it down`.
+
+
+**2026-11-18 relative-volume clarification - user-confirmed PASS:** after initially entering the form-option labels as text (correctly rejected by the public-command whitelist), the user followed the clarified instructions: send `turn it down`, select Media volume / Decrease by / 10 / Percentage points, consent to one local reading, review and approve. The user reported **done tested successfully**. Record that specific relative percentage-point flow as passed. This does not pass the separate percent-of-current formula, changed/expired base state, context replay or privacy/transport instrumentation cases. The next manual case is locking before approval on the current code-3/M4 flow; the earlier code-2 local lock case remains a separate historical PASS.
+
+
+**2026-11-18 code-3/M4 lock before approval - user-confirmed PASS:** after being instructed to send the single 50% AI command, leave its native popup unapproved, lock/unlock and return, the user replied **done** to the expected dismissed old popup, unchanged media volume and no automatic action. Record that specific current-flow case as passed, separately from the earlier code-2 local lock test. It does not pass locking during/after a claimed OS effect, process loss, logout or key/restore cases.
+
+
+**2026-11-18 AI limit and negation - user-confirmed PASS:** the user reported both instructed cases working completely fine: `set volume to 90%` shows the 0-70% policy-limit message, and `do not change my volume` reports no action requested. Both expected outcomes included no approval popup and no volume change. Record those two specific code-3 AI negative-input cases as passed. This does not supply coverage of every invalid/malicious input, unsupported whole plan or permission/route restriction. The next basic manual case is sign-out making controls unavailable, followed by sign-in without automatic replay.
+
+
+**2026-11-18 idle sign-out/sign-in - user-confirmed PASS:** the user confirmed that signing out of the test account made AI/device controls unavailable or required login, and signing back in caused no old command, automatic confirmation or volume change. No command was sent for this check. This passes that idle account boundary only, not logout during a pending claim/effect or cross-account binding/recovery isolation. Unsupported whole plans, relative-context edge cases and controlled interruption/key/restore checks remain open.
+
+
+**2026-11-18 unsupported mixed plan - user-confirmed PASS:** `set volume to 50 percent then open Spotify` showed a preview-in-this-flow message. In response to the explicit three-part check, the user confirmed unchanged volume, no native approval popup and no Spotify launch. Record the whole-plan/no-supported-first-half case as passed for that command. Other unsupported actions or model omissions are not inferred. The next relative-context edge case is manually changing media volume while its conditional approval is open; the old target must not overwrite the changed base.
+
+
+## Basic manual session closed; further checks deferred - 2026-11-18
+
+The user asked to stop extending the one-by-one phone test session and move ahead. The agreed basic M4 manual batch has positive user reports: compound execution, partial cancellation, read-only saved results after reopening, quick duplicate Send, basic relative-volume clarification, pre-approval lock, limit/negation, idle sign-out/sign-in, and whole-plan blocking for the unsupported volume/Spotify combination.
+
+The subsequently proposed changed-base reading test has **no user result** and is not passed. Further stale/expired context, alternate relative units, concurrent/in-flight interruption, key loss/corruption, backup/restore and other unperformed physical/privacy/operational cases remain **Deferred/pending**, not silently completed. Stop requesting additional phone checks until the user resumes them. They continue to gate dependent production/release claims, while independent M5 source work may proceed when authorized. This closes this basic manual session, not all security/release acceptance. No application, provider, backend or device action was made to record the boundary.

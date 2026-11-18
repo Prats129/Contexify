@@ -143,6 +143,62 @@ class PublicEvaluationTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(RuntimeError):
                 live.google_addresses()
 
+    async def test_rotated_google_dns_is_revalidated_without_widening_egress(self):
+        resolve = Mock(return_value=frozenset({"8.8.4.4"}))
+        guard = live.network_guard(frozenset({"8.8.8.8"}), resolve=resolve)
+        guard("socket.connect", (None, ("8.8.8.8", 443)))
+        resolve.assert_not_called()
+        guard("socket.connect", (None, ("8.8.4.4", 443)))
+        resolve.assert_called_once()
+        guard("socket.connect", (None, ("8.8.4.4", 443)))
+        resolve.assert_called_once()
+        with self.assertRaises(PermissionError):
+            guard("socket.connect", (None, ("9.9.9.9", 443)))
+
+    async def test_dns_refresh_failure_or_private_results_never_allow_connections(self):
+        for value in (
+            frozenset(),
+            frozenset({"127.0.0.1", "8.8.4.4"}),
+            OSError("synthetic-private-marker"),
+        ):
+            resolve = Mock(
+                side_effect=value if isinstance(value, OSError) else None,
+                return_value=value if not isinstance(value, OSError) else frozenset(),
+            )
+            guard = live.network_guard(frozenset({"8.8.8.8"}), resolve=resolve)
+            with self.assertRaises(PermissionError):
+                guard("socket.connect", (None, ("8.8.4.4", 443)))
+        resolve = Mock(return_value=frozenset({"8.8.4.4"}))
+        guard = live.network_guard(frozenset({"8.8.8.8"}), resolve=resolve)
+        for target in (("192.168.0.1", 443), ("8.8.4.4", 80)):
+            with self.assertRaises(PermissionError):
+                guard("socket.connect", (None, target))
+        resolve.assert_not_called()
+
+    async def test_public_transport_diagnostics_never_log_private_error_text(self):
+        marker = "synthetic-private-error-details"
+
+        def fail(request):
+            raise httpx.ConnectError(marker)
+
+        transport = live.GoogleTransport(
+            live.EvaluationBudget(self.root / "attempts.sqlite3"),
+            httpx.MockTransport(fail),
+        )
+        try:
+            with self.assertLogs(live.__name__, level="WARNING") as logs:
+                with self.assertRaises(httpx.ConnectError):
+                    await transport.handle_async_request(
+                        httpx.Request(
+                            "POST",
+                            f"https://{live.GOOGLE_HOST}/v1beta/models/{live.MODEL}:generateContent",
+                        )
+                    )
+            self.assertIn("ConnectError", " ".join(logs.output))
+            self.assertNotIn(marker, " ".join(logs.output))
+        finally:
+            await transport.aclose()
+
     async def test_transport_rejects_arbitrary_urls_before_admission(self):
         budget = live.EvaluationBudget(self.root / "attempts.sqlite3")
         inner = httpx.MockTransport(
@@ -296,6 +352,7 @@ class PublicEvaluationTests(unittest.IsolatedAsyncioTestCase):
             return_value=SimpleNamespace(
                 text='{"mode":"proposal","status":"non_action","reason":"not_a_command"}',
                 function_calls=None,
+                candidates=[SimpleNamespace(finish_reason="STOP")],
             )
         )
         sdk = SimpleNamespace(
@@ -342,7 +399,7 @@ class PublicEvaluationTests(unittest.IsolatedAsyncioTestCase):
             calls.append(request)
             self.assertEqual(request.headers["Accept-Encoding"], "identity")
             body = json.loads(request.content)
-            self.assertEqual(body["generationConfig"]["maxOutputTokens"], 1024)
+            self.assertEqual(body["generationConfig"]["maxOutputTokens"], 4096)
             wire_schema = body["generationConfig"]["responseJsonSchema"]
             self.assertEqual(
                 wire_schema["$defs"]["PlanningActions"]["properties"]["mode"]["enum"],

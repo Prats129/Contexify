@@ -1,4 +1,9 @@
 import { planCommand } from "./planner";
+import {
+  operationPlan,
+  supportedOperationPlan,
+  type OperationPlan,
+} from "./operations";
 import { VoiceInputError } from "./voice-errors";
 import {
   resolveClarification,
@@ -272,6 +277,13 @@ export function createCommandSession(
                   proposal.steps.map((step) => step.action),
                   "planner",
                   response.expires_at * 1000,
+                  undefined,
+                  operationPlan(
+                    response.plan_id,
+                    response.revision ?? 1,
+                    response.expires_at * 1000,
+                    proposal.steps,
+                  ),
                 )
               : null;
           if (review) remember(review);
@@ -288,6 +300,7 @@ export function createCommandSession(
               ].includes(proposal.reason)
                 ? Object.freeze({
                     id: version,
+                    planId: response.plan_id,
                     expiresAt: Date.now() + 60000,
                     previousTarget:
                       previousTarget && previousTarget.expiresAt > Date.now()
@@ -300,15 +313,17 @@ export function createCommandSession(
                   description: describeAction(action),
                   availableOnPlatform:
                     platform === "android" &&
-                    action.capability_id === "media_volume.set" &&
-                    review.actions.length === 1,
+                    Boolean(
+                      review.operationPlan &&
+                      supportedOperationPlan(review.operationPlan),
+                    ),
                 }))
               : null,
             message:
               proposal.status !== "proposed"
                 ? planningFeedback(proposal)
-                : review!.actions.length !== 1
-                  ? "Multiple actions are preview only. No part of this plan will be executed."
+                : !supportedOperationPlan(review!.operationPlan!)
+                  ? "This whole plan is preview only because a required action has no supported executor. No part of this plan will be executed."
                   : "Plan reviewed. No device action has been performed.",
           });
         } catch (error) {
@@ -354,6 +369,19 @@ export function createCommandSession(
             : result.message,
       });
     },
+    takeReviewedPlan(): OperationPlan | null {
+      const plan = state.reviewed?.operationPlan;
+      if (
+        disposed ||
+        state.phase !== "idle" ||
+        platform !== "android" ||
+        !plan ||
+        !supportedOperationPlan(plan)
+      )
+        return null;
+      update({ reviewed: null });
+      return plan;
+    },
     takeReviewedPercent(
       capability: "media_volume.set" | "brightness.set_app",
     ): number | null {
@@ -365,6 +393,7 @@ export function createCommandSession(
     ): { percent: number; contextId?: string } | null {
       if (disposed || state.phase !== "idle" || platform !== "android")
         return null;
+      if (state.reviewed?.operationPlan) return null; // V2 plans must retain stable operation identity.
       const percent = reviewedPercent(state.reviewed, capability);
       if (percent === null) return null;
       const contextId = state.reviewed?.contextId;
@@ -420,10 +449,27 @@ export function createCommandSession(
           throw new PlanningError(
             "The clarification expired. Submit a new command.",
           );
-        remember(result.review);
+        const review =
+          pending.planId &&
+          result.review.actions[0].capability_id === "media_volume.set"
+            ? reviewedCommand(
+                [...result.review.actions],
+                "clarification",
+                result.review.expiresAt,
+                result.review.contextId,
+                operationPlan(
+                  pending.planId,
+                  2,
+                  result.review.expiresAt,
+                  result.review.actions.map((action) => ({ action })),
+                  result.review.contextId,
+                ),
+              )
+            : result.review;
+        remember(review);
         update({
           phase: "idle",
-          reviewed: result.review,
+          reviewed: review,
           clarification: null,
           preview: result.review.actions.map((action) => ({
             description: describeAction(action) + " " + result.summary,

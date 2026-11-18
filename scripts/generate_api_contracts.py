@@ -20,6 +20,7 @@ from pydantic.json_schema import models_json_schema  # noqa: E402
 from app.schemas import (  # noqa: E402
     assistant,
     assistant_brightness,
+    assistant_operations,
     assistant_planning,
     assistant_security,
     assistant_volume,
@@ -31,6 +32,9 @@ from app.schemas import (  # noqa: E402
 )
 
 MODELS = (
+    assistant_operations.OperationIdentity,
+    assistant_operations.OperationBinding,
+    assistant_operations.PercentOperationRequest,
     assistant_planning.PlanningGrantRequest,
     assistant_planning.PlanningGrant,
     assistant_planning.PlanningRequest,

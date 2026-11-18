@@ -19,3 +19,7 @@ authorize = _service.authorize
 claim = _service.claim
 receipt_challenge = _service.receipt_challenge
 receipt = _service.receipt
+
+create_operation = _service.create_operation
+operation_status = _service.operation_status
+operation_binding = _service.operation_binding

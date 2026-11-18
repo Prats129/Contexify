@@ -19,6 +19,11 @@ from app.schemas.assistant_brightness import (
     BrightnessTaskRequest,
     BrightnessTaskView,
 )
+from app.schemas.assistant_operations import (
+    OperationBinding,
+    OperationIdentity,
+    PercentOperationRequest,
+)
 from app.schemas.assistant_security import EmptySecurityRequest
 from app.services.assistant_security import SecuritySession, require_security_session
 
@@ -103,3 +108,27 @@ def receipt(
     authority: Authority = Depends(brightness.require_authority),
 ):
     return brightness.receipt(authority, task_id, payload)
+
+
+@router.post("/operations", response_model=BrightnessTaskView)
+def create_operation(
+    payload: PercentOperationRequest,
+    authority: Authority = Depends(brightness.require_authority),
+):
+    return brightness.create_operation(authority, payload)
+
+
+@router.post("/operations/status", response_model=BrightnessTaskView)
+def operation_status(
+    payload: OperationIdentity,
+    authority: Authority = Depends(brightness.require_authority),
+):
+    return brightness.operation_status(authority, payload)
+
+
+@router.post("/operations/identity", response_model=OperationBinding)
+def operation_binding(
+    payload: EmptySecurityRequest,
+    authority: Authority = Depends(brightness.require_authority),
+):
+    return brightness.operation_binding(authority)

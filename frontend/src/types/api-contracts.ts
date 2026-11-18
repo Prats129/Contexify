@@ -658,3 +658,27 @@ export type PlanningResponse = {
   execution?: "not_authorized";
   proposal: PlanningActions | PlanningFeedback;
 };
+
+export type OperationBinding = {
+  protocol_version?: 2;
+  origin: string;
+  user_id: string;
+  device_id: string;
+  installation_id: string;
+  public_key: string;
+};
+
+export type OperationIdentity = {
+  protocol_version: 2;
+  plan_id: string;
+  plan_revision: number;
+  step_id: number;
+};
+
+export type PercentOperationRequest = {
+  protocol_version: 2;
+  plan_id: string;
+  plan_revision: number;
+  step_id: number;
+  action: VolumeAction | BrightnessAction;
+};

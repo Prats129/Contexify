@@ -16,6 +16,8 @@ import {
   createCommandSession,
   createCommandPlanner,
   type CommandSessionState,
+  describeOperationResult,
+  supportedOperationPlan,
 } from "@contexify/assistant-core";
 import { createMobileVoiceAdapter } from "../services/assistant_voice";
 import {
@@ -66,6 +68,49 @@ export function AssistantPreview({
     Boolean(volumeUserId && volumeControls) &&
     process.env.EXPO_PUBLIC_ASSISTANT_EXECUTION_ENABLED === "true" &&
     process.env.EXPO_PUBLIC_ASSISTANT_NATIVE_TEST !== "true";
+  async function runPlan(recovery = false) {
+    if (
+      !volumeAllowed ||
+      !volumeControls ||
+      !volumeUserId ||
+      controlRunning.current ||
+      AppState.currentState !== "active"
+    )
+      return;
+    const plan = recovery ? null : sessionRef.current?.takeReviewedPlan();
+    if (!recovery && !plan) return;
+    controlRunning.current = true;
+    const operation = ++controlOperation.current;
+    setControlBusy(true);
+    setControlMessage(
+      recovery
+        ? "Checking saved action evidence. No actions will be retried."
+        : "Review each exact change in Android confirmation. Cancel stops the remaining plan.",
+    );
+    try {
+      if (!volumeControls.executePlan || !volumeControls.reconcilePlans)
+        throw new Error("Compatible build required.");
+      const results = recovery
+        ? await volumeControls.reconcilePlans(volumeUserId)
+        : [await volumeControls.executePlan(volumeUserId, plan!)];
+      if (operation === controlOperation.current)
+        setControlMessage(
+          results.length
+            ? (recovery
+                ? "Recorded results, not current device readings. "
+                : "") + results.map(describeOperationResult).join(" ")
+            : "No saved plan evidence on this installation. No device action was performed.",
+        );
+    } catch {
+      if (operation === controlOperation.current)
+        setControlMessage(
+          "Plan execution or recovery is unavailable. Use a compatible Android build and signed-in device. Check previous actions before making a new request; nothing will retry automatically.",
+        );
+    } finally {
+      controlRunning.current = false;
+      setControlBusy(false);
+    }
+  }
   useEffect(() => {
     function cancelVolume() {
       controlOperation.current++;
@@ -155,6 +200,10 @@ export function AssistantPreview({
     }
   }
   useEffect(() => {
+    if (volumeAllowed && state?.reviewed?.operationPlan) {
+      if (supportedOperationPlan(state.reviewed.operationPlan)) void runPlan();
+      return; // Never substitute the legacy v1 bridge for a v2 plan, even on an old APK.
+    }
     if (
       volumeAllowed &&
       state?.reviewed &&
@@ -345,7 +394,7 @@ export function AssistantPreview({
             <Text style={{ color: theme.textMuted }}>
               {state?.planningConsent
                 ? volumeAllowed
-                  ? "Give one media-volume command, then review Android confirmation. Other actions remain previews."
+                  ? "Send a settings command and approve each exact change in Android. Plans with unsupported actions remain previews."
                   : "Send a command to review its plan. Device actions are unavailable in this build."
                 : volumeAllowed
                   ? "Review a command, then request confirmation for media volume or Contexify app-window brightness. Other actions remain previews."
@@ -508,6 +557,14 @@ export function AssistantPreview({
             )}
             {volumeAllowed && (
               <View style={{ gap: 8 }}>
+                {volumeControls?.reconcilePlans &&
+                  button(
+                    "Check previous actions",
+                    () => {
+                      void runPlan(true);
+                    },
+                    busy,
+                  )}
                 <Text style={{ color: theme.textMuted }}>
                   Media volume only, 0–70%. Enroll this device first. Each
                   change requires a separate Android confirmation.

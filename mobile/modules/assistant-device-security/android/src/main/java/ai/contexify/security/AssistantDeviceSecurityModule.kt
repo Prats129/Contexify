@@ -32,6 +32,8 @@ class AssistantDeviceSecurityModule : Module() {
   private var cancelConfirmation: (() -> Unit)? = null
   private val mainHandler = Handler(Looper.getMainLooper())
   private val controlRunning = java.util.concurrent.atomic.AtomicBoolean(false)
+  private val planRunning = java.util.concurrent.atomic.AtomicBoolean(false)
+  private val planGeneration = java.util.concurrent.atomic.AtomicLong(0)
   private val brightnessEffect = AppBrightnessControl()
   private val volume by lazy {
     PercentControlExecutor(::context, { appContext.currentActivity }, { origin, user, installation ->
@@ -88,11 +90,36 @@ class AssistantDeviceSecurityModule : Module() {
     }.sign(), Base64.NO_WRAP)
   }
   private fun resetSimulation() {
+    planGeneration.incrementAndGet()
     volume.cancel()
     brightness.cancel()
     brightnessEffect.restore()
     approvals.clear()
     cancelConfirmation?.invoke()
+  }
+
+  private fun <T> foreground(block: () -> T): T {
+    var result: Result<T>? = null
+    val done = java.util.concurrent.CountDownLatch(1)
+    val valid = java.util.concurrent.atomic.AtomicBoolean(true)
+    mainHandler.post {
+      try { if (valid.get()) result = runCatching { unlocked(); block() } }
+      finally { done.countDown() }
+    }
+    if (!done.await(5, java.util.concurrent.TimeUnit.SECONDS)) {
+      valid.set(false)
+      throw IllegalStateException("Foreground operation timed out.")
+    }
+    return requireNotNull(result).getOrThrow()
+  }
+  private fun recovery(origin: String, user: String, installation: String): PlanRecoveryStore {
+    require(marker(installation).isFile && marker(installation).readText(Charsets.UTF_8) == binding(origin, user))
+    return PlanRecoveryStore(context(), installation, binding(origin, user))
+  }
+  private fun executor(capability: String) = when (capability) {
+    "media_volume.set" -> volume
+    "brightness.set_app" -> brightness
+    else -> throw IllegalArgumentException("Unsupported plan capability.")
   }
 
   override fun definition() = ModuleDefinition {
@@ -103,6 +130,7 @@ class AssistantDeviceSecurityModule : Module() {
     }.runOnQueue(Queues.MAIN)
     // The native worker obtains and consumes authority directly over HTTPS.
     AsyncFunction("executeVolume") { origin: String, user: String, installation: String, management: String, percent: Int, promise: Promise ->
+      check(!planRunning.get())
       // Capture cancellation ownership in bridge order, before the worker can be delayed.
       val ticket = volume.begin()
       kotlin.concurrent.thread(name = "AssistantVolume", isDaemon = true) {
@@ -110,11 +138,13 @@ class AssistantDeviceSecurityModule : Module() {
         catch (_: Exception) { promise.reject("ERR_VOLUME", "Volume control is unavailable. Check media volume before trying again.", null) }
       }
     }.runOnQueue(Queues.MAIN)
-    AsyncFunction("cancelVolume") { volume.cancel() }.runOnQueue(Queues.MAIN)
+    AsyncFunction("cancelVolume") { planGeneration.incrementAndGet(); volume.cancel(); if (planRunning.get()) brightness.cancel() }.runOnQueue(Queues.MAIN)
     AsyncFunction("readVolumeContext") { origin: String, user: String, installation: String ->
+      check(!planRunning.get())
       volume.readVolumeContext(origin, user, installation)
     }.runOnQueue(Queues.MAIN)
     AsyncFunction("executeVolumeFromContext") { origin: String, user: String, installation: String, management: String, percent: Int, contextId: String, promise: Promise ->
+      check(!planRunning.get())
       val (ticket, snapshot) = volume.beginWithContext(contextId)
       kotlin.concurrent.thread(name = "AssistantContextVolume", isDaemon = true) {
         try { promise.resolve(volume.execute(origin, user, installation, management, percent, ticket, snapshot)) }
@@ -122,13 +152,92 @@ class AssistantDeviceSecurityModule : Module() {
       }
     }.runOnQueue(Queues.MAIN)
     AsyncFunction("executeBrightness") { origin: String, user: String, installation: String, management: String, percent: Int, promise: Promise ->
+      check(!planRunning.get())
       val ticket = brightness.begin()
       kotlin.concurrent.thread(name = "AssistantBrightness", isDaemon = true) {
         try { promise.resolve(brightness.execute(origin, user, installation, management, percent, ticket)) }
         catch (_: Exception) { promise.reject("ERR_BRIGHTNESS", "App brightness is unavailable. Review the app window before trying again.", null) }
       }
     }.runOnQueue(Queues.MAIN)
-    AsyncFunction("cancelBrightness") { brightness.cancel() }.runOnQueue(Queues.MAIN)
+    AsyncFunction("cancelBrightness") { planGeneration.incrementAndGet(); brightness.cancel(); if (planRunning.get()) volume.cancel() }.runOnQueue(Queues.MAIN)
+
+    AsyncFunction("executePlanV2") { origin: String, user: String, installation: String, management: String, encoded: String, promise: Promise ->
+      unlocked()
+      val plan = PlanProtocol.parse(encoded, System.currentTimeMillis())
+      check(!controlRunning.get() && planRunning.compareAndSet(false, true))
+      val owner = planGeneration.get()
+      kotlin.concurrent.thread(name = "AssistantPlan", isDaemon = true) {
+        try {
+          val store = foreground { recovery(origin, user, installation) }
+          foreground {
+            check(owner == planGeneration.get())
+            plan.steps.forEach { executor(it.capability).preflight(origin, user, installation, it.percent) }
+          }
+          val sessions = mutableMapOf<String, String>() // Native memory only, never journaled or returned.
+          plan.steps.map { it.capability }.distinct().forEach {
+            executor(it).validateOperationBinding(origin, user, installation, management, sessions)
+          }
+          foreground { check(owner == planGeneration.get()) }
+          val coordinator = PlanCoordinator(store, System::currentTimeMillis) { owner != planGeneration.get() }
+          val result = coordinator.execute(plan) { step ->
+            val control = executor(step.capability)
+            val start = foreground {
+              check(owner == planGeneration.get())
+              if (plan.contextId != null) control.beginWithContext(plan.contextId) else control.begin() to null
+            }
+            PlanProtocol.evidence(control.execute(origin, user, installation, management, step.percent, start.first,
+              start.second, OperationIdentity(plan.id, plan.revision, step.id), plan.expiresAt, sessions))
+          }
+          promise.resolve(result.bridge())
+        } catch (_: Exception) {
+          val previous = runCatching {
+            val store = foreground { recovery(origin, user, installation) }
+            store.read(plan.id).also { require(it.digest == plan.digest && it.planRevision == plan.revision) }
+          }.getOrNull()
+          if (previous != null) promise.resolve(previous.copy(states = previous.states.map { if (it == "pending") "skipped" else it }).bridge())
+          else promise.reject("ERR_PLAN", "The plan stopped. Check previous actions before making a new request; no automatic retry is allowed.", null)
+        } finally { controlRunning.set(false); planRunning.set(false) }
+      }
+    }.runOnQueue(Queues.MAIN)
+
+    AsyncFunction("reconcilePlansV2") { origin: String, user: String, installation: String, management: String, promise: Promise ->
+      unlocked()
+      check(!controlRunning.get() && planRunning.compareAndSet(false, true))
+      val owner = planGeneration.get()
+      kotlin.concurrent.thread(name = "AssistantPlanStatus", isDaemon = true) {
+        try {
+          val store = foreground { recovery(origin, user, installation) }
+          val sessions = mutableMapOf<String, String>()
+          // A remembered user ID/marker is not authentication. Check live device
+          // authority before decrypting or returning even fully local evidence.
+          volume.validateOperationBinding(origin, user, installation, management, sessions)
+          val rows = store.recent(3)
+          val deadline = android.os.SystemClock.elapsedRealtime() + 30000
+          val results = rows.map { row ->
+            val evidence = row.evidence.toMutableList()
+            val states = row.states.map { if (it == "pending") "skipped" else it }.toMutableList()
+            row.states.forEachIndexed { i, state ->
+              if (state != "pending" && state != "skipped" && evidence[i]?.recorded != true &&
+                owner == planGeneration.get() && android.os.SystemClock.elapsedRealtime() < deadline) {
+                val control = executor(row.capabilities[i])
+                val remote = runCatching {
+                  val ticket = foreground { check(owner == planGeneration.get()); control.begin() }
+                  control.operationStatus(origin, user, installation, management,
+                    OperationIdentity(row.id, row.planRevision, i), row.percents[i], ticket, sessions)
+                }.getOrNull()
+                if (remote != null) { states[i] = remote.outcome; evidence[i] = remote }
+              }
+            }
+            // Projection only: no journal edits, fresh approval, claim or OS writes.
+            row.copy(states = states, evidence = evidence).bridge()
+          }
+          foreground { check(owner == planGeneration.get()) }
+          promise.resolve(results)
+        } catch (_: Exception) {
+          promise.reject("ERR_PLAN_STATUS", "Recovery evidence is unavailable. No device action was performed or retried.", null)
+        } finally { controlRunning.set(false); planRunning.set(false) }
+      }
+    }.runOnQueue(Queues.MAIN)
 
     OnActivityEntersBackground { mainHandler.post { resetSimulation() } }
     OnActivityDestroys { mainHandler.post { resetSimulation() } }
@@ -256,6 +365,7 @@ class AssistantDeviceSecurityModule : Module() {
       marker(installation).delete()
       volume.forget(installation)
       brightness.forget(installation)
+      PlanRecoveryStore(context(), installation, "").forget()
       Unit
     }.runOnQueue(Queues.MAIN)
   }

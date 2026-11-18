@@ -1,11 +1,14 @@
 """Separately scoped brightness execution using the shared percent protocol."""
+
 from app.assistant.percent_control import ControlAuthority, PercentControl
 from app.schemas.assistant import BrightnessAction
 from app.schemas.assistant_brightness import BrightnessTaskView
 
 POLICY_VERSION = 1
 BrightnessAuthority = ControlAuthority
-_service = PercentControl("brightness", BrightnessAction, BrightnessTaskView, lambda: POLICY_VERSION)
+_service = PercentControl(
+    "brightness", BrightnessAction, BrightnessTaskView, lambda: POLICY_VERSION
+)
 create_session = _service.create_session
 require_authority = _service.require_authority
 create_task = _service.create_task
@@ -16,3 +19,7 @@ authorize = _service.authorize
 claim = _service.claim
 receipt_challenge = _service.receipt_challenge
 receipt = _service.receipt
+
+create_operation = _service.create_operation
+operation_status = _service.operation_status
+operation_binding = _service.operation_binding

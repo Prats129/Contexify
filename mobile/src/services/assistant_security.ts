@@ -11,6 +11,11 @@ import { brightnessResult } from "./assistant_brightness";
 import {
   planningJson,
   planningPath,
+  operationPlan,
+  operationResult,
+  supportedOperationPlan,
+  type OperationPlan,
+  type OperationResult,
   type PlanningContext,
 } from "@contexify/assistant-core";
 import type { VolumeExecutionResult } from "../../modules/assistant-device-security";
@@ -242,7 +247,78 @@ export function createAssistantDeviceSecurity(
       controlBusy = false;
     }
   }
+  async function planControl(
+    userId: string,
+    plan?: OperationPlan,
+  ): Promise<OperationResult | OperationResult[]> {
+    const bridge = controlBridge("volume");
+    if (!bridge.executePlanV2 || !bridge.reconcilePlansV2)
+      throw new Error(
+        "Plan execution and recovery require an updated compatible Android build.",
+      );
+    if (controlBusy || busy)
+      throw new Error("A device operation is already in progress.");
+    controlBusy = true;
+    const generation = version;
+    try {
+      const binding = await readBinding(userId);
+      if (!binding) throw new Error("Enable device controls first.");
+      const management = await api.openSession(userId);
+      if (generation !== version || binding.host !== (await host()))
+        throw new Error("Plan request cancelled.");
+      const result = plan
+        ? await bridge.executePlanV2(
+            binding.host,
+            userId,
+            binding.installationId,
+            management.access_token,
+            JSON.stringify(plan),
+          )
+        : await bridge.reconcilePlansV2(
+            binding.host,
+            userId,
+            binding.installationId,
+            management.access_token,
+          );
+      if (generation !== version || binding.host !== (await host()))
+        throw new Error(
+          "The session changed. Check previous actions before making a new request.",
+        );
+      if (plan) return operationResult(result, plan);
+      if (!Array.isArray(result) || result.length > 3)
+        throw new Error("Invalid recovery evidence.");
+      const rows = result.map((value) => operationResult(value));
+      if (new Set(rows.map((row) => row.plan_id)).size !== rows.length)
+        throw new Error("Duplicate recovery evidence.");
+      return rows;
+    } finally {
+      controlBusy = false;
+    }
+  }
   const api = {
+    async executePlan(
+      userId: string,
+      plan: OperationPlan,
+    ): Promise<OperationResult> {
+      const snapshot = operationPlan(
+        plan.plan_id,
+        plan.plan_revision,
+        plan.expires_at * 1000,
+        plan.steps.map((step) => ({
+          action: step.action,
+          depends_on: [...step.depends_on],
+        })),
+        plan.context_id,
+      );
+      if (!supportedOperationPlan(snapshot))
+        throw new Error(
+          "The whole plan must be supported before any step can run.",
+        );
+      return planControl(userId, snapshot) as Promise<OperationResult>;
+    },
+    async reconcilePlans(userId: string): Promise<OperationResult[]> {
+      return planControl(userId) as Promise<OperationResult[]>;
+    },
     async readVolumeContext(
       userId: string,
       signal: AbortSignal,

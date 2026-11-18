@@ -15,6 +15,19 @@ export interface PercentExecutionResult {
 export type VolumeExecutionResult = PercentExecutionResult;
 
 interface SecurityModule {
+  executePlanV2?(
+    origin: string,
+    userId: string,
+    installationId: string,
+    managementToken: string,
+    planJson: string,
+  ): Promise<unknown>;
+  reconcilePlansV2?(
+    origin: string,
+    userId: string,
+    installationId: string,
+    managementToken: string,
+  ): Promise<unknown>;
   readVolumeContext?(
     origin: string,
     userId: string,

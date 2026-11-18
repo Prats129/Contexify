@@ -28,6 +28,10 @@ class ProviderQuotaExceeded(ProviderUnavailable):
     pass
 
 
+class ProviderIncompleteOutput(ProviderUnavailable):
+    pass
+
+
 class ProviderDataScopeError(Exception):
     pass
 
@@ -144,7 +148,10 @@ class GeminiPlanningProvider:
                     disable=True
                 ),
                 tools=[],
-                max_output_tokens=1024,
+                # This ceiling includes hidden reasoning, not only the JSON answer.
+                max_output_tokens=4096
+                if self.model == "gemini-3.5-flash-lite"
+                else 1024,
                 thinking_config=types.ThinkingConfig(
                     thinking_level=(
                         types.ThinkingLevel.MEDIUM
@@ -188,6 +195,15 @@ class GeminiPlanningProvider:
             )
             if response.function_calls:
                 raise ProviderUnavailable()
+            candidates = getattr(response, "candidates", None)
+            if (
+                not candidates
+                or len(candidates) != 1
+                or candidates[0].finish_reason != types.FinishReason.STOP
+            ):
+                # Even parseable JSON may be an incomplete prefix of a compound plan.
+                # Do not repair, execute or silently accept a token-truncated result.
+                raise ProviderIncompleteOutput()
             text = response.text
             if not isinstance(text, str):
                 raise ProviderUnavailable()

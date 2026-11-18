@@ -11,6 +11,11 @@ from app.schemas.assistant import (
     SimulationPermit,
     SimulationProofRequest,
 )
+from app.schemas.assistant_operations import (
+    OperationBinding,
+    OperationIdentity,
+    PercentOperationRequest,
+)
 from app.schemas.assistant_security import EmptySecurityRequest
 from app.schemas.assistant_volume import (
     VolumeClaim,
@@ -100,3 +105,26 @@ def receipt(
     authority: Authority = Depends(volume.require_authority),
 ):
     return volume.receipt(authority, task_id, payload)
+
+
+@router.post("/operations", response_model=VolumeTaskView)
+def create_operation(
+    payload: PercentOperationRequest,
+    authority: Authority = Depends(volume.require_authority),
+):
+    return volume.create_operation(authority, payload)
+
+
+@router.post("/operations/status", response_model=VolumeTaskView)
+def operation_status(
+    payload: OperationIdentity, authority: Authority = Depends(volume.require_authority)
+):
+    return volume.operation_status(authority, payload)
+
+
+@router.post("/operations/identity", response_model=OperationBinding)
+def operation_binding(
+    payload: EmptySecurityRequest,
+    authority: Authority = Depends(volume.require_authority),
+):
+    return volume.operation_binding(authority)

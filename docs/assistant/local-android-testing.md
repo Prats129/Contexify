@@ -1,5 +1,7 @@
 # Local Android test delivery
 
+**Latest M4 delivery, 2026-11-18:** the code-3 APK is built/inspected and the isolated backend updated. See [M4 delivery](#authorized-m4-test-apk-delivery---2026-11-18). Code-2 and earlier checkpoints below remain historical.
+
 **Latest delivery, 2026-11-17:** [post-M3 public live evaluation](live-public-evaluation.md) records the inspected version-code-2 APK, active isolated test server and resumed manual S25 checkpoint. The user confirmed installation/test sign-in and, after the reviewed Flash-Lite switch, the live single-volume AI command: native approval, actual volume change and inline result. Earlier provider/interpretation failures remain historical evidence; M3 relative-state and remaining release acceptance stay open. Earlier artifact/checkpoint details below are historical. No EAS job or phone access was used.
 
 Started 2026-11-15. The user authorized local setup/build, accepted Android SDK licensing, declined USB debugging/phone access, and chose the PC's hotspot for manual installation/testing. Do not run ADB/device enumeration, install onto the phone, inspect phone data or submit EAS builds. The user installs and tests the APK themselves.
@@ -95,3 +97,8 @@ Recovery update: the smaller-memory attempt compiled both assistant Android modu
 The next packaging attempt reached C++ compilation and failed in Windows Ninja while creating a long generated Safe Area Context object path (`local-build-recovery.log`). The generated test project's CMake configuration now sets `CMAKE_OBJECT_PATH_MAX=240`, so CMake hashes long object paths before the native tool's limit. An initial limit of 200 was too small for the fixed target directory and filename, producing warnings and leaving the long path intact. This changes only local generated build configuration and reuses the existing cache; it does not change dependency source or Windows system settings. See [CMake's object-path setting](https://cmake.org/cmake/help/latest/variable/CMAKE_OBJECT_PATH_MAX.html).
 
 The compiler probe also stalled with no live compiler child in restricted execution. Only this build's verified Ninja/CMake/Gradle processes were stopped. A reviewed local build outside the process sandbox completed the same configuration step promptly; logs remain in `local-build-path-fix.log` and `local-build-native-recovery.log`. The exact cause of the earlier stall is not established. No cloud build or phone operation was involved.
+
+
+## Authorized M4 test APK delivery - 2026-11-18
+
+The inspected local M4 update is `backend/.pytest_cache/assistant-local-android/Contexify-Assistant-M4-Test-1.4.3-3.apk`, version 1.4.3-assistant-test3/code 3 (62,516,001 bytes). It matches the previous test signing identity and preserves the earlier APK. Install over Contexify Volume Test; no uninstall or production update is needed. The isolated HTTPS backend was restarted with protected M4 routes. No EAS build, phone access or live generation was used. Full digest/inspection evidence and pending physical checks are in [M4 delivery](m4-operation-recovery.md#authorized-m4-test-apk-delivery---2026-11-18).

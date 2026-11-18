@@ -122,6 +122,12 @@ internal class PercentControlExecutor(
     control.requirePermission(ctx)
   }
 
+  fun preflight(origin: String, user: String, installation: String, percent: Int) {
+    check(Looper.myLooper() == Looper.getMainLooper())
+    enabled(); active(generation.get()); binding(origin, user, uuid(installation))
+    control.inspect(context(), requireNotNull(activity()), percent)
+  }
+
   private fun hash(value: String) = MessageDigest.getInstance("SHA-256")
     .digest(value.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it.toInt() and 255) }
   private fun uuid(value: String): String {
@@ -270,7 +276,53 @@ internal class PercentControlExecutor(
     check(directory.delete())
   }
 
-  fun execute(origin: String, user: String, installation: String, management: String, percent: Int, ticket: Long, expectedContext: VolumeContext? = null): Map<String, Any?> {
+  private fun scopedSession(origin: String, management: String, ticket: Long, deadline: Long, sessions: MutableMap<String, String>): String {
+    return sessions.getOrPut(control.mode) {
+      val session = post(origin, management, "/sessions", JSONObject(), ticket, deadline)
+      require(session.getString("scope") == "assistant:${control.mode}")
+      session.getString("access_token")
+    }
+  }
+
+  private fun identity(value: OperationIdentity) = JSONObject().put("protocol_version", 2)
+    .put("plan_id", value.planId).put("plan_revision", value.revision).put("step_id", value.stepId)
+
+  fun validateOperationBinding(origin: String, user: String, installation: String, management: String,
+    sessions: MutableMap<String, String>) {
+    val ticket = generation.get()
+    onMain { enabled(); active(ticket); binding(origin, user, uuid(installation)) }
+    val deadline = SystemClock.elapsedRealtime() + 15000
+    val token = scopedSession(origin, management, ticket, deadline, sessions)
+    val owner = post(origin, token, "/operations/identity", JSONObject(), ticket, deadline)
+    require(owner.get("protocol_version") == 2 && owner.getString("origin") == origin &&
+      owner.getString("user_id") == user && owner.getString("installation_id") == installation &&
+      owner.getString("public_key") == publicKey(installation))
+    uuid(owner.getString("device_id"))
+    onMain { active(ticket); binding(origin, user, installation) }
+  }
+
+  fun operationStatus(origin: String, user: String, installation: String, management: String,
+    operation: OperationIdentity, percent: Int, ticket: Long, sessions: MutableMap<String, String>): StepEvidence? {
+    try {
+      onMain { enabled(); active(ticket); binding(origin, user, uuid(installation)) }
+      val deadline = SystemClock.elapsedRealtime() + 15000
+      val token = scopedSession(origin, management, ticket, deadline, sessions)
+      val status = post(origin, token, "/operations/status", identity(operation), ticket, deadline)
+      val action = status.getJSONObject("action")
+      require(action.getString("capability_id") == control.capability && action.getInt("percent") == percent)
+      // Only an authenticated, already recorded receipt establishes a server result.
+      val state = status.getString("state")
+      if (state !in setOf("verified", "failed", "outcome_unknown")) return null
+      val result = status.optJSONObject("result") ?: return null
+      require(result.getString("outcome") == state)
+      val observed = if (result.isNull("observed_index")) null else result.getInt("observed_index") * 100 / result.getInt("max_index")
+      return StepEvidence(state, percent, observed, true)
+    } finally { running.set(false) }
+  }
+
+  fun execute(origin: String, user: String, installation: String, management: String, percent: Int, ticket: Long,
+    expectedContext: VolumeContext? = null, operation: OperationIdentity? = null,
+    validUntil: Long = Long.MAX_VALUE, sessions: MutableMap<String, String> = mutableMapOf()): Map<String, Any?> {
     var claimed = false
     var outcome = "failed"
     var observed: Int? = null
@@ -288,12 +340,13 @@ internal class PercentControlExecutor(
         control.inspect(context(), requireNotNull(activity()), percent)
       }
       maximum = limits.second
-      val deadline = SystemClock.elapsedRealtime() + 120000
-      val session = post(origin, management, "/sessions", JSONObject(), ticket, deadline)
-      require(session.getString("scope") == "assistant:${control.mode}")
-      val token = session.getString("access_token")
+      check(System.currentTimeMillis() < validUntil)
+      val deadline = SystemClock.elapsedRealtime() + minOf(120000, (validUntil - System.currentTimeMillis()).coerceAtLeast(0))
+      val token = scopedSession(origin, management, ticket, deadline, sessions)
       val action = JSONObject().put("capability_id", control.capability).put("schema_version", 1).put("percent", percent)
-      val task = post(origin, token, "/tasks", JSONObject().put("idempotency_key", UUID.randomUUID().toString()).put("action", action), ticket, deadline)
+      val task = if (operation == null)
+        post(origin, token, "/tasks", JSONObject().put("idempotency_key", UUID.randomUUID().toString()).put("action", action), ticket, deadline)
+      else post(origin, token, "/operations", identity(operation).put("action", action), ticket, deadline)
       val taskId = uuid(task.getString("task_id"))
       require(task.getString("mode") == control.mode && task.getString("state") == "awaiting_confirmation" && task.getInt("revision") == 1)
       val taskPath = "/tasks/$taskId"
@@ -304,10 +357,10 @@ internal class PercentControlExecutor(
         .put("expected_revision", revision).put("challenge_id", challenge.getString("challenge_id")).put("signature", sign(installation, payload))
       val challenge = request("/authorization-challenge", JSONObject().put("expected_revision", 1))
       val authorization = validate(challenge, "assistant_${control.mode}_authorize", 1)
-      val confirmationExpiry = expectedContext?.let {
+      val confirmationExpiry = minOf(validUntil / 1000.0, expectedContext?.let {
         minOf(challenge.getDouble("expires_at"), System.currentTimeMillis() / 1000.0 +
           (it.deadline - SystemClock.elapsedRealtime()).coerceAtLeast(0) / 1000.0)
-      } ?: challenge.getDouble("expires_at")
+      } ?: challenge.getDouble("expires_at"))
       val contextDetails = expectedContext?.let {
         "\n\nBased on media-volume step ${it.index} of ${it.maximum}. If that reading changes, this request stops."
       }.orEmpty()
@@ -317,15 +370,18 @@ internal class PercentControlExecutor(
         outcome = "cancelled"
         if (ticket == generation.get()) runCatching { request("/cancel", JSONObject()) }
       } else {
+        check(System.currentTimeMillis() < validUntil)
         onMain { active(ticket); binding(origin, user, installation); checkContext(expectedContext, origin, user, installation, ticket) }
         val permit = request("/authorize", proof(challenge, authorization, 1))
         require(permit.getInt("action_revision") == 2)
         val claimChallenge = permit.getJSONObject("claim_challenge")
         val claimPayload = validate(claimChallenge, "assistant_${control.mode}_claim", 2)
         require(JSONObject(claimPayload).getString("permit_hash") == hash(permit.getString("permit")))
-        val journal = onMain { active(ticket); journal(installation, taskId) }
+        // V2's coordinator already committed encrypted unknown evidence before dispatch.
+        // Keep the old journal only for the retained v1 compatibility methods.
+        val journal = if (operation == null) onMain { active(ticket); journal(installation, taskId) } else null
         val marker = JSONObject().put("task_id", taskId).put("requested_percent", percent).put("state", "outcome_unknown")
-        onMain { active(ticket); write(journal, marker) }
+        if (journal != null) onMain { active(ticket); write(journal, marker) }
         claimed = true // Lost claim responses are unknown, never retried.
         val claim = request("/claim", proof(claimChallenge, claimPayload, 2).put("permit", permit.getString("permit")))
         require(claim.getString("execution") == control.execution && claim.getInt("action_revision") == 3)
@@ -335,13 +391,14 @@ internal class PercentControlExecutor(
         require(claimExpiry.isFinite() && claimExpiry > System.currentTimeMillis() / 1000.0 && claimExpiry <= System.currentTimeMillis() / 1000.0 + 20)
         onMain {
           active(ticket); enabled(); binding(origin, user, installation)
+          check(System.currentTimeMillis() < validUntil)
           check(SystemClock.elapsedRealtime() < monotonicExpiry && System.currentTimeMillis() / 1000.0 < claimExpiry)
           checkContext(expectedContext, origin, user, installation, ticket)
           val observation = control.apply(context(), requireNotNull(activity()), percent, limits)
           observed = observation.second
           outcome = observation.first
           marker.put("state", outcome).put("claim_id", claimId).put("observed_index", observed ?: JSONObject.NULL).put("max_index", if (observed == null) JSONObject.NULL else limits.second)
-          write(journal, marker)
+          if (journal != null) write(journal, marker)
         }
         val result = JSONObject().put("expected_revision", 3).put("claim_id", claimId).put("outcome", outcome)
           .put("observed_index", observed ?: JSONObject.NULL).put("max_index", if (observed == null) JSONObject.NULL else limits.second)

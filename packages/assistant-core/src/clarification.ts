@@ -16,6 +16,7 @@ export interface PendingClarification {
   readonly id: number;
   readonly expiresAt: number;
   readonly previousTarget: PercentTarget | null;
+  readonly planId?: string;
 }
 export interface LocalVolumeContext {
   protocol_version: 1;

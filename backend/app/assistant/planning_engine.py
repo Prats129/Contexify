@@ -14,6 +14,7 @@ from app.assistant.planning_provider import (
     PlanningInput,
     PlanningProvider,
     ProviderDataScopeError,
+    ProviderIncompleteOutput,
     ProviderQuotaExceeded,
     ProviderUnavailable,
 )
@@ -136,6 +137,11 @@ class PlanningEngine:
                     self._quota_until = time.monotonic() + 60
                     raise HTTPException(
                         429, "Provider quota exhausted. No fallback was attempted."
+                    ) from None
+                except ProviderIncompleteOutput:
+                    raise HTTPException(
+                        502,
+                        "The planner did not finish a complete proposal. No device action was performed.",
                     ) from None
                 except ProviderUnavailable:
                     raise HTTPException(

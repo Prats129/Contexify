@@ -9,6 +9,7 @@ import {
   validateProposal,
   type AssistantAction,
 } from "./validation";
+import type { OperationPlan } from "./operations";
 
 export interface PlanningContext {
   userId: string;
@@ -30,6 +31,7 @@ export interface ReviewedCommand {
   readonly expiresAt: number;
   readonly actions: readonly Readonly<AssistantAction>[];
   readonly contextId?: string;
+  readonly operationPlan?: OperationPlan;
 }
 
 export class PlanningError extends Error {
@@ -164,11 +166,13 @@ export function reviewedCommand(
   source: ReviewedCommand["source"],
   expiresAt: number,
   contextId?: string,
+  operationPlan?: OperationPlan,
 ): ReviewedCommand {
   return Object.freeze({
     source,
     expiresAt,
     ...(contextId ? { contextId } : {}),
+    ...(operationPlan ? { operationPlan } : {}),
     actions: Object.freeze(
       actions.map((action) => Object.freeze(validateAction(action))),
     ),

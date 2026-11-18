@@ -35,6 +35,7 @@ function setup(
     else process.env.EXPO_PUBLIC_ASSISTANT_EXECUTION_ENABLED = old;
   });
   const calls = [],
+    plans = [],
     requests = [];
   const controls = {
     async planningContext() {
@@ -57,6 +58,30 @@ function setup(
       };
     },
     enableVolume: async () => {},
+    async executePlan(user, plan) {
+      plans.push({ user, plan });
+      return {
+        protocol_version: 2,
+        plan_id: plan.plan_id,
+        plan_revision: plan.plan_revision,
+        revision: 1 + 2 * plan.steps.length,
+        steps: plan.steps.map((step) => ({
+          step_id: step.step_id,
+          capability_id: step.action.capability_id,
+          state: "verified",
+          result: {
+            outcome: "verified",
+            requested_percent: step.action.percent,
+            observed_percent:
+              step.action.capability_id === "media_volume.set"
+                ? Math.max(0, step.action.percent - 4)
+                : step.action.percent,
+            receipt_recorded: true,
+          },
+        })),
+      };
+    },
+    reconcilePlans: async () => [],
     async changeVolume(user, percent) {
       calls.push({ user, percent });
       return {
@@ -96,21 +121,25 @@ function setup(
       ui.find("button", "Send command").props.onClick();
     }
   }
-  return { ui, send, calls, requests };
+  return { ui, send, calls, plans, requests };
 }
 
 test("Android Send command requests the exact native volume confirmation without a second JS button", async (t) => {
   const f = setup(t);
   f.send();
   await f.ui.flush();
-  assert.deepEqual(f.calls, [{ user: userId, percent: 50 }]);
+  assert.equal(f.plans.length, 1);
+  assert.equal(f.plans[0].user, userId);
+  assert.equal(f.plans[0].plan.plan_id, grantId);
+  assert.equal(f.plans[0].plan.steps[0].action.percent, 50);
+  assert.equal(f.calls.length, 0); // No legacy dispatch.
   assert.equal(
     f.ui.find("TouchableOpacity", "Confirm volume change"),
     undefined,
   );
-  assert.match(f.ui.text(), /Media volume verified at 46%/);
+  assert.match(f.ui.text(), /Step 1: media volume verified at 46%/);
   await f.ui.flush();
-  assert.equal(f.calls.length, 1);
+  assert.equal(f.plans.length, 1);
 });
 
 test("a compound Android plan stays a preview and does not reach native confirmation", async (t) => {
@@ -129,7 +158,102 @@ test("a compound Android plan stays a preview and does not reach native confirma
   f.send();
   await f.ui.flush();
   assert.equal(f.calls.length, 0);
+  assert.equal(f.plans.length, 0);
   assert.match(f.ui.text(), /No part of this plan/);
+});
+
+test("a fully supported settings graph reaches the v2 coordinator once with dependencies intact", async (t) => {
+  const f = setup(t, "android", async () =>
+    draft(deviceId, [
+      { action: { capability_id: "media_volume.set", percent: 50 } },
+      {
+        action: { capability_id: "brightness.set_app", percent: 40 },
+        depends_on: [0],
+      },
+    ]),
+  );
+  f.send();
+  await f.ui.flush();
+  assert.equal(f.plans.length, 1);
+  assert.deepEqual(f.plans[0].plan.steps[1].depends_on, [0]);
+  assert.equal(f.calls.length, 0);
+  assert.match(f.ui.text(), /Step 2: Contexify brightness verified at 40%/);
+  await f.ui.flush();
+  assert.equal(f.plans.length, 1);
+});
+
+test("missing v2 support gives visible build guidance without falling back to legacy execution", async (t) => {
+  const f = setup(t, "android", undefined, { executePlan: undefined });
+  f.send();
+  await f.ui.flush();
+  assert.equal(f.plans.length, 0);
+  assert.equal(f.calls.length, 0);
+  assert.match(f.ui.text(), /compatible Android build/);
+});
+
+test("previous-action checks show historical uncertainty and do not dispatch effects", async (t) => {
+  let reads = 0;
+  const f = setup(t, "android", undefined, {
+    reconcilePlans: async () => {
+      reads++;
+      return [
+        {
+          protocol_version: 2,
+          plan_id: grantId,
+          plan_revision: 1,
+          revision: 2,
+          steps: [
+            {
+              step_id: 0,
+              capability_id: "media_volume.set",
+              state: "outcome_unknown",
+              result: null,
+            },
+          ],
+        },
+      ];
+    },
+  });
+  f.ui.find("TouchableOpacity", "Check previous actions").props.onPress();
+  await f.ui.flush();
+  assert.match(f.ui.text(), /Recorded results, not current device readings/);
+  assert.match(f.ui.text(), /outcome unknown/);
+  assert.equal(reads, 1);
+  assert.equal(f.plans.length, 0);
+  assert.equal(f.calls.length, 0);
+});
+
+test("background cancels a v2 result and returning does not replay the plan", async (t) => {
+  let finish;
+  const f = setup(t, "android", undefined, {
+    executePlan: async (_user, plan) =>
+      new Promise((resolve) => {
+        finish = () =>
+          resolve({
+            protocol_version: 2,
+            plan_id: plan.plan_id,
+            plan_revision: 1,
+            revision: 2,
+            steps: [
+              {
+                step_id: 0,
+                capability_id: "media_volume.set",
+                state: "outcome_unknown",
+                result: null,
+              },
+            ],
+          });
+      }),
+  });
+  f.send();
+  await f.ui.flush();
+  f.ui.emit("change", "background");
+  finish();
+  await f.ui.flush();
+  f.ui.emit("change", "active");
+  await f.ui.flush();
+  assert.doesNotMatch(f.ui.text(), /Step 1: media volume outcome unknown/);
+  assert.equal(f.calls.length, 0);
 });
 
 test("90% returned by a faulty planner produces visible error feedback with no control call", async (t) => {
@@ -288,13 +412,27 @@ test("clarification asks for explicit fields and local-read consent before a con
       reads++;
       return localReading();
     },
-    changeVolumeFromContext: async (user, percent, context) => {
-      conditional.push({ user, percent, context });
+    executePlan: async (user, plan) => {
+      const percent = plan.steps[0].action.percent;
+      conditional.push({ user, percent, context: plan.context_id });
       return {
-        outcome: "verified",
-        requested_percent: percent,
-        observed_percent: percent,
-        receipt_recorded: true,
+        protocol_version: 2,
+        plan_id: plan.plan_id,
+        plan_revision: 2,
+        revision: 3,
+        steps: [
+          {
+            step_id: 0,
+            capability_id: "media_volume.set",
+            state: "verified",
+            result: {
+              outcome: "verified",
+              requested_percent: percent,
+              observed_percent: percent,
+              receipt_recorded: true,
+            },
+          },
+        ],
       };
     },
   });

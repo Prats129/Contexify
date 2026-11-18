@@ -12,6 +12,7 @@ import socket
 import sqlite3
 import sys
 import time
+from collections.abc import Callable
 from contextlib import closing
 from pathlib import Path
 from typing import Any, cast
@@ -141,8 +142,15 @@ def google_addresses() -> frozenset[str]:
     return addresses
 
 
-def network_guard(addresses: frozenset[str]):
+def network_guard(
+    addresses: frozenset[str],
+    *,
+    resolve: Callable[[], frozenset[str]] = google_addresses,
+):
+    approved = addresses
+
     def guard(event, args):
+        nonlocal approved
         if event == "socket.getaddrinfo":
             # AnyIO encodes DNS names before handing them to the OS resolver.
             host = args[0]
@@ -152,6 +160,9 @@ def network_guard(addresses: frozenset[str]):
                 return
             if host == GOOGLE_HOST and args[1] == 443:
                 return
+            logging.getLogger(__name__).warning(
+                "Public evaluation network policy denied DNS resolution."
+            )
             raise PermissionError(
                 "Only local connections and the fixed Gemini host are permitted."
             )
@@ -161,10 +172,28 @@ def network_guard(addresses: frozenset[str]):
                 return
             if (
                 isinstance(address, tuple)
-                and address[0] in addresses
+                and address[0] in approved
                 and address[1] == 443
             ):
                 return
+            # DNS answers may rotate during this long-running test server. Recheck
+            # only the fixed Google hostname, never widen to arbitrary public TLS.
+            # GoogleTransport independently pins the URL/model and TLS validates SNI.
+            if isinstance(address, tuple) and address[1] == 443:
+                try:
+                    if ipaddress.ip_address(address[0]).is_global:
+                        fresh = resolve()
+                        if 0 < len(fresh) <= 64 and all(
+                            ipaddress.ip_address(value).is_global for value in fresh
+                        ):
+                            approved = fresh
+                            if address[0] in approved:
+                                return
+                except (OSError, RuntimeError, ValueError, TypeError):
+                    pass  # Resolution failure never grants broader egress.
+            logging.getLogger(__name__).warning(
+                "Public evaluation network policy denied a socket connection."
+            )
             raise PermissionError(
                 "Outbound destination is outside the approved evaluation scope."
             )
@@ -241,7 +270,13 @@ class GoogleTransport(httpx.AsyncBaseTransport):
             raise httpx.TransportError(
                 "Live evaluation admission is unavailable."
             ) from None
-        response = await self.inner.handle_async_request(request)
+        try:
+            response = await self.inner.handle_async_request(request)
+        except (httpx.HTTPError, OSError, RuntimeError) as error:
+            logging.getLogger(__name__).warning(
+                "Public evaluation transport failed (%s).", type(error).__name__
+            )
+            raise
         self.last_status = response.status_code
         try:
             if response.headers.get("content-encoding", "identity") != "identity":
@@ -314,9 +349,17 @@ class PublicEvaluationProvider(GeminiPlanningProvider):
     async def propose(
         self, value: PlanningInput, *, repair: bool, timeout: float
     ) -> str:
-        return await super().propose(
-            self._approved(value), repair=repair, timeout=timeout
-        )
+        try:
+            return await super().propose(
+                self._approved(value), repair=repair, timeout=timeout
+            )
+        except ProviderUnavailable as error:
+            logging.getLogger(__name__).warning(
+                "Public evaluation proposal stopped (%s; upstream HTTP %s).",
+                type(error).__name__,
+                self.transport.last_status,
+            )
+            raise
 
     def _make_client(self, *, api_key, http_options):
         from google import genai

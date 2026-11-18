@@ -1,7 +1,13 @@
 import type { PercentExecutionResult } from "../../modules/assistant-device-security";
-import type { PlanningAccess } from "@contexify/assistant-core";
+import type {
+  OperationPlan,
+  OperationResult,
+  PlanningAccess,
+} from "@contexify/assistant-core";
 
 export interface DeviceControls {
+  executePlan?(userId: string, plan: OperationPlan): Promise<OperationResult>;
+  reconcilePlans?(userId: string): Promise<OperationResult[]>;
   readVolumeContext?(userId: string, signal: AbortSignal): Promise<unknown>;
   changeVolumeFromContext?(
     userId: string,

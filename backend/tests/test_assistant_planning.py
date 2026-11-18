@@ -31,6 +31,7 @@ from app.assistant.planning_provider import (
     PlanningInput,
     PlanningModel,
     ProviderDataScopeError,
+    ProviderIncompleteOutput,
     ProviderQuotaExceeded,
     ProviderUnavailable,
 )
@@ -317,6 +318,13 @@ class AssistantPlanningTests(bootstrap.AssistantSecurityFixture):
             )
             admission.assert_called_once()
         self.assertEqual(self.provider.calls, [])
+
+    def test_incomplete_generation_is_rejected_without_schema_repair(self):
+        self.provider.outputs = [ProviderIncompleteOutput()]
+        response = self.send("POST", "/proposals", json=self.body())
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(len(self.provider.calls), 1)
+        self.assertIn("complete proposal", response.json()["detail"])
 
     def test_runtime_adapter_blocks_arbitrary_text_before_client_creation(self):
         factory = Mock()
@@ -623,7 +631,11 @@ class GeminiAdapterTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_flash_lite_has_an_explicit_fixed_model_and_medium_thinking(self):
         generate = AsyncMock(
-            return_value=SimpleNamespace(text=OUTPUT, function_calls=None)
+            return_value=SimpleNamespace(
+                text=OUTPUT,
+                function_calls=None,
+                candidates=[SimpleNamespace(finish_reason="STOP")],
+            )
         )
         close = AsyncMock()
         factory = Mock(
@@ -649,9 +661,40 @@ class GeminiAdapterTests(unittest.IsolatedAsyncioTestCase):
                 self.sdk_types.ThinkingLevel.MEDIUM,
             )
             self.assertEqual(options["config"].http_options.retry_options.attempts, 1)
+            self.assertEqual(options["config"].max_output_tokens, 4096)
         finally:
             await provider.aclose()
         close.assert_awaited_once()
+
+    async def test_incomplete_candidate_is_rejected_even_when_json_is_parseable(self):
+        for reason in ("MAX_TOKENS", "SAFETY", None):
+            for text in (OUTPUT, '{"mode":"proposal"'):
+                with self.subTest(reason=reason, text_complete=text == OUTPUT):
+                    generate = AsyncMock(
+                        return_value=SimpleNamespace(
+                            text=text,
+                            function_calls=None,
+                            candidates=[SimpleNamespace(finish_reason=reason)],
+                        )
+                    )
+                    provider = GeminiPlanningProvider(
+                        approved_cases={"M0-01": TEXT},
+                        client_factory=Mock(
+                            return_value=SimpleNamespace(
+                                aio=SimpleNamespace(
+                                    models=SimpleNamespace(generate_content=generate)
+                                )
+                            )
+                        ),
+                    )
+                    with self.assertRaises(ProviderIncompleteOutput) as caught:
+                        await provider.propose(
+                            PlanningInput(TEXT, "M0-01", "android"),
+                            repair=False,
+                            timeout=1,
+                        )
+                    self.assertEqual(str(caught.exception), "")
+                    generate.assert_awaited_once()
 
     async def test_unreviewed_model_is_rejected_before_client_construction(self):
         factory = Mock()
@@ -665,7 +708,11 @@ class GeminiAdapterTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_sdk_config_is_json_only_one_attempt_and_no_tools(self):
         generate = AsyncMock(
-            return_value=SimpleNamespace(text=OUTPUT, function_calls=None)
+            return_value=SimpleNamespace(
+                text=OUTPUT,
+                function_calls=None,
+                candidates=[SimpleNamespace(finish_reason="STOP")],
+            )
         )
         close = AsyncMock()
         factory = Mock(
@@ -691,6 +738,7 @@ class GeminiAdapterTests(unittest.IsolatedAsyncioTestCase):
             config.thinking_config.thinking_level, self.sdk_types.ThinkingLevel.MINIMAL
         )
         self.assertFalse(config.thinking_config.include_thoughts)
+        self.assertEqual(config.max_output_tokens, 1024)
         self.assertEqual(config.tools, [])
         self.assertEqual(config.response_mime_type, "application/json")
         schema = config.response_json_schema

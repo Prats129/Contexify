@@ -9,6 +9,7 @@ import uuid
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
@@ -22,6 +23,7 @@ from app.core.config import settings
 from app.core.rate_limits import Budget, consume_budgets
 from app.core.security import Principal, digest
 from app.db.database import get_db_connection
+from app.schemas.assistant_operations import OperationIdentity, PercentOperationRequest
 from app.services import assistant_security as security
 
 TERMINAL = frozenset({"verified", "failed", "outcome_unknown", "cancelled", "expired"})
@@ -181,8 +183,8 @@ class PercentControl:
 
     def _arguments(self, row):
         try:
-            return self.action_model(
-                capability_id=self.capability, percent=row["percent"]
+            return self.action_model.model_validate(
+                {"capability_id": self.capability, "percent": row["percent"]}
             ).model_dump()
         except ValueError:
             raise HTTPException(
@@ -248,6 +250,54 @@ class PercentControl:
     def read_task(self, authority, task_id):
         with self._transaction(authority) as conn:
             return self._view(self._task(conn, authority, task_id))
+
+    def create_operation(self, authority, payload: PercentOperationRequest):
+        if payload.action.capability_id != self.capability:
+            raise HTTPException(422, "Operation capability does not match its scope.")
+        # Reuse v1's immutable action, session isolation, atomic claim and receipts.
+        # The trusted coordinator supplies a stable key instead of a fresh UUID.
+        return self.create_task(
+            authority,
+            SimpleNamespace(
+                idempotency_key=payload.idempotency_key(), action=payload.action
+            ),
+        )
+
+    def operation_status(self, authority, identity: OperationIdentity):
+        # A fresh device-scoped session may READ a previous v2 operation after
+        # sign-in/restart. This cannot resume/authorize it or rebind its v1 session.
+        consume_budgets([Budget(f"assistant-{self.mode}", authority.user_id, 90, 60)])
+        with get_db_connection() as conn:
+            if self._authority(conn, authority.token_hash) != authority:
+                raise HTTPException(401, "Control identity changed.")
+            row = conn.execute(
+                f"SELECT * FROM assistant_{self.mode}_tasks WHERE user_id=? AND device_id=? AND idempotency_key=?",
+                (authority.user_id, authority.device_id, identity.idempotency_key()),
+            ).fetchone()
+            if not row:
+                raise HTTPException(404, "Operation evidence is unavailable.")
+            # No lazy UPDATE, permit, challenge or action dispatch on reconciliation.
+            view = dict(row)
+            if view["state"] == "executing":
+                view["state"] = "outcome_unknown"
+            elif view["state"] not in TERMINAL and view["expires_at"] <= time.time():
+                view["state"] = "expired"
+            return self._view(view)
+
+    def operation_binding(self, authority):
+        # Read-only identity check before native recovery decrypts local records.
+        consume_budgets([Budget(f"assistant-{self.mode}", authority.user_id, 90, 60)])
+        with get_db_connection() as conn:
+            if self._authority(conn, authority.token_hash) != authority:
+                raise HTTPException(401, "Control identity changed.")
+            return {
+                "protocol_version": 2,
+                "origin": settings.ASSISTANT_API_ORIGIN,
+                "user_id": authority.user_id,
+                "device_id": authority.device_id,
+                "installation_id": authority.installation_id,
+                "public_key": authority.public_key,
+            }
 
     def _challenge(self, conn, authority, row, purpose, extra=None):
         challenge_id, expiry = (

@@ -153,8 +153,7 @@ test("planning requires separate explicit consent and never falls back after a c
   f.session.dispose();
 });
 
-test("a paraphrase reaches native volume with the reviewed value exactly once, without reparsing", async (t) => {
-  const native = deviceFixture(t);
+test("a paraphrase exposes its stable reviewed plan once without reparsing or a legacy downgrade", async () => {
   const f = fixture();
   f.session.setPlanningConsent(true);
   f.session.setTranscript("put my media sound halfway");
@@ -166,11 +165,11 @@ test("a paraphrase reaches native volume with the reviewed value exactly once, w
     f.session.getSnapshot().preview[0].description,
     "Set media volume to 50%.",
   );
-  const percent = f.session.takeReviewedPercent("media_volume.set");
-  assert.equal(percent, 50);
-  await native.api.changeVolume(native.binding.userId, percent);
-  assert.equal(native.calls(), 1);
   assert.equal(f.session.takeReviewedPercent("media_volume.set"), null);
+  const plan = f.session.takeReviewedPlan();
+  assert.equal(plan.plan_id, id);
+  assert.equal(plan.steps[0].action.percent, 50);
+  assert.equal(f.session.takeReviewedPlan(), null);
   assert.equal(f.calls[1].body.text, "put my media sound halfway");
   assert.equal(Object.hasOwn(f.calls[1].body, "synthetic_case_id"), false);
   f.session.dispose();
@@ -200,7 +199,7 @@ test("a multi-step plan never executes just its first supported action", async (
   f.session.dispose();
 });
 
-test("dynamic brightness stays preview-only while the existing local brightness path is preserved", async () => {
+test("dynamic brightness requires the v2 plan while the existing local brightness path is preserved", async () => {
   const f = fixture(async () =>
     response({
       proposal: proposal([
@@ -212,6 +211,10 @@ test("dynamic brightness stays preview-only while the existing local brightness 
   f.session.setTranscript("make this window a little dimmer");
   await f.session.review();
   assert.equal(f.session.takeReviewedPercent("brightness.set_app"), null);
+  assert.equal(
+    f.session.takeReviewedPlan().steps[0].action.capability_id,
+    "brightness.set_app",
+  );
   f.session.setPlanningConsent(false);
   f.session.setTranscript("brightness to 40%");
   await f.session.review();
@@ -300,7 +303,7 @@ test("approved microphone consent alone does not send transcripts; planning opt-
   f.session.setPlanningConsent(true);
   await f.session.listen();
   assert.equal(f.calls.filter((call) => call.path === "/proposals").length, 1);
-  assert.equal(f.session.takeReviewedPercent("media_volume.set"), 50);
+  assert.equal(f.session.takeReviewedPlan().steps[0].action.percent, 50);
   f.session.clear();
   assert.equal(f.session.getSnapshot().planningConsent, false);
   assert.equal(f.session.getSnapshot().consent, false);
@@ -324,7 +327,7 @@ test("an edited request reuses consent and a late old response cannot replace th
   );
   await flush();
   assert.equal(f.session.getSnapshot().reviewed, current);
-  assert.equal(f.session.takeReviewedPercent("media_volume.set"), 50);
+  assert.equal(f.session.takeReviewedPlan().steps[0].action.percent, 50);
   assert.equal(f.calls.filter((call) => call.path === "/grants").length, 1);
   f.session.dispose();
 });

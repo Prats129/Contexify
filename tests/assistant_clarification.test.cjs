@@ -316,11 +316,12 @@ test("clarification is question-bound, local-only, and preserves the native prec
     /current_index|context_id|33333333/,
   );
   assert.equal(f.session.takeReviewedPercent("media_volume.set"), null);
-  assert.deepEqual(f.session.takeReviewedControl("media_volume.set"), {
-    percent: 40,
-    contextId,
-  });
   assert.equal(f.session.takeReviewedControl("media_volume.set"), null);
+  const plan = f.session.takeReviewedPlan();
+  assert.equal(plan.context_id, contextId);
+  assert.equal(plan.plan_revision, 2);
+  assert.equal(plan.steps[0].action.percent, 40);
+  assert.equal(f.session.takeReviewedPlan(), null);
   f.session.dispose();
 });
 
