@@ -1,5 +1,7 @@
 # Local Android test delivery
 
+**Latest delivery, 2026-11-17:** [post-M3 public live evaluation](live-public-evaluation.md) records the inspected version-code-2 APK, active isolated test server and resumed manual S25 checkpoint. The user confirmed installation/test sign-in and, after the reviewed Flash-Lite switch, the live single-volume AI command: native approval, actual volume change and inline result. Earlier provider/interpretation failures remain historical evidence; M3 relative-state and remaining release acceptance stay open. Earlier artifact/checkpoint details below are historical. No EAS job or phone access was used.
+
 Started 2026-11-15. The user authorized local setup/build, accepted Android SDK licensing, declined USB debugging/phone access, and chose the PC's hotspot for manual installation/testing. Do not run ADB/device enumeration, install onto the phone, inspect phone data or submit EAS builds. The user installs and tests the APK themselves.
 
 **2026-11-16 deferral:** the user postponed all remaining manual phone checks. The local coding/build batch is complete; unconfirmed device/recovery/privacy results remain deferred in [Android acceptance](android-acceptance.md). Commands and manual procedures below are retained for a future user-requested resumption, not instructions to restart testing/building automatically.

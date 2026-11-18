@@ -1,7 +1,8 @@
 """Local assistant practice API with real auth/protocol code, isolated data and TLS.
 
 Run with backend/venv/Scripts/python.exe -B scripts/assistant_local_backend.py.
-No production dotenv, AI, email, cloud storage or external network access is used.
+Default startup blocks external networking and uses no production dotenv or providers.
+Explicit --live-planner evaluation permits only reviewed public commands to Gemini.
 For manual phone testing, --lan-host binds HTTPS to the selected private PC interface.
 """
 
@@ -11,6 +12,7 @@ import json
 import os
 import secrets
 import sys
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -106,7 +108,7 @@ def prepare_tls(state: Path) -> None:
     )
 
 
-def configure() -> Path:
+def configure(live_planner: bool = False) -> Path:
     STATE.mkdir(parents=True, exist_ok=True)
     marker = STATE / "assistant-local-test-state"
     if not marker.exists():
@@ -131,6 +133,7 @@ def configure() -> Path:
         "ASSISTANT_SECURITY_ENABLED": "true",
         "ASSISTANT_SIMULATION_ENABLED": "true",
         "ASSISTANT_EXECUTION_ENABLED": "true",
+        "ASSISTANT_PLANNING_ENABLED": str(live_planner).lower(),
         "ASSISTANT_API_ORIGIN": ORIGIN,
         "ASSISTANT_WEB_ORIGINS": json.dumps([ORIGIN]),
         "CORS_ORIGINS": json.dumps([ORIGIN]),
@@ -181,9 +184,28 @@ def deny_external_network(event, args):
             )
 
 
-def create_app():
-    data = configure()
-    sys.addaudithook(deny_external_network)
+def create_app(live_planner: bool = False, *, flash_lite_evaluation: bool = False):
+    if flash_lite_evaluation and not live_planner:
+        raise ValueError(
+            "The public evaluation budget requires an explicit live planner."
+        )
+    data = configure(live_planner)
+    provider = None
+    if live_planner:
+        from app.assistant.public_evaluation import (
+            PublicEvaluationProvider,
+            google_addresses,
+            load_key,
+            network_guard,
+        )
+
+        addresses = google_addresses()
+        provider = PublicEvaluationProvider(
+            load_key(), flash_lite_evaluation=flash_lite_evaluation
+        )
+        sys.addaudithook(network_guard(addresses))
+    else:
+        sys.addaudithook(deny_external_network)
     from fastapi import APIRouter, FastAPI, Request
     from fastapi.exceptions import RequestValidationError
     from fastapi.responses import JSONResponse
@@ -244,9 +266,25 @@ def create_app():
             "Existing test account has no local credential record; no password is reset automatically."
         )
 
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        try:
+            yield
+        finally:
+            if provider is not None:
+                await provider.aclose()
+
     app = FastAPI(
-        title="Contexify isolated assistant test", docs_url=None, redoc_url=None
+        title="Contexify isolated assistant test",
+        docs_url=None,
+        redoc_url=None,
+        lifespan=lifespan,
     )
+    if provider is not None:
+        from app.assistant.planning_engine import PlanningEngine, get_planning_engine
+
+        evaluation_engine = PlanningEngine(provider)
+        app.dependency_overrides[get_planning_engine] = lambda: evaluation_engine
     app.add_middleware(AssistantSecurityHTTP)
 
     def validation_error(request: Request, error: Exception) -> JSONResponse:
@@ -255,7 +293,7 @@ def create_app():
         return assistant_validation_error(request, error)
 
     app.add_exception_handler(RequestValidationError, validation_error)
-    # Reuse actual auth and assistant handlers; expose no AI, mail, cloud or upload endpoints.
+    # Reuse auth and assistant handlers; expose no general chat, mail, cloud or upload endpoints.
     selected = APIRouter()
     selected.routes.extend(
         route
@@ -272,7 +310,7 @@ def create_app():
     app.include_router(
         assistant_brightness.router, prefix="/api/v1/assistant/brightness"
     )
-    # Gate remains off; no provider binding or external network is added to this host.
+    # The ordinary practice host remains offline; only explicit live evaluation binds a provider.
     app.include_router(assistant_planning.router, prefix="/api/v1/assistant/planning")
     return app
 
@@ -281,11 +319,24 @@ def main():
     global STATE, ORIGIN
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--prepare-only", action="store_true")
+    parser.add_argument("--live-planner", action="store_true")
+    parser.add_argument("--confirm-free-tier", action="store_true")
+    parser.add_argument(
+        "--flash-lite-evaluation",
+        action="store_true",
+        help="Use the separately approved 30/day public-test cap with the pinned Flash-Lite model.",
+    )
     parser.add_argument(
         "--lan-host",
         help="Explicit private LAN IPv4 address for manual phone testing without USB.",
     )
     args = parser.parse_args()
+    if args.flash_lite_evaluation and not args.live_planner:
+        parser.error("--flash-lite-evaluation requires --live-planner.")
+    if args.live_planner and (not args.confirm_free_tier or args.prepare_only):
+        parser.error(
+            "Live evaluation requires --confirm-free-tier and cannot run in preparation mode."
+        )
     if args.lan_host:
         host = ipaddress.ip_address(args.lan_host)
         private_networks = [
@@ -302,7 +353,14 @@ def main():
         configure()
         print("Local TLS/config prepared; production dotenv was not read.")
         return
-    app = create_app()
+    if args.live_planner:
+        import logging
+
+        for name in ("google_genai", "httpx", "httpcore"):
+            logging.getLogger(name).setLevel(logging.CRITICAL)
+    app = create_app(
+        args.live_planner, flash_lite_evaluation=args.flash_lite_evaluation
+    )
     import uvicorn
 
     host, port = (args.lan_host, 443) if args.lan_host else ("127.0.0.1", 8443)

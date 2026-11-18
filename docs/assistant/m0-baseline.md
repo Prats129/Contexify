@@ -2,6 +2,8 @@
 
 Date: 2026-11-16. Source baseline: `4f2ac1f` (`feat(assistant): add foreground voice and guarded Android controls`). The working tree was clean when this stage started.
 
+**2026-11-17 follow-up:** after direct 3.6 Flash 503/504 failures and user-authorized candidate work, the explicit public-test planning pin is now `gemini-3.5-flash-lite` with MEDIUM reasoning. The three required interpretation cases passed across an interrupted run plus a delayed check; one transient 503 remains recorded. The user approved an opt-in 30/day shared public-test cap for Flash-Lite, retaining INR 0, the same counter, public-only input and all native authority gates. See [current evidence](live-public-evaluation.md). The initial decision table below is historical; no production/default live binding or private-cloud approval is inferred.
+
 **Status:** development baseline and initial free-tier/budget choices recorded. Live-provider enablement, private cloud processing and release acceptance remain gated. This checkpoint starts the [merged roadmap](merged-implementation-plan.md); it does not implement the M1 backend connection or M2 user-facing dynamic planning.
 
 ## 1. Authorization and ownership

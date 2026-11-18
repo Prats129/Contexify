@@ -26,8 +26,10 @@ from app.assistant.planning_engine import (
     parse_proposal,
 )
 from app.assistant.planning_provider import (
+    MODEL,
     GeminiPlanningProvider,
     PlanningInput,
+    PlanningModel,
     ProviderDataScopeError,
     ProviderQuotaExceeded,
     ProviderUnavailable,
@@ -613,6 +615,54 @@ class GeminiAdapterTests(unittest.IsolatedAsyncioTestCase):
 
         cls.sdk_types = types
 
+    async def test_default_model_is_the_reviewed_flash_lite_pin(self):
+        self.assertEqual(MODEL, "gemini-3.5-flash-lite")
+        provider = GeminiPlanningProvider(approved_cases={"M0-01": TEXT})
+        self.assertEqual(provider.model, MODEL)
+        await provider.aclose()
+
+    async def test_flash_lite_has_an_explicit_fixed_model_and_medium_thinking(self):
+        generate = AsyncMock(
+            return_value=SimpleNamespace(text=OUTPUT, function_calls=None)
+        )
+        close = AsyncMock()
+        factory = Mock(
+            return_value=SimpleNamespace(
+                aio=SimpleNamespace(
+                    models=SimpleNamespace(generate_content=generate), aclose=close
+                )
+            )
+        )
+        provider = GeminiPlanningProvider(
+            approved_cases={"M0-01": TEXT},
+            client_factory=factory,
+            model="gemini-3.5-flash-lite",
+        )
+        try:
+            await provider.propose(
+                PlanningInput(TEXT, "M0-01", "android"), repair=False, timeout=2
+            )
+            options = generate.call_args.kwargs
+            self.assertEqual(options["model"], "gemini-3.5-flash-lite")
+            self.assertEqual(
+                options["config"].thinking_config.thinking_level,
+                self.sdk_types.ThinkingLevel.MEDIUM,
+            )
+            self.assertEqual(options["config"].http_options.retry_options.attempts, 1)
+        finally:
+            await provider.aclose()
+        close.assert_awaited_once()
+
+    async def test_unreviewed_model_is_rejected_before_client_construction(self):
+        factory = Mock()
+        with self.assertRaises(ValueError):
+            GeminiPlanningProvider(
+                approved_cases={"M0-01": TEXT},
+                client_factory=factory,
+                model=cast(PlanningModel, "unreviewed-model"),
+            )
+        factory.assert_not_called()
+
     async def test_sdk_config_is_json_only_one_attempt_and_no_tools(self):
         generate = AsyncMock(
             return_value=SimpleNamespace(text=OUTPUT, function_calls=None)
@@ -626,7 +676,9 @@ class GeminiAdapterTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         cases = {"M0-01": TEXT}
-        provider = GeminiPlanningProvider(approved_cases=cases, client_factory=factory)
+        provider = GeminiPlanningProvider(
+            approved_cases=cases, client_factory=factory, model="gemini-3.6-flash"
+        )
         cases["M0-01"] = "not the reviewed text"
         value = PlanningInput(TEXT, "M0-01", "android")
         self.assertEqual(await provider.propose(value, repair=False, timeout=2), OUTPUT)
@@ -641,7 +693,25 @@ class GeminiAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(config.thinking_config.include_thoughts)
         self.assertEqual(config.tools, [])
         self.assertEqual(config.response_mime_type, "application/json")
-        self.assertNotIn("discriminator", json.dumps(config.response_json_schema))
+        schema = config.response_json_schema
+        for keyword in ("discriminator", "const", "oneOf"):
+            self.assertNotIn(f'"{keyword}":', json.dumps(schema))
+        self.assertEqual(len(schema["anyOf"]), 2)
+        definitions = schema["$defs"]
+        self.assertEqual(
+            definitions["PlanningActions"]["properties"]["mode"]["enum"], ["proposal"]
+        )
+        self.assertEqual(
+            definitions["PlanningActions"]["properties"]["status"]["enum"], ["proposed"]
+        )
+        self.assertEqual(
+            len(definitions["ProposalStep"]["properties"]["action"]["anyOf"]), 3
+        )
+        volume = definitions["VolumeAction"]["properties"]
+        self.assertEqual(volume["capability_id"]["enum"], ["media_volume.set"])
+        self.assertEqual(
+            (volume["percent"]["minimum"], volume["percent"]["maximum"]), (0, 70)
+        )
         self.assertEqual(
             json.loads(generate.call_args.kwargs["contents"]),
             {"command": TEXT, "repair_schema": False},

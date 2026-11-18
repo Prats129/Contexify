@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 import subprocess
+import sys
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -12,12 +13,12 @@ ROOT = Path(__file__).resolve().parents[1]
 TOOLS = ROOT / "backend/.pytest_cache/assistant-local-android"
 
 
-def inspect(host: str):
+def inspect(host: str, check_live_key: bool = False):
     if not __debug__:
         raise RuntimeError(
             "Run APK inspection without Python optimization; all assertions must be enabled."
         )
-    apk = TOOLS / "Contexify-Volume-Test-1.4.3.apk"
+    apk = TOOLS / "Contexify-Assistant-Live-Test-1.4.3-2.apk"
     sdk = TOOLS / "sdk/build-tools/37.0.0"
     java = next((TOOLS / "jdk").glob("*/bin/java.exe"))
 
@@ -33,7 +34,8 @@ def inspect(host: str):
     assert dump("packagename").strip() == "ai.contexify.app.assistantvolumetest"
     badging = dump("badging")
     assert (
-        "versionName='1.4.3'" in badging
+        "versionName='1.4.3-assistant-test2'" in badging
+        and "versionCode='2'" in badging
         and "application-label:'Contexify Volume Test'" in badging
     )
     permissions = set(
@@ -95,12 +97,20 @@ def inspect(host: str):
     state = TOOLS / ("backend-" + host.replace(".", "-"))
     ca = (state / "ca.pem").read_bytes()
     private_key = (state / "server.key.pem").read_bytes()
+    live_key = None
+    if check_live_key:
+        sys.path.insert(0, str(ROOT / "backend"))
+        from app.assistant.public_evaluation import load_key
+
+        live_key = load_key().encode()
     with ZipFile(apk) as archive:
         names = archive.namelist()
         assert "assets/index.android.bundle" in names
         assert any(name.startswith("lib/arm64-v8a/") for name in names)
         assert archive.read("res/raw/assistant_local_test_ca.pem") == ca
         assert host.encode() in archive.read("assets/index.android.bundle")
+        bundle = archive.read("assets/index.android.bundle")
+        assert b"Review clarified command" in bundle and b"Send command" in bundle
         assert not any(
             "test-account.json" in name
             or "server.key" in name
@@ -109,8 +119,10 @@ def inspect(host: str):
         )
         for name in names:
             if not name.endswith("/"):
-                assert private_key not in archive.read(name), (
-                    "Test private key entered the APK."
+                content = archive.read(name)
+                assert private_key not in content, "Test private key entered the APK."
+                assert live_key is None or live_key not in content, (
+                    "The backend Gemini key entered the APK."
                 )
         dex = [
             archive.read(name)
@@ -122,6 +134,9 @@ def inspect(host: str):
             b"cancelVolume",
             b"ExecutionGate",
             b"setStreamVolume",
+            b"readVolumeContext",
+            b"executeVolumeFromContext",
+            b"VolumeContextStore",
         ):
             assert any(marker in data for data in dex), "Missing native volume code."
         for marker in (
@@ -133,33 +148,60 @@ def inspect(host: str):
             assert any(marker in data for data in dex), (
                 "Missing native app-window brightness code."
             )
-    signature = subprocess.run(
-        [
-            str(java),
-            "-Xmx128m",
-            "-jar",
-            str(sdk / "lib/apksigner.jar"),
-            "verify",
-            "--verbose",
-            "--print-certs",
-            str(apk),
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    assert "Verifies" in signature.stdout
+
+    def verify_signature(path: Path) -> str:
+        result = subprocess.run(
+            [
+                str(java),
+                "-Xmx128m",
+                "-jar",
+                str(sdk / "lib/apksigner.jar"),
+                "verify",
+                "--verbose",
+                "--print-certs",
+                str(path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert "Verifies" in result.stdout
+        assert re.search(r"^Number of signers: 1$", result.stdout, re.MULTILINE)
+        certificate = set(
+            re.findall(
+                r"^(?:Signer #\d+|V\d(?:\.\d+)? Signer:) certificate SHA-256 digest: ([0-9a-f]{64})$",
+                result.stdout,
+                re.MULTILINE,
+            )
+        )
+        assert len(certificate) == 1, (
+            "Expected exactly one verified APK signing identity."
+        )
+        return certificate.pop()
+
+    certificate = verify_signature(apk)
+    previous_apk = TOOLS / "Contexify-Volume-Test-1.4.3-acceptance.apk"
+    if previous_apk.is_file():
+        assert verify_signature(previous_apk) == certificate, (
+            "Test update signing identity changed."
+        )
     with apk.open("rb") as handle:
         sha = hashlib.file_digest(handle, "sha256").hexdigest()
     report = {
         "package": "ai.contexify.app.assistantvolumetest",
-        "version": "1.4.3",
+        "version": "1.4.3-assistant-test2",
         "sha256": sha,
         "apk_bytes": apk.stat().st_size,
         "signature_verified": True,
+        "signer_sha256": certificate,
+        "previous_test_signer_matches": True
+        if previous_apk.is_file()
+        else "not_checked",
         "embedded_bundle": True,
         "native_volume_code": True,
         "native_brightness_code": True,
+        "native_context_code": True,
+        "gemini_key_bundled": False if check_live_key else "not_checked",
         "test_ca_only": True,
         "test_private_key_bundled": False,
         "secure_store_backup_excluded": True,
@@ -177,4 +219,6 @@ def inspect(host: str):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--lan-host", required=True)
-    inspect(parser.parse_args().lan_host)
+    parser.add_argument("--check-live-key", action="store_true")
+    args = parser.parse_args()
+    inspect(args.lan_host, args.check_live_key)

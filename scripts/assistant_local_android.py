@@ -6,6 +6,7 @@ Run after Expo prebuild with the isolated assistant-volume-test configuration.
 
 import argparse
 import ipaddress
+import re
 import shutil
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -45,6 +46,14 @@ def prepare(host: str):
         raise RuntimeError(
             "Refusing to alter a native project with a different app identity."
         )
+    content, versions = re.subn(
+        r'(?m)^(\s*)versionName "[^"]+"$',
+        r'\1versionName "1.4.3-assistant-test2"',
+        content,
+    )
+    content, codes = re.subn(r"(?m)^(\s*)versionCode \d+$", r"\1versionCode 2", content)
+    if versions != 1 or codes != 1:
+        raise RuntimeError("Unsupported generated test version configuration.")
     if "debuggableVariants = []" not in content:
         content = content.replace(
             "react {",

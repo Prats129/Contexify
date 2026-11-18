@@ -1,7 +1,8 @@
 param(
     [Parameter(Mandatory=$true)][string]$LanHost,
     [switch]$PrepareOnly,
-    [switch]$NativeTestsOnly
+    [switch]$NativeTestsOnly,
+    [switch]$CheckLiveKey
 )
 $ErrorActionPreference = 'Stop'
 $projectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
@@ -64,17 +65,19 @@ try {
         $nativeTasks = @(':assistant-voice:testDebugUnitTest', ':assistant-device-security:testDebugUnitTest')
         if (!$NativeTestsOnly) { $nativeTasks += ':app:assembleDebug' }
         & $gradle @nativeTasks `
-            '-PreactNativeArchitectures=arm64-v8a' '--max-workers=1' '--console=plain' '--no-daemon' `
-            '-Dorg.gradle.jvmargs=-Xmx1024m -XX:MaxMetaspaceSize=512m -XX:ReservedCodeCacheSize=128m -XX:ActiveProcessorCount=2' `
+            '-PreactNativeArchitectures=arm64-v8a' '--offline' '--max-workers=1' '--console=plain' '--no-daemon' `
+            '-Dorg.gradle.jvmargs=-Xmx768m -XX:MaxMetaspaceSize=384m -XX:ReservedCodeCacheSize=96m -XX:ActiveProcessorCount=1' `
             '-Dorg.gradle.parallel=false' '-Pkotlin.compiler.execution.strategy=in-process' '-Pkotlin.incremental=false' '--stacktrace'
         if ($LASTEXITCODE -ne 0) { throw 'The local native build failed; inspect its compiler output before retrying.' }
     } finally { Pop-Location }
     if ($NativeTestsOnly) { Write-Output 'Native modules compiled and unit-test tasks passed. No APK assembled or phone accessed.'; return }
     $apk = Join-Path $mobileRoot 'android\app\build\outputs\apk\debug\app-debug.apk'
     if (!(Test-Path -LiteralPath $apk)) { throw 'The expected test APK was not generated.' }
-    $destination = Join-Path $toolRoot 'Contexify-Volume-Test-1.4.3.apk'
+    $destination = Join-Path $toolRoot 'Contexify-Assistant-Live-Test-1.4.3-2.apk'
     Copy-Item -LiteralPath $apk -Destination $destination
-    & $python -B scripts/inspect_assistant_local_apk.py --lan-host $LanHost
+    $inspectionArguments = @('--lan-host', $LanHost)
+    if ($CheckLiveKey) { $inspectionArguments += '--check-live-key' }
+    & $python -B scripts/inspect_assistant_local_apk.py @inspectionArguments
     if ($LASTEXITCODE -ne 0) { throw 'Test APK inspection failed; do not install it.' }
     Write-Output ('Test APK ready for inspection and manual installation: ' + $destination)
     Write-Output 'No phone connection, installation, cloud build or production deployment was performed.'
