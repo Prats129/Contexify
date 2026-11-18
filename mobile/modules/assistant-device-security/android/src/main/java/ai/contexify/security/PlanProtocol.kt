@@ -27,10 +27,14 @@ internal object PlanProtocol {
       val dependencies = step.getJSONArray("depends_on")
       require(dependencies.length() <= 4)
       val action = step.getJSONObject("action")
-      fields(action, setOf("capability_id", "percent", "schema_version"))
       require(action.get("capability_id") is String && integer(action, "schema_version") == 1)
-      OperationStep(integer(step, "step_id"), action.getString("capability_id"), integer(action, "percent"),
-        (0 until dependencies.length()).map { j -> require(dependencies.get(j) is Int); dependencies.getInt(j) })
+      val capability = action.getString("capability_id")
+      val handoff = capability == "application.open"
+      fields(action, setOf("capability_id", "schema_version", if (handoff) "application_id" else "percent"))
+      if (handoff) require(action.get("application_id") is String)
+      OperationStep(integer(step, "step_id"), capability, if (handoff) null else integer(action, "percent"),
+        (0 until dependencies.length()).map { j -> require(dependencies.get(j) is Int); dependencies.getInt(j) },
+        if (handoff) action.getString("application_id") else null)
     }
     val context = if (value.has("context_id")) {
       require(value.get("context_id") is String)

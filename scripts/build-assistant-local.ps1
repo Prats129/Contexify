@@ -73,7 +73,7 @@ try {
     if ($NativeTestsOnly) { Write-Output 'Native modules compiled and unit-test tasks passed. No APK assembled or phone accessed.'; return }
     $apk = Join-Path $mobileRoot 'android\app\build\outputs\apk\debug\app-debug.apk'
     if (!(Test-Path -LiteralPath $apk)) { throw 'The expected test APK was not generated.' }
-    $destination = Join-Path $toolRoot 'Contexify-Assistant-M4-Test-1.4.3-3.apk'
+    $destination = Join-Path $toolRoot 'Contexify-Assistant-M5-Test-1.4.3-4.apk'
     Copy-Item -LiteralPath $apk -Destination $destination
     $inspectionArguments = @('--lan-host', $LanHost)
     if ($CheckLiveKey) { $inspectionArguments += '--check-live-key' }

@@ -101,10 +101,12 @@ export function AssistantPreview({
                 : "") + results.map(describeOperationResult).join(" ")
             : "No saved plan evidence on this installation. No device action was performed.",
         );
-    } catch {
+    } catch (error) {
       if (operation === controlOperation.current)
         setControlMessage(
-          "Plan execution or recovery is unavailable. Use a compatible Android build and signed-in device. Check previous actions before making a new request; nothing will retry automatically.",
+          (error as { code?: string } | null)?.code === "ERR_APP_UNAVAILABLE"
+            ? "The required app has no single reviewed launcher. Install Spotify or use one reviewed Clock app; you can also open it manually. No part of this plan was started."
+            : "Plan execution or recovery is unavailable. Use a compatible Android build and signed-in device. Check previous actions before making a new request; nothing will retry automatically.",
         );
     } finally {
       controlRunning.current = false;
@@ -201,7 +203,12 @@ export function AssistantPreview({
   }
   useEffect(() => {
     if (volumeAllowed && state?.reviewed?.operationPlan) {
-      if (supportedOperationPlan(state.reviewed.operationPlan)) void runPlan();
+      if (
+        (volumeControls?.supportsPlan ?? supportedOperationPlan)(
+          state.reviewed.operationPlan,
+        )
+      )
+        void runPlan();
       return; // Never substitute the legacy v1 bridge for a v2 plan, even on an old APK.
     }
     if (
@@ -289,6 +296,7 @@ export function AssistantPreview({
       volumeUserId && volumeControls?.readVolumeContext
         ? (signal) => volumeControls.readVolumeContext!(volumeUserId, signal)
         : undefined,
+      volumeControls?.supportsPlan ?? supportedOperationPlan,
     );
     sessionRef.current = session;
     setState(session.getSnapshot());
@@ -394,7 +402,7 @@ export function AssistantPreview({
             <Text style={{ color: theme.textMuted }}>
               {state?.planningConsent
                 ? volumeAllowed
-                  ? "Send a settings command and approve each exact change in Android. Plans with unsupported actions remain previews."
+                  ? "Send a supported command and approve each exact action in Android. App opening needs a compatible build and must be the last action. Unsupported plans stay previews."
                   : "Send a command to review its plan. Device actions are unavailable in this build."
                 : volumeAllowed
                   ? "Review a command, then request confirmation for media volume or Contexify app-window brightness. Other actions remain previews."
@@ -493,9 +501,9 @@ export function AssistantPreview({
                   <Text style={{ color: theme.textMuted, fontSize: 12 }}>
                     Currently limited to approved public test commands. Do not
                     enter personal information. Enroll this device first. A
-                    single volume action opens Android confirmation; other plans
-                    stay previews. Voice transcripts are submitted after you
-                    finish speaking.
+                    supported plan opens Android confirmations. App opening must
+                    be the final action and needs a compatible Android build.
+                    Voice transcripts are submitted after you finish speaking.
                   </Text>
                 </TouchableOpacity>
               )}
@@ -566,11 +574,12 @@ export function AssistantPreview({
                     busy,
                   )}
                 <Text style={{ color: theme.textMuted }}>
-                  Media volume only, 0–70%. Enroll this device first. Each
-                  change requires a separate Android confirmation.
+                  Enroll this device first. Media volume and app brightness
+                  changes need Android confirmation. Reviewed app opens also
+                  require a compatible build and must be the final action.
                 </Text>
                 {button(
-                  "Enable volume control on this device",
+                  "Enable device controls on this device",
                   () => {
                     void runControl(true);
                   },

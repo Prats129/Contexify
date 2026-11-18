@@ -121,3 +121,14 @@ The M3 settings-context source and native unit compilation are recorded in [M3](
 The user asked to stop extending the one-by-one phone test session and move ahead. The agreed basic M4 manual batch has positive user reports: compound execution, partial cancellation, read-only saved results after reopening, quick duplicate Send, basic relative-volume clarification, pre-approval lock, limit/negation, idle sign-out/sign-in, and whole-plan blocking for the unsupported volume/Spotify combination.
 
 The subsequently proposed changed-base reading test has **no user result** and is not passed. Further stale/expired context, alternate relative units, concurrent/in-flight interruption, key loss/corruption, backup/restore and other unperformed physical/privacy/operational cases remain **Deferred/pending**, not silently completed. Stop requesting additional phone checks until the user resumes them. They continue to gate dependent production/release claims, while independent M5 source work may proceed when authorized. This closes this basic manual session, not all security/release acceptance. No application, provider, backend or device action was made to record the boundary.
+
+
+## M5 code-4 basic phone batch - user-reported PASS, 2026-11-18
+
+On the delivered M5/code-4 test APK and S25, the user confirmed all three instructed checks worked as intended:
+
+1. With AI planning enabled, `set volume to 50 percent then open Spotify`, followed by both native approvals, set media volume to approximately 50% and opened Spotify.
+2. Returning to Contexify and selecting Check previous actions showed saved results without reopening Spotify or requesting another approval.
+3. Sending the same command again, approving volume and cancelling the app-opening confirmation left Spotify unopened by that request. The already approved volume step is not rolled back.
+
+Evidence is the user's report, not remote observation, device access or instrumentation. This closes the agreed three-check basic Spotify batch; no further cases are added to it. It does not verify Clock handlers, missing/changed packages, app-handoff Home/lock races, claimed/in-flight loss, key/backup/restore or all other OEM/release behavior. Those and previously deferred M2/M3/M4 checks retain their existing gates. Broader M5 reminders/scheduling/alarms remain pending. Recording this report made no provider request, build, backend change or device action.

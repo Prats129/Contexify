@@ -1,4 +1,4 @@
-"""Shared bounded-percent authorization protocol; SQL identifiers come only from compiled modes."""
+"""Shared control authorization protocol; SQL identifiers come only from compiled modes."""
 
 import base64
 import binascii
@@ -23,10 +23,20 @@ from app.core.config import settings
 from app.core.rate_limits import Budget, consume_budgets
 from app.core.security import Principal, digest
 from app.db.database import get_db_connection
+from app.schemas.assistant_application import ApplicationOperationRequest
 from app.schemas.assistant_operations import OperationIdentity, PercentOperationRequest
 from app.services import assistant_security as security
 
-TERMINAL = frozenset({"verified", "failed", "outcome_unknown", "cancelled", "expired"})
+TERMINAL = frozenset(
+    {
+        "verified",
+        "failed",
+        "outcome_unknown",
+        "cancelled",
+        "expired",
+        "handoff_requested",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -46,20 +56,25 @@ class PercentControl:
         view_model: type[BaseModel],
         policy_version: Callable[[], int],
     ):
-        if mode not in ("volume", "brightness"):
-            raise ValueError("Unsupported compiled percent control.")
+        if mode not in ("volume", "brightness", "application"):
+            raise ValueError("Unsupported compiled control.")
         self.mode = mode
         self.scope = "assistant:" + mode
         self.capability = {
             "volume": "media_volume.set",
             "brightness": "brightness.set_app",
+            "application": "application.open",
         }[mode]
         self.execution = {
             "volume": "android_media_volume",
             "brightness": "android_app_brightness",
+            "application": "android_application_handoff",
         }[mode]
         self.action_model, self.view_model = (action_model, view_model)
         self.policy_version = policy_version
+        self.argument_columns = (
+            ("application_id", "package_id") if mode == "application" else ("percent",)
+        )
 
     def create_session(self, session):
         consume_budgets(
@@ -184,7 +199,10 @@ class PercentControl:
     def _arguments(self, row):
         try:
             return self.action_model.model_validate(
-                {"capability_id": self.capability, "percent": row["percent"]}
+                {
+                    "capability_id": self.capability,
+                    **{key: row[key] for key in self.argument_columns},
+                }
             ).model_dump()
         except ValueError:
             raise HTTPException(
@@ -212,7 +230,7 @@ class PercentControl:
             ).fetchone()
             if existing:
                 if (
-                    existing["percent"] != payload.action.percent
+                    self._arguments(existing) != payload.action.model_dump()
                     or existing["session_hash"] != authority.token_hash
                 ):
                     raise HTTPException(
@@ -231,15 +249,17 @@ class PercentControl:
                 (now - 7 * 86400,),
             )
             task_id = str(uuid.uuid4())
+            columns = ",".join(self.argument_columns)
+            placeholders = ",".join("?" for _ in self.argument_columns)
             conn.execute(
-                f"INSERT INTO assistant_{self.mode}_tasks(id,session_hash,user_id,device_id,idempotency_key,percent,policy_version,state,revision,created_at,expires_at) VALUES(?,?,?,?,?,?,?,'awaiting_confirmation',1,?,?)",
+                f"INSERT INTO assistant_{self.mode}_tasks(id,session_hash,user_id,device_id,idempotency_key,{columns},policy_version,state,revision,created_at,expires_at) VALUES(?,?,?,?,?,{placeholders},?,'awaiting_confirmation',1,?,?)",
                 (
                     task_id,
                     authority.token_hash,
                     authority.user_id,
                     authority.device_id,
                     payload.idempotency_key,
-                    payload.action.percent,
+                    *(getattr(payload.action, key) for key in self.argument_columns),
                     self.policy_version(),
                     now,
                     now + 180,
@@ -251,7 +271,9 @@ class PercentControl:
         with self._transaction(authority) as conn:
             return self._view(self._task(conn, authority, task_id))
 
-    def create_operation(self, authority, payload: PercentOperationRequest):
+    def create_operation(
+        self, authority, payload: PercentOperationRequest | ApplicationOperationRequest
+    ):
         if payload.action.capability_id != self.capability:
             raise HTTPException(422, "Operation capability does not match its scope.")
         # Reuse v1's immutable action, session isolation, atomic claim and receipts.

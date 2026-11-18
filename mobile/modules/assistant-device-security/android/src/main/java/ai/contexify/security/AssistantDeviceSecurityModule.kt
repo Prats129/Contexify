@@ -45,6 +45,11 @@ class AssistantDeviceSecurityModule : Module() {
       require(marker(installation).isFile && marker(installation).readText(Charsets.UTF_8) == binding(origin, user))
     }, ::publicKey, ::sign, brightnessEffect, controlRunning)
   }
+  private val application by lazy {
+    ApplicationExecutor(::context, { appContext.currentActivity }, { origin, user, installation ->
+      require(marker(installation).isFile && marker(installation).readText(Charsets.UTF_8) == binding(origin, user))
+    }, ::publicKey, ::sign, controlRunning)
+  }
   private val keyStore: KeyStore get() = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
   private fun context(): Context = requireNotNull(appContext.reactContext)
   private fun unlocked() {
@@ -93,6 +98,7 @@ class AssistantDeviceSecurityModule : Module() {
     planGeneration.incrementAndGet()
     volume.cancel()
     brightness.cancel()
+    application.cancel()
     brightnessEffect.restore()
     approvals.clear()
     cancelConfirmation?.invoke()
@@ -124,6 +130,8 @@ class AssistantDeviceSecurityModule : Module() {
 
   override fun definition() = ModuleDefinition {
     Name("AssistantDeviceSecurity")
+    // Compiled support only: no package query, permission or authority is granted.
+    Function("operationCapabilitiesV2") { listOf("media_volume.set", "brightness.set_app", "application.open") }
     // Separate from signing/enrollment. This method cannot authorize or dispatch actions.
     AsyncFunction("deviceControlReadiness") {
       DeviceControlReadiness.inspect(context(), appContext.currentActivity)
@@ -138,7 +146,7 @@ class AssistantDeviceSecurityModule : Module() {
         catch (_: Exception) { promise.reject("ERR_VOLUME", "Volume control is unavailable. Check media volume before trying again.", null) }
       }
     }.runOnQueue(Queues.MAIN)
-    AsyncFunction("cancelVolume") { planGeneration.incrementAndGet(); volume.cancel(); if (planRunning.get()) brightness.cancel() }.runOnQueue(Queues.MAIN)
+    AsyncFunction("cancelVolume") { planGeneration.incrementAndGet(); volume.cancel(); if (planRunning.get()) { brightness.cancel(); application.cancel() } }.runOnQueue(Queues.MAIN)
     AsyncFunction("readVolumeContext") { origin: String, user: String, installation: String ->
       check(!planRunning.get())
       volume.readVolumeContext(origin, user, installation)
@@ -159,7 +167,7 @@ class AssistantDeviceSecurityModule : Module() {
         catch (_: Exception) { promise.reject("ERR_BRIGHTNESS", "App brightness is unavailable. Review the app window before trying again.", null) }
       }
     }.runOnQueue(Queues.MAIN)
-    AsyncFunction("cancelBrightness") { planGeneration.incrementAndGet(); brightness.cancel(); if (planRunning.get()) volume.cancel() }.runOnQueue(Queues.MAIN)
+    AsyncFunction("cancelBrightness") { planGeneration.incrementAndGet(); brightness.cancel(); if (planRunning.get()) { volume.cancel(); application.cancel() } }.runOnQueue(Queues.MAIN)
 
     AsyncFunction("executePlanV2") { origin: String, user: String, installation: String, management: String, encoded: String, promise: Promise ->
       unlocked()
@@ -169,32 +177,43 @@ class AssistantDeviceSecurityModule : Module() {
       kotlin.concurrent.thread(name = "AssistantPlan", isDaemon = true) {
         try {
           val store = foreground { recovery(origin, user, installation) }
-          foreground {
+          val targets = foreground {
             check(owner == planGeneration.get())
-            plan.steps.forEach { executor(it.capability).preflight(origin, user, installation, it.percent) }
+            plan.steps.mapNotNull {
+              if (it.capability == "application.open") it.id to application.preflight(origin, user, installation, requireNotNull(it.applicationId))
+              else { executor(it.capability).preflight(origin, user, installation, requireNotNull(it.percent)); null }
+            }.toMap()
           }
           val sessions = mutableMapOf<String, String>() // Native memory only, never journaled or returned.
           plan.steps.map { it.capability }.distinct().forEach {
-            executor(it).validateOperationBinding(origin, user, installation, management, sessions)
+            if (it == "application.open") application.validateOperationBinding(origin, user, installation, management, sessions)
+            else executor(it).validateOperationBinding(origin, user, installation, management, sessions)
           }
           foreground { check(owner == planGeneration.get()) }
           val coordinator = PlanCoordinator(store, System::currentTimeMillis) { owner != planGeneration.get() }
           val result = coordinator.execute(plan) { step ->
-            val control = executor(step.capability)
-            val start = foreground {
-              check(owner == planGeneration.get())
-              if (plan.contextId != null) control.beginWithContext(plan.contextId) else control.begin() to null
+            if (step.capability == "application.open") {
+              val ticket = foreground { check(owner == planGeneration.get()); application.begin() }
+              application.execute(origin, user, installation, management, requireNotNull(targets[step.id]), ticket,
+                OperationIdentity(plan.id, plan.revision, step.id), plan.expiresAt, sessions)
+            } else {
+              val control = executor(step.capability)
+              val start = foreground {
+                check(owner == planGeneration.get())
+                if (plan.contextId != null) control.beginWithContext(plan.contextId) else control.begin() to null
+              }
+              PlanProtocol.evidence(control.execute(origin, user, installation, management, requireNotNull(step.percent), start.first,
+                start.second, OperationIdentity(plan.id, plan.revision, step.id), plan.expiresAt, sessions))
             }
-            PlanProtocol.evidence(control.execute(origin, user, installation, management, step.percent, start.first,
-              start.second, OperationIdentity(plan.id, plan.revision, step.id), plan.expiresAt, sessions))
           }
           promise.resolve(result.bridge())
-        } catch (_: Exception) {
+        } catch (error: Exception) {
           val previous = runCatching {
             val store = foreground { recovery(origin, user, installation) }
             store.read(plan.id).also { require(it.digest == plan.digest && it.planRevision == plan.revision) }
           }.getOrNull()
           if (previous != null) promise.resolve(previous.copy(states = previous.states.map { if (it == "pending") "skipped" else it }).bridge())
+          else if (error is ApplicationUnavailable) promise.reject("ERR_APP_UNAVAILABLE", error.message, null)
           else promise.reject("ERR_PLAN", "The plan stopped. Check previous actions before making a new request; no automatic retry is allowed.", null)
         } finally { controlRunning.set(false); planRunning.set(false) }
       }
@@ -219,11 +238,18 @@ class AssistantDeviceSecurityModule : Module() {
             row.states.forEachIndexed { i, state ->
               if (state != "pending" && state != "skipped" && evidence[i]?.recorded != true &&
                 owner == planGeneration.get() && android.os.SystemClock.elapsedRealtime() < deadline) {
-                val control = executor(row.capabilities[i])
                 val remote = runCatching {
-                  val ticket = foreground { check(owner == planGeneration.get()); control.begin() }
-                  control.operationStatus(origin, user, installation, management,
-                    OperationIdentity(row.id, row.planRevision, i), row.percents[i], ticket, sessions)
+                  val identity = OperationIdentity(row.id, row.planRevision, i)
+                  if (row.capabilities[i] == "application.open") {
+                    val ticket = foreground { check(owner == planGeneration.get()); application.begin() }
+                    application.operationStatus(origin, user, installation, management, identity,
+                      requireNotNull(row.applications[i]), ticket, sessions)
+                  } else {
+                    val control = executor(row.capabilities[i])
+                    val ticket = foreground { check(owner == planGeneration.get()); control.begin() }
+                    control.operationStatus(origin, user, installation, management,
+                      identity, requireNotNull(row.percents[i]), ticket, sessions)
+                  }
                 }.getOrNull()
                 if (remote != null) { states[i] = remote.outcome; evidence[i] = remote }
               }

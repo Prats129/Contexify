@@ -20,20 +20,40 @@ export interface OperationResult {
   readonly revision: number;
   readonly steps: readonly {
     readonly step_id: number;
-    readonly capability_id: "media_volume.set" | "brightness.set_app";
+    readonly capability_id:
+      | "media_volume.set"
+      | "brightness.set_app"
+      | "application.open";
     readonly state:
       | "pending"
       | "skipped"
       | "verified"
       | "failed"
       | "cancelled"
-      | "outcome_unknown";
-    readonly result: {
-      readonly outcome: "verified" | "failed" | "cancelled" | "outcome_unknown";
-      readonly requested_percent: number;
-      readonly observed_percent: number | null;
-      readonly receipt_recorded: boolean;
-    } | null;
+      | "outcome_unknown"
+      | "handoff_requested";
+    readonly result:
+      | {
+          readonly outcome:
+            | "verified"
+            | "failed"
+            | "cancelled"
+            | "outcome_unknown";
+          readonly requested_percent: number;
+          readonly observed_percent: number | null;
+          readonly receipt_recorded: boolean;
+        }
+      | {
+          readonly outcome:
+            | "handoff_requested"
+            | "failed"
+            | "cancelled"
+            | "outcome_unknown";
+          readonly application_id: "spotify" | "clock";
+          readonly package_id: string;
+          readonly receipt_recorded: boolean;
+        }
+      | null;
   }[];
 }
 const uuid =
@@ -85,14 +105,18 @@ export function operationPlan(
   });
 }
 
-export function supportedOperationPlan(plan: OperationPlan): boolean {
+export function supportedOperationPlan(
+  plan: OperationPlan,
+  capabilities: readonly string[] = ["media_volume.set", "brightness.set_app"],
+): boolean {
   return (
     plan.expires_at * 1000 > Date.now() &&
     plan.steps.length > 0 &&
     plan.steps.every(
-      (step) =>
-        step.action.capability_id === "media_volume.set" ||
-        step.action.capability_id === "brightness.set_app",
+      (step, index) =>
+        capabilities.includes(step.action.capability_id) &&
+        (step.action.capability_id !== "application.open" ||
+          index === plan.steps.length - 1),
     )
   );
 }
@@ -125,6 +149,7 @@ export function operationResult(
         row.steps.length !== expected.steps.length))
   )
     throw Error("Invalid operation evidence.");
+  const count = row.steps.length;
   const steps = Array.from(row.steps, (value: unknown, i: number) => {
     const step = dataRecord(
       value,
@@ -134,7 +159,7 @@ export function operationResult(
     if (
       step.step_id !== i ||
       typeof step.capability_id !== "string" ||
-      !["media_volume.set", "brightness.set_app"].includes(
+      !["media_volume.set", "brightness.set_app", "application.open"].includes(
         step.capability_id,
       ) ||
       (expected &&
@@ -147,9 +172,61 @@ export function operationResult(
         "failed",
         "cancelled",
         "outcome_unknown",
+        "handoff_requested",
       ].includes(step.state)
     )
       throw Error("Invalid operation state.");
+    if (
+      step.capability_id !== "application.open" &&
+      step.state === "handoff_requested"
+    )
+      throw Error("Only an app launcher can report a handoff.");
+    if (step.capability_id === "application.open") {
+      if (i !== count - 1 || step.state === "verified")
+        throw Error("Invalid app handoff state.");
+      if (step.result !== null) {
+        const result = dataRecord(
+          step.result,
+          ["outcome", "application_id", "package_id", "receipt_recorded"],
+          ["outcome", "application_id", "package_id", "receipt_recorded"],
+        );
+        const packages: Record<string, readonly string[]> = {
+          spotify: ["com.spotify.music"],
+          clock: [
+            "com.google.android.deskclock",
+            "com.android.deskclock",
+            "com.sec.android.app.clockpackage",
+          ],
+        };
+        if (
+          result.outcome !== step.state ||
+          ![
+            "handoff_requested",
+            "failed",
+            "cancelled",
+            "outcome_unknown",
+          ].includes(String(result.outcome)) ||
+          typeof result.application_id !== "string" ||
+          typeof result.package_id !== "string" ||
+          !Object.prototype.hasOwnProperty.call(
+            packages,
+            result.application_id,
+          ) ||
+          !packages[result.application_id].includes(result.package_id) ||
+          typeof result.receipt_recorded !== "boolean" ||
+          (result.outcome === "cancelled" && result.receipt_recorded) ||
+          (expected &&
+            result.application_id !==
+              (expected.steps[i].action as { application_id: string })
+                .application_id)
+        )
+          throw Error("Invalid app handoff evidence.");
+      } else if (
+        !["pending", "skipped", "outcome_unknown"].includes(String(step.state))
+      )
+        throw Error("Missing app handoff evidence.");
+      return step;
+    }
     if (step.result !== null) {
       const result = dataRecord(
         step.result,
@@ -207,11 +284,17 @@ export function operationResult(
 export function describeOperationResult(result: OperationResult): string {
   return result.steps
     .map((step) => {
-      const prefix = `Step ${step.step_id + 1}: ${step.capability_id === "media_volume.set" ? "media volume" : "Contexify brightness"} `;
+      const prefix = `Step ${step.step_id + 1}: ${step.capability_id === "media_volume.set" ? "media volume" : step.capability_id === "application.open" ? "app opening" : "Contexify brightness"} `;
+      if (step.state === "handoff_requested")
+        return (
+          prefix +
+          "handoff requested. App visibility or activity inside the app is not verified." +
+          (step.result?.receipt_recorded ? "" : " Server receipt unavailable.")
+        );
       if (step.state === "verified")
         return (
           prefix +
-          `verified at ${step.result!.observed_percent}%` +
+          `verified at ${step.result && "observed_percent" in step.result ? step.result.observed_percent : "unknown"}%` +
           (step.result!.receipt_recorded
             ? "."
             : "; server receipt unavailable. Remaining steps stopped.")

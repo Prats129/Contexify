@@ -18,7 +18,7 @@ def inspect(host: str, check_live_key: bool = False):
         raise RuntimeError(
             "Run APK inspection without Python optimization; all assertions must be enabled."
         )
-    apk = TOOLS / "Contexify-Assistant-M4-Test-1.4.3-3.apk"
+    apk = TOOLS / "Contexify-Assistant-M5-Test-1.4.3-4.apk"
     sdk = TOOLS / "sdk/build-tools/37.0.0"
     java = next((TOOLS / "jdk").glob("*/bin/java.exe"))
 
@@ -34,8 +34,8 @@ def inspect(host: str, check_live_key: bool = False):
     assert dump("packagename").strip() == "ai.contexify.app.assistantvolumetest"
     badging = dump("badging")
     assert (
-        "versionName='1.4.3-assistant-test3'" in badging
-        and "versionCode='3'" in badging
+        "versionName='1.4.3-assistant-test4'" in badging
+        and "versionCode='4'" in badging
         and "application-label:'Contexify Volume Test'" in badging
     )
     permissions = set(
@@ -115,8 +115,11 @@ def inspect(host: str, check_live_key: bool = False):
             b"Check previous actions",
             b"executePlanV2",
             b"reconcilePlansV2",
+            b"operationCapabilitiesV2",
+            b"handoff requested",
+            b"Enable device controls on this device",
         ):
-            assert marker in bundle, "Missing M4 client integration."
+            assert marker in bundle, "Missing M4/M5 client integration."
         assert not any(
             "test-account.json" in name
             or "server.key" in name
@@ -167,6 +170,19 @@ def inspect(host: str, check_live_key: bool = False):
             assert any(marker in data for data in dex), (
                 "Missing M4 native execution/recovery code."
             )
+        for marker in (
+            b"operationCapabilitiesV2",
+            b"ApplicationExecutor",
+            b"ApplicationHandoff",
+            b"ApplicationTarget",
+            b"ReviewedApplications",
+            b"NativeControlProtocol",
+            b"android_application_handoff",
+            b"handoff_requested",
+        ):
+            assert any(marker in data for data in dex), (
+                "Missing M5 reviewed application-handoff code."
+            )
 
     def verify_signature(path: Path) -> str:
         result = subprocess.run(
@@ -199,7 +215,7 @@ def inspect(host: str, check_live_key: bool = False):
         return certificate.pop()
 
     certificate = verify_signature(apk)
-    previous_apk = TOOLS / "Contexify-Assistant-Live-Test-1.4.3-2.apk"
+    previous_apk = TOOLS / "Contexify-Assistant-M4-Test-1.4.3-3.apk"
     if previous_apk.is_file():
         assert verify_signature(previous_apk) == certificate, (
             "Test update signing identity changed."
@@ -208,8 +224,8 @@ def inspect(host: str, check_live_key: bool = False):
         sha = hashlib.file_digest(handle, "sha256").hexdigest()
     report = {
         "package": "ai.contexify.app.assistantvolumetest",
-        "version": "1.4.3-assistant-test3",
-        "version_code": 3,
+        "version": "1.4.3-assistant-test4",
+        "version_code": 4,
         "sha256": sha,
         "apk_bytes": apk.stat().st_size,
         "signature_verified": True,
@@ -223,6 +239,8 @@ def inspect(host: str, check_live_key: bool = False):
         "native_context_code": True,
         "native_m4_code": True,
         "m4_client_integration": True,
+        "native_m5_code": True,
+        "m5_client_integration": True,
         "gemini_key_bundled": False if check_live_key else "not_checked",
         "test_ca_only": True,
         "test_private_key_bundled": False,

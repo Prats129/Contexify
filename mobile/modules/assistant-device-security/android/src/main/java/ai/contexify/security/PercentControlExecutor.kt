@@ -15,14 +15,12 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import java.io.File
 import java.net.URI
-import java.net.URL
 import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
-import javax.net.ssl.HttpsURLConnection
 import org.json.JSONObject
 
 /** Native owns confirmation, HTTPS claim consumption, journal and the single OS call.
@@ -135,75 +133,12 @@ internal class PercentControlExecutor(
     return value
   }
 
-  private fun post(origin: String, token: String, path: String, body: JSONObject, ticket: Long, deadline: Long): JSONObject {
-    check(ticket == generation.get() && SystemClock.elapsedRealtime() < deadline)
-    require(Regex("[A-Za-z0-9_-]{43}").matches(token))
-    val connection = URL(origin + "/api/v1/assistant/${control.mode}" + path).openConnection() as HttpsURLConnection
-    try {
-      // Platform TLS validation stays intact. Never follow redirects or retry an ambiguous claim.
-      connection.instanceFollowRedirects = false
-      connection.connectTimeout = 5000
-      connection.readTimeout = 5000
-      connection.requestMethod = "POST"
-      connection.setRequestProperty("Authorization", "Bearer $token")
-      connection.setRequestProperty("Content-Type", "application/json")
-      connection.setRequestProperty("Accept", "application/json")
-      connection.useCaches = false
-      connection.doOutput = true
-      val bytes = body.toString().toByteArray(Charsets.UTF_8)
-      connection.setFixedLengthStreamingMode(bytes.size)
-      connection.outputStream.use { it.write(bytes) }
-      check(connection.responseCode == 200)
-      val response = connection.inputStream.use { stream ->
-        val output = java.io.ByteArrayOutputStream()
-        val buffer = ByteArray(1024)
-        while (true) {
-          val size = stream.read(buffer)
-          if (size < 0) break
-          check(output.size() + size <= 8192 && SystemClock.elapsedRealtime() < deadline)
-          output.write(buffer, 0, size)
-        }
-        JSONObject(output.toString("UTF-8"))
-      }
-      check(ticket == generation.get())
-      return response
-    } finally { connection.disconnect() }
-  }
-
+  private val protocol = NativeControlProtocol(control.mode, control.capability, generation::get, binding, publicKey)
+  private fun post(origin: String, token: String, path: String, body: JSONObject, ticket: Long, deadline: Long) =
+    protocol.post(origin, token, path, body, ticket, deadline)
   private fun envelope(challenge: JSONObject, purpose: String, revision: Int, origin: String, user: String,
-    installation: String, token: String, task: String, percent: Int): String {
-    val payload = challenge.getString("payload")
-    require(payload.toByteArray(Charsets.UTF_8).size <= 4096)
-    val fields = JSONObject(payload)
-    val base = setOf("protocol_version", "mode", "policy_version", "purpose", "origin", "user_id", "device_id",
-      "installation_id", "public_key", "session_hash", "task_id", "action_revision", "arguments_json",
-      "arguments_digest", "nonce", "challenge_id", "expires_at")
-    val extra = when (purpose) {
-      "assistant_${control.mode}_authorize" -> emptySet()
-      "assistant_${control.mode}_claim" -> setOf("permit_hash")
-      "assistant_${control.mode}_receipt" -> setOf("claim_id", "outcome", "observed_index", "max_index")
-      else -> throw IllegalArgumentException("Unsupported device-control purpose.")
-    }
-    require(fields.keys().asSequence().toSet() == base + extra)
-    require(fields.get("protocol_version") == 1 && fields.get("policy_version") == 1 && fields.get("action_revision") == revision)
-    require(fields.getString("mode") == control.mode && fields.getString("purpose") == purpose)
-    require(fields.getString("origin") == origin && fields.getString("user_id") == user &&
-      fields.getString("installation_id") == installation && fields.getString("public_key") == publicKey(installation))
-    binding(origin, user, installation)
-    require(fields.getString("session_hash") == hash(token) && fields.getString("task_id") == task)
-    uuid(fields.getString("device_id"))
-    require(uuid(fields.getString("challenge_id")) == challenge.getString("challenge_id"))
-    require(Regex("[A-Za-z0-9_-]{43}").matches(fields.getString("nonce")))
-    val expiry = fields.getDouble("expires_at")
-    val now = System.currentTimeMillis() / 1000.0
-    require(expiry.isFinite() && expiry > now && expiry <= now + 65 && challenge.getDouble("expires_at") == expiry)
-    val encoded = fields.getString("arguments_json")
-    require(hash(encoded) == fields.getString("arguments_digest"))
-    val action = JSONObject(encoded)
-    require(action.keys().asSequence().toSet() == setOf("capability_id", "schema_version", "percent"))
-    require(action.getString("capability_id") == control.capability && action.get("schema_version") == 1 && action.get("percent") == percent)
-    return payload
-  }
+    installation: String, token: String, task: String, percent: Int) = protocol.envelope(challenge, purpose, revision,
+      origin, user, installation, token, task, JSONObject().put("capability_id", control.capability).put("schema_version", 1).put("percent", percent))
 
   private fun confirm(percent: Int, target: Int, maximum: Int, expiry: Double, ticket: Long, contextDetails: String = "", checkContext: () -> Unit = {}): Boolean {
     val approved = AtomicBoolean(false)

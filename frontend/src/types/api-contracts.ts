@@ -682,3 +682,70 @@ export type PercentOperationRequest = {
   step_id: number;
   action: VolumeAction | BrightnessAction;
 };
+
+export type ApplicationAction = {
+  capability_id: "application.open";
+  schema_version?: 1;
+  application_id: "spotify" | "clock";
+  package_id:
+    | "com.spotify.music"
+    | "com.google.android.deskclock"
+    | "com.android.deskclock"
+    | "com.sec.android.app.clockpackage";
+};
+
+export type ApplicationClaim = {
+  claim_id: string;
+  action_revision: number;
+  execution?: "android_application_handoff";
+  expires_at: number;
+};
+
+export type ApplicationEvidence = {
+  outcome: "handoff_requested" | "failed" | "outcome_unknown";
+};
+
+export type ApplicationOperationRequest = {
+  protocol_version: 2;
+  plan_id: string;
+  plan_revision: number;
+  step_id: number;
+  action: ApplicationAction;
+};
+
+export type ApplicationReceiptRequest = {
+  outcome: "handoff_requested" | "failed" | "outcome_unknown";
+  expected_revision: number;
+  challenge_id: string;
+  signature: string;
+  claim_id: string;
+};
+
+export type ApplicationResultRequest = {
+  outcome: "handoff_requested" | "failed" | "outcome_unknown";
+  expected_revision: number;
+  claim_id: string;
+};
+
+export type ApplicationSessionResponse = {
+  access_token: string;
+  expires_at: number;
+  scope?: "assistant:application";
+};
+
+export type ApplicationTaskView = {
+  task_id: string;
+  mode?: "application";
+  action: ApplicationAction;
+  revision: number;
+  state:
+    | "awaiting_confirmation"
+    | "authorized"
+    | "executing"
+    | "handoff_requested"
+    | "failed"
+    | "outcome_unknown"
+    | "cancelled"
+    | "expired";
+  result?: ApplicationEvidence | null;
+};

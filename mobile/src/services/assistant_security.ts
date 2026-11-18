@@ -247,6 +247,29 @@ export function createAssistantDeviceSecurity(
       controlBusy = false;
     }
   }
+  function supportsPlan(plan: OperationPlan): boolean {
+    try {
+      const bridge = controlBridge("volume");
+      const capabilities = bridge.operationCapabilitiesV2?.();
+      if (capabilities === undefined) return supportedOperationPlan(plan);
+      if (
+        !Array.isArray(capabilities) ||
+        capabilities.length > 3 ||
+        capabilities.some(
+          (value) =>
+            ![
+              "media_volume.set",
+              "brightness.set_app",
+              "application.open",
+            ].includes(value),
+        )
+      )
+        return false;
+      return supportedOperationPlan(plan, capabilities);
+    } catch {
+      return false;
+    }
+  }
   async function planControl(
     userId: string,
     plan?: OperationPlan,
@@ -296,6 +319,7 @@ export function createAssistantDeviceSecurity(
     }
   }
   const api = {
+    supportsPlan,
     async executePlan(
       userId: string,
       plan: OperationPlan,
@@ -310,7 +334,7 @@ export function createAssistantDeviceSecurity(
         })),
         plan.context_id,
       );
-      if (!supportedOperationPlan(snapshot))
+      if (!supportsPlan(snapshot))
         throw new Error(
           "The whole plan must be supported before any step can run.",
         );

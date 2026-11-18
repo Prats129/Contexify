@@ -14,7 +14,7 @@ class OperationPlanTest {
     override fun create(plan: OperationPlan): PlanCheckpoint {
       check(row == null)
       return PlanCheckpoint(plan.id, plan.revision, plan.digest, plan.expiresAt, 1,
-        plan.steps.map { it.capability }, plan.steps.map { it.percent }, plan.steps.map { "pending" }, plan.steps.map { null })
+        plan.steps.map { it.capability }, plan.steps.map { it.percent }, plan.steps.map { "pending" }, plan.steps.map { null }, plan.steps.map { it.applicationId })
         .also { row = it }
     }
     override fun save(expected: Int, next: PlanCheckpoint) {
@@ -95,6 +95,43 @@ class OperationPlanTest {
     fails { PlanCoordinator(store, { 1 }, { false }).execute(plan) { error("Unjournaled effect") } }
     val row = store.row!!
     fails { row.transition(row.version + 1, 0, "outcome_unknown") }
+  }
+  @Test fun terminalAppHandoffIsDurableWithoutInventingDelivery() {
+    val app = OperationStep(1, "application.open", null, listOf(0), "spotify")
+    val store = MemoryStore()
+    val result = PlanCoordinator(store, { 1 }, { false }).execute(plan.copy(steps = listOf(plan.steps[0], app))) {
+      assertEquals("outcome_unknown", store.row!!.states[it.id])
+      if (it.applicationId != null) StepEvidence("handoff_requested", null, null, true, "spotify", "com.spotify.music") else verified(it)
+    }
+    assertEquals(listOf("verified", "handoff_requested"), result.states)
+    assertEquals(listOf(null, "spotify"), result.applications)
+    assertNotEquals(plan.digest, plan.copy(steps = listOf(plan.steps[0], app)).digest)
+    fails { StepEvidence("verified", null, null, true, "spotify", "com.spotify.music") }
+    fails { StepEvidence("handoff_requested", 50, 50, true) }
+    fails { StepEvidence("handoff_requested", null, null, true, "clock", "com.spotify.music") }
+  }
+  @Test fun aNonterminalOrUnknownHandoffRejectsTheWholePlanBeforeEffects() {
+    for (steps in listOf(
+      listOf(OperationStep(0, "application.open", null, emptyList(), "spotify"), plan.steps[1]),
+      listOf(plan.steps[0], OperationStep(1, "application.open", null, listOf(0), "unreviewed")),
+      listOf(OperationStep(0, "application.open", null, emptyList(), "clock"), OperationStep(1, "application.open", null, listOf(0), "spotify"))
+    )) {
+      val store = MemoryStore()
+      fails { PlanCoordinator(store, { 1 }, { false }).execute(plan.copy(steps = steps)) { error("Unsupported partial execution") } }
+      assertNull(store.row)
+    }
+  }
+  @Test fun backgroundingAfterDispatchRetainsOnlyHandoffEvidenceAndNeverResumes() {
+    val store = MemoryStore()
+    var stopped = false
+    val single = plan.copy(steps = listOf(OperationStep(0, "application.open", null, emptyList(), "clock")))
+    val result = PlanCoordinator(store, { 1 }, { stopped }).execute(single) {
+      stopped = true
+      StepEvidence("handoff_requested", null, null, false, "clock", "com.sec.android.app.clockpackage")
+    }
+    assertEquals("handoff_requested", result.states.single())
+    assertFalse(result.evidence.single()!!.recorded)
+    fails { PlanCoordinator(store, { 1 }, { false }).execute(single) { error("Must not relaunch on return") } }
   }
   @Test fun authenticatedEncryptionRejectsTamperingWrongKeyAndCrossAccountBinding() {
     val key = KeyGenerator.getInstance("AES").apply { init(256) }.generateKey()

@@ -167,7 +167,9 @@ class AssistantPlanningTests(bootstrap.AssistantSecurityFixture):
             self.assertNotIn(TEXT, json.dumps(row))
             self.assertNotIn("text", row)
 
-    def test_catalog_does_not_claim_installed_native_support_or_app_execution(self):
+    def test_catalog_does_not_claim_installed_native_support_or_execution_authority(
+        self,
+    ):
         response = self.send(
             "GET", "/grants/" + self.grant["grant_id"] + "/capabilities"
         )
@@ -177,8 +179,8 @@ class AssistantPlanningTests(bootstrap.AssistantSecurityFixture):
             self.assertEqual(entry["execution"], "not_authorized")
             self.assertEqual(entry["confirmation"], "exact_transaction")
             if entry["capability_id"] == "application.open":
-                self.assertEqual(entry["presentation"], "preview_only")
-                self.assertEqual(entry["native_source_platforms"], [])
+                self.assertEqual(entry["presentation"], "native_source_available")
+                self.assertEqual(entry["native_source_platforms"], ["android"])
 
     def test_consent_is_strict_and_not_an_execution_credential(self):
         for value in [False, 1, "true", None]:
@@ -921,7 +923,7 @@ class PlanningMigrationTests(unittest.TestCase):
                 conn.execute(
                     "SELECT MAX(version) FROM assistant_schema_versions"
                 ).fetchone()[0],
-                5,
+                6,
             )
             self.assertEqual(
                 tuple(

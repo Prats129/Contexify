@@ -80,6 +80,7 @@ export function createCommandSession(
   platform: AssistantPlatform,
   planner?: CommandPlanner,
   readVolumeContext?: VolumeContextReader,
+  supportsPlan: (plan: OperationPlan) => boolean = supportedOperationPlan,
 ) {
   let state: CommandSessionState = {
     transcript: "",
@@ -315,15 +316,15 @@ export function createCommandSession(
                     platform === "android" &&
                     Boolean(
                       review.operationPlan &&
-                      supportedOperationPlan(review.operationPlan),
+                      supportsPlan(review.operationPlan),
                     ),
                 }))
               : null,
             message:
               proposal.status !== "proposed"
                 ? planningFeedback(proposal)
-                : !supportedOperationPlan(review!.operationPlan!)
-                  ? "This whole plan is preview only because a required action has no supported executor. No part of this plan will be executed."
+                : !supportsPlan(review!.operationPlan!)
+                  ? "This whole plan is preview only because its actions or their order are unsupported on this build. No part of this plan will be executed."
                   : "Plan reviewed. No device action has been performed.",
           });
         } catch (error) {
@@ -376,7 +377,7 @@ export function createCommandSession(
         state.phase !== "idle" ||
         platform !== "android" ||
         !plan ||
-        !supportedOperationPlan(plan)
+        !supportsPlan(plan)
       )
         return null;
       update({ reviewed: null });

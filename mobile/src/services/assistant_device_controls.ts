@@ -6,6 +6,7 @@ import type {
 } from "@contexify/assistant-core";
 
 export interface DeviceControls {
+  supportsPlan?(plan: OperationPlan): boolean;
   executePlan?(userId: string, plan: OperationPlan): Promise<OperationResult>;
   reconcilePlans?(userId: string): Promise<OperationResult[]>;
   readVolumeContext?(userId: string, signal: AbortSignal): Promise<unknown>;

@@ -15,6 +15,8 @@ export interface PercentExecutionResult {
 export type VolumeExecutionResult = PercentExecutionResult;
 
 interface SecurityModule {
+  /** Compiled support only; never grants authority. Missing on older binaries. */
+  operationCapabilitiesV2?(): unknown;
   executePlanV2?(
     origin: string,
     userId: string,

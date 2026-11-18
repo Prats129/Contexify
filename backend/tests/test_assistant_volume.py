@@ -361,7 +361,7 @@ class AssistantVolumeTests(bootstrap.AssistantSecurityFixture):
                 conn.execute(
                     "SELECT MAX(version) AS version FROM assistant_schema_versions"
                 ).fetchone()["version"],
-                5,
+                6,
             )
         response = self.create()
         self.assertEqual(response.headers["cache-control"], "no-store")

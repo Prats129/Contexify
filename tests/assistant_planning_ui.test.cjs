@@ -557,3 +557,87 @@ test("browser clarification can choose an exact preview but cannot invent a phon
     1,
   );
 });
+
+test("compatible Android app plans dispatch once and report only a launcher handoff", async (t) => {
+  let dispatches = 0;
+  const f = setup(
+    t,
+    "android",
+    async () =>
+      draft(deviceId, [
+        {
+          action: {
+            capability_id: "application.open",
+            application_id: "spotify",
+          },
+        },
+      ]),
+    {
+      supportsPlan: (plan) =>
+        plan.steps.every(
+          (step, i) =>
+            step.action.capability_id !== "application.open" ||
+            i === plan.steps.length - 1,
+        ),
+      executePlan: async (_user, plan) => {
+        dispatches++;
+        return {
+          protocol_version: 2,
+          plan_id: plan.plan_id,
+          plan_revision: plan.plan_revision,
+          revision: 3,
+          steps: [
+            {
+              step_id: 0,
+              capability_id: "application.open",
+              state: "handoff_requested",
+              result: {
+                outcome: "handoff_requested",
+                application_id: "spotify",
+                package_id: "com.spotify.music",
+                receipt_recorded: true,
+              },
+            },
+          ],
+        };
+      },
+    },
+  );
+  f.send();
+  await f.ui.flush();
+  assert.equal(dispatches, 1);
+  assert.match(f.ui.text(), /handoff requested/);
+  assert.match(f.ui.text(), /not verified/);
+  f.ui.emit("change", "background");
+  await f.ui.flush();
+  f.ui.emit("change", "active");
+  await f.ui.flush();
+  assert.equal(dispatches, 1);
+});
+
+test("missing reviewed app produces visible preflight guidance without a legacy effect", async (t) => {
+  const f = setup(
+    t,
+    "android",
+    async () =>
+      draft(deviceId, [
+        {
+          action: {
+            capability_id: "application.open",
+            application_id: "clock",
+          },
+        },
+      ]),
+    {
+      supportsPlan: () => true,
+      executePlan: async () => {
+        throw { code: "ERR_APP_UNAVAILABLE" };
+      },
+    },
+  );
+  f.send();
+  await f.ui.flush();
+  assert.match(f.ui.text(), /no single reviewed launcher/);
+  assert.match(f.ui.text(), /No part of this plan was started/);
+  assert.equal(f.calls.length, 0);
+});

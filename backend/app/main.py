@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.v1.endpoints import (
     assistant,
+    assistant_application,
     assistant_brightness,
     assistant_planning,
     assistant_security,
@@ -122,6 +123,11 @@ app.include_router(
     assistant.router,
     prefix=f"{settings.API_V1_STR}/assistant",
     tags=["Assistant simulation"],
+)
+app.include_router(
+    assistant_application.router,
+    prefix=f"{settings.API_V1_STR}/assistant/application",
+    tags=["Assistant application"],
 )
 app.include_router(
     assistant_volume.router,

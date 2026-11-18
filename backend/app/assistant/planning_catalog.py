@@ -6,7 +6,7 @@ from app.schemas.assistant_planning import PlanningCapability, PlanningCapabilit
 NATIVE_SUPPORT: tuple[tuple[PlanningCapabilityId, tuple[Platform, ...]], ...] = (
     ("media_volume.set", ("android",)),
     ("brightness.set_app", ("android",)),
-    ("application.open", ()),
+    ("application.open", ("android",)),
 )
 
 

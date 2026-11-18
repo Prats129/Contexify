@@ -54,9 +54,10 @@ internal class PlanRecoveryStore(context: Context, private val installation: Str
   private fun encode(row: PlanCheckpoint): ByteArray {
     val steps = JSONArray()
     row.states.forEachIndexed { i, state -> steps.put(JSONObject().put("state", state)
-      .put("capability", row.capabilities[i]).put("percent", row.percents[i])
+      .put("capability", row.capabilities[i]).put("percent", row.percents[i] ?: JSONObject.NULL)
+      .put("application_id", row.applications[i] ?: JSONObject.NULL)
       .put("result", row.evidence[i]?.let { JSONObject(it.bridge()) } ?: JSONObject.NULL)) }
-    return JSONObject().put("format", 1).put("plan_id", row.id).put("plan_revision", row.planRevision)
+    return JSONObject().put("format", 2).put("plan_id", row.id).put("plan_revision", row.planRevision)
       .put("digest", row.digest).put("expires_at", row.expiresAt).put("revision", row.version)
       .put("steps", steps).toString().toByteArray(Charsets.UTF_8)
   }
@@ -74,29 +75,36 @@ internal class PlanRecoveryStore(context: Context, private val installation: Str
       output.toByteArray()
     }
     val row = JSONObject(String(RecoveryCipher.open(encrypted, key(), aad(id)), Charsets.UTF_8))
-    require(row.getInt("format") == 1 && row.getString("plan_id") == id)
+    require(row.getInt("format") in 1..2 && row.getString("plan_id") == id)
     val steps = row.getJSONArray("steps")
     require(steps.length() in 1..5)
     val states = mutableListOf<String>()
     val evidence = mutableListOf<StepEvidence?>()
     val capabilities = mutableListOf<String>()
-    val percents = mutableListOf<Int>()
+    val percents = mutableListOf<Int?>()
+    val applications = mutableListOf<String?>()
     for (i in 0 until steps.length()) {
       val step = steps.getJSONObject(i)
       val state = step.getString("state")
-      require(state in setOf("pending", "skipped", "verified", "failed", "cancelled", "outcome_unknown"))
+      require(state in setOf("pending", "skipped", "verified", "failed", "cancelled", "outcome_unknown", "handoff_requested"))
       val capability = step.getString("capability")
-      val percent = step.getInt("percent")
-      OperationStep(i, capability, percent, emptyList()).validate(i)
+      val percent = if (step.isNull("percent")) null else step.getInt("percent")
+      val app = if (!step.has("application_id") || step.isNull("application_id")) null else step.getString("application_id")
+      OperationStep(i, capability, percent, emptyList(), app).validate(i)
+      applications.add(app)
       states.add(state); capabilities.add(capability); percents.add(percent)
       val result = step.optJSONObject("result")
-      evidence.add(result?.let { StepEvidence(it.getString("outcome"), it.getInt("requested_percent"),
-        if (it.isNull("observed_percent")) null else it.getInt("observed_percent"), it.getBoolean("receipt_recorded")) })
-      require(evidence.last() == null || (evidence.last()?.outcome == state && evidence.last()?.requested == percent))
+      evidence.add(result?.let {
+        if (app != null) StepEvidence(it.getString("outcome"), null, null, it.getBoolean("receipt_recorded"),
+          it.getString("application_id"), it.getString("package_id"))
+        else StepEvidence(it.getString("outcome"), it.getInt("requested_percent"),
+          if (it.isNull("observed_percent")) null else it.getInt("observed_percent"), it.getBoolean("receipt_recorded"))
+      })
+      require(evidence.last() == null || (evidence.last()?.outcome == state && evidence.last()?.requested == percent && evidence.last()?.applicationId == app))
     }
     OperationIdentity(id, row.getInt("plan_revision"), 0)
     PlanCheckpoint(id, row.getInt("plan_revision"), row.getString("digest"), row.getLong("expires_at"),
-      row.getInt("revision"), capabilities, percents, states, evidence)
+      row.getInt("revision"), capabilities, percents, states, evidence, applications)
   }
   private fun write(row: PlanCheckpoint) {
     val encrypted = RecoveryCipher.seal(encode(row), key(), aad(row.id))
@@ -119,14 +127,14 @@ internal class PlanRecoveryStore(context: Context, private val installation: Str
     check((directory.list()?.size ?: 512) < 512)
     val row = PlanCheckpoint(plan.id, plan.revision, plan.digest, plan.expiresAt, 1,
       plan.steps.map { it.capability }, plan.steps.map { it.percent },
-      plan.steps.map { "pending" }, plan.steps.map { null })
+      plan.steps.map { "pending" }, plan.steps.map { null }, plan.steps.map { it.applicationId })
     write(row)
     row
   }
   override fun save(expected: Int, next: PlanCheckpoint) = synchronized(storageLock) {
     val old = read(next.id)
     check(old.version == expected && next.version == expected + 1 && old.planRevision == next.planRevision &&
-      old.digest == next.digest && old.expiresAt == next.expiresAt && old.capabilities == next.capabilities && old.percents == next.percents)
+      old.digest == next.digest && old.expiresAt == next.expiresAt && old.capabilities == next.capabilities && old.percents == next.percents && old.applications == next.applications)
     write(next)
   }
   fun recent(limit: Int = 512): List<PlanCheckpoint> = synchronized(storageLock) {

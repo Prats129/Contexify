@@ -679,7 +679,7 @@ class AssistantMigrationTests(unittest.TestCase):
             conn.execute("SELECT COUNT(*) FROM assistant_schema_versions").fetchone()[
                 0
             ],
-            5,
+            6,
         )
         self.assertEqual(
             conn.execute("SELECT public_key FROM assistant_devices").fetchone()[0],

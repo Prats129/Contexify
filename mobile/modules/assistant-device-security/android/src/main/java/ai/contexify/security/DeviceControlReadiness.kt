@@ -9,12 +9,6 @@ import androidx.lifecycle.LifecycleOwner
 
 /** Read-only prerequisites, not permission, enrollment, confirmation or execution evidence. */
 internal object DeviceControlReadiness {
-  private val applications = mapOf(
-    "spotify" to listOf("com.spotify.music"),
-    "clock" to listOf(
-      "com.google.android.deskclock", "com.android.deskclock", "com.sec.android.app.clockpackage"
-    )
-  )
 
   fun inspect(context: Context, activity: Activity?): Map<String, Any> {
     val resumed = (activity as? LifecycleOwner)?.lifecycle?.currentState
@@ -36,7 +30,7 @@ internal object DeviceControlReadiness {
         else -> "available"
       }
     }.getOrDefault("unavailable")
-    val catalog = applications.mapValues { (_, packages) ->
+    val catalog = ReviewedApplications.packages.mapValues { (_, packages) ->
       if (!active) "unavailable" else runCatching {
         if (packages.any { context.packageManager.getLaunchIntentForPackage(it) != null })
           "available" else "no_reviewed_handler"
