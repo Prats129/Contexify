@@ -1,11 +1,23 @@
 // Render the real assistant components with deterministic hooks and host views.
 // This exercises handlers/lifecycle wiring, not DOM layout or an Android device.
 const fs = require("node:fs");
-const vm = require("node:vm");
 const ts = require("../../frontend/node_modules/typescript");
 const { createTypeScriptLoader } = require("./typescript_modules.cjs");
 
-function assistantUI(platform, props, component = "AssistantPreview") {
+// React components and shared strict plain-object validators run in one JS realm.
+// Supply only the fixture's host ports, as with the TypeScript module loader.
+function runComponent(code, environment) {
+  new Function(...Object.keys(environment), code)(
+    ...Object.values(environment),
+  );
+}
+
+function assistantUI(
+  platform,
+  props,
+  component = "AssistantPreview",
+  ports = {},
+) {
   const slots = [],
     events = new Map();
   let frame = slots;
@@ -24,7 +36,9 @@ function assistantUI(platform, props, component = "AssistantPreview") {
       return (frame[index++] ||= { current: value });
     },
     useState(initial) {
-      const slot = (frame[index++] ||= { value: initial });
+      const slot = (frame[index++] ||= {
+        value: typeof initial === "function" ? initial() : initial,
+      });
       return [
         slot.value,
         (value) => {
@@ -94,9 +108,14 @@ function assistantUI(platform, props, component = "AssistantPreview") {
     addEventListener: add,
     removeEventListener: document.removeEventListener,
   };
-  const filename = ["ReminderManager", "AlarmManager"].includes(component)
+  const filename = [
+    "ReminderManager",
+    "AlarmManager",
+    "AppleAssistantTools",
+    "AppleAlarmManager",
+  ].includes(component)
     ? `mobile/src/components/${component}.tsx`
-    : platform === "android"
+    : platform === "android" || platform === "ios"
       ? "mobile/src/components/AssistantPreview.tsx"
       : "frontend/src/components/Modals/AssistantPreview.tsx";
   const source = fs
@@ -110,7 +129,7 @@ function assistantUI(platform, props, component = "AssistantPreview") {
     },
   }).outputText;
   const exports = {};
-  vm.runInNewContext(code, {
+  runComponent(code, {
     exports,
     process,
     AbortController,
@@ -119,6 +138,10 @@ function assistantUI(platform, props, component = "AssistantPreview") {
     document,
     window,
     require(name) {
+      if (name === "./AppleAssistantTools")
+        return { AppleAssistantTools: () => jsx("AppleAssistantTools", {}) };
+      if (name === "./AppleAlarmManager")
+        return { AppleAlarmManager: () => jsx("AppleAlarmManager", {}) };
       if (name === "./AlarmManager")
         return { AlarmManager: () => jsx("AlarmManager", {}) };
       if (name === "./ReminderManager")
@@ -136,7 +159,7 @@ function assistantUI(platform, props, component = "AssistantPreview") {
           },
         }).outputText;
         const output = {};
-        vm.runInNewContext(code, {
+        runComponent(code, {
           exports: output,
           require(name) {
             if (name === "react") return react;
@@ -159,7 +182,7 @@ function assistantUI(platform, props, component = "AssistantPreview") {
       if (name === "@contexify/assistant-core") return core;
       if (name === "react-native")
         return {
-          Platform: { OS: "android" },
+          Platform: { OS: platform },
           AppState: appState,
           Keyboard: { dismiss() {} },
           Modal: "Modal",
@@ -179,6 +202,7 @@ function assistantUI(platform, props, component = "AssistantPreview") {
         };
       if (name.endsWith("/assistant_volume"))
         return load("mobile/src/services/assistant_volume.ts");
+      if (name.endsWith("/assistant_platform")) return ports.apple;
       if (name.endsWith("/assistant_brightness"))
         return load("mobile/src/services/assistant_brightness.ts");
       if (name.endsWith("/assistant_device_readiness"))

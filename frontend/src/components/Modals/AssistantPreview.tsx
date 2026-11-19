@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   createCommandSession,
   createCommandPlanner,
+  companionFeatures,
   type CommandSessionState,
   type PlanningAccess,
 } from "@contexify/assistant-core";
@@ -110,6 +111,22 @@ export function AssistantPreview({
         Type or dictate a command, then review the steps. This preview cannot
         change your phone or open apps.
       </p>
+      <details className="text-sm mb-4 rounded-lg border border-(--border-subtle) p-3">
+        <summary className="cursor-pointer">
+          What works in this browser?
+        </summary>
+        <ul className="space-y-3 mt-3">
+          {state &&
+            companionFeatures("web", state.availability).map((feature) => (
+              <li key={feature.id}>
+                <strong>
+                  {feature.label}: {feature.status.replace(/_/g, " ")}
+                </strong>
+                <p className="text-(--text-muted)">{feature.detail}</p>
+              </li>
+            ))}
+        </ul>
+      </details>
       <label
         htmlFor="assistant-command"
         className="block text-sm font-medium mb-2"

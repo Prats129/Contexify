@@ -233,7 +233,7 @@ export type ReminderAction = {
 export type ReminderClaim = {
   claim_id: string;
   action_revision: number;
-  execution?: "android_owned_reminder";
+  execution?: "android_owned_reminder" | "ios_owned_schedule";
   expires_at: number;
 };
 

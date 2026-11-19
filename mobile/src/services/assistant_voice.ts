@@ -50,12 +50,12 @@ function inputFailure(error: unknown): VoiceInputError {
   );
 }
 
-/** Missing native builds and iOS use text; there is no cloud or software fallback. */
+/** Missing native builds use text; there is no cloud or software fallback. */
 export function createMobileVoiceAdapter(
   enabled: boolean,
 ): ForegroundVoiceAdapter {
   let native: AssistantVoiceModule | null = null;
-  if (enabled && Platform.OS === "android") {
+  if (enabled && (Platform.OS === "android" || Platform.OS === "ios")) {
     try {
       native = assistantVoice();
     } catch {
@@ -79,7 +79,7 @@ export function createMobileVoiceAdapter(
           synthesis: false,
           message: !enabled
             ? "Voice is not enabled in this build. You can still type."
-            : "On-device voice requires a compatible Android build. You can still type.",
+            : "On-device voice requires a compatible native build. You can still type.",
         };
       return native.availability();
     },

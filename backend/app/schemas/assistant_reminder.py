@@ -100,7 +100,9 @@ class ReminderTaskView(SecurityModel):
 class ReminderClaim(SecurityModel):
     claim_id: str
     action_revision: int
-    execution: Literal["android_owned_reminder"] = "android_owned_reminder"
+    execution: Literal["android_owned_reminder", "ios_owned_schedule"] = (
+        "android_owned_reminder"
+    )
     expires_at: float
 
 

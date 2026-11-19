@@ -62,6 +62,7 @@ import { ProfileModal } from "./src/components/ProfileModal";
 import { ServerConfigModal } from "./src/components/ServerConfigModal";
 import { AttachmentsModal } from "./src/components/AttachmentsModal";
 import { AssistantPreview } from "./src/components/AssistantPreview";
+import { subscribeAssistantEntry } from "./src/services/assistant_platform";
 
 function generateGuestSessionId(): string {
   return (
@@ -98,6 +99,7 @@ export default function App() {
   // Global State
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isAssistantOpen, setIsAssistantOpen] = useState(false);
+  useEffect(() => subscribeAssistantEntry(() => setIsAssistantOpen(true)), []);
   const currentUserRef = useRef<User | null>(null);
   const authVersionRef = useRef(0);
   const [isAuthReady, setIsAuthReady] = useState(false);

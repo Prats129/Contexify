@@ -144,7 +144,7 @@ export function ReminderManager({
     if (controls.reminderSupported?.() && controls.readReminders) refresh();
     else
       setMessage(
-        "Reminders require an updated compatible Android build. No reminder action was performed.",
+        "Reminders require an updated compatible native build. No reminder action was performed.",
       );
     const listener = AppState.addEventListener("change", (state) => {
       if (state !== "active") {
@@ -278,10 +278,10 @@ export function ReminderManager({
               Create and cancel Contexify reminders on this phone. Titles stay
               outside chat and Gemini. Scheduling, cancellation and private
               viewing need a connection; alerts you already approved can notify
-              offline. Android may delay alerts. Signing out stops local alerts
-              and deletes local details. Encrypted reminder history becomes
-              eligible for cleanup seven days after the final scheduled time;
-              cleanup runs when the app next runs.
+              offline. The operating system may delay alerts. Signing out stops
+              local alerts and deletes local details. Encrypted reminder history
+              becomes eligible for cleanup seven days after the final scheduled
+              time; cleanup runs when the app next runs.
             </Text>
             {button("Refresh reminders", refresh, busy || !supported)}
             {supported &&
@@ -382,7 +382,7 @@ export function ReminderManager({
                           message:
                             (await controls.requestReminderNotifications!())
                               ? "Notification permission granted."
-                              : "Notifications remain unavailable. Check this app's notification permission and reminder channel in Android settings.",
+                              : "Notifications remain unavailable. Check this app's notification permission in device settings.",
                         }),
                         true,
                       );

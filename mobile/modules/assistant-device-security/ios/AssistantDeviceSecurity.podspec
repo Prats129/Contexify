@@ -14,5 +14,7 @@ Pod::Spec.new do |s|
   s.static_framework = true
   s.dependency 'ExpoModulesCore'
   s.source_files = '**/*.swift'
-  s.frameworks = 'Security', 'LocalAuthentication', 'CryptoKit'
+  s.resource_bundles = { 'AssistantDeviceSecurityPrivacy' => ['PrivacyInfo.xcprivacy'] }
+  s.frameworks = 'Security', 'LocalAuthentication', 'CryptoKit', 'UserNotifications', 'SwiftUI'
+  s.weak_frameworks = 'AlarmKit'
 end

@@ -154,7 +154,10 @@ class ReminderTests(bootstrap.AssistantSecurityFixture):
         body = self.claim_body(permit.json())
         claim = self.api("POST", self.path(task) + "/claim", json=body)
         self.assertEqual(claim.status_code, 200, claim.text)
-        self.assertEqual(claim.json()["execution"], "android_owned_reminder")
+        self.assertEqual(
+            claim.json()["execution"],
+            getattr(self, "expected_execution", "android_owned_reminder"),
+        )
         self.assertEqual(
             self.api("POST", self.path(task) + "/claim", json=body).status_code, 409
         )
@@ -408,6 +411,35 @@ class ReminderTests(bootstrap.AssistantSecurityFixture):
 
 
 class TursoReminderTests(ReminderTests):
+    setUp = volume_tests.TursoAssistantVolumeTests.setUp
+
+
+class IOSReminderTests(ReminderTests):
+    expected_execution = "ios_owned_schedule"
+
+    def challenge(self, token=None):
+        response = self.request(
+            "POST",
+            "/enrollment/challenge",
+            token or self.token,
+            json={
+                "installation_id": self.installation,
+                "public_key": self.public_key,
+                "platform": "ios",
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        return response.json()
+
+    def test_ios_never_gains_android_effect_scopes(self):
+        for mode in ("volume", "brightness", "application", "alarm"):
+            response = self.api(
+                "POST", f"/{mode}/sessions", token=self.management, json={}
+            )
+            self.assertEqual(response.status_code, 403, response.text)
+
+
+class TursoIOSReminderTests(IOSReminderTests):
     setUp = volume_tests.TursoAssistantVolumeTests.setUp
 
 

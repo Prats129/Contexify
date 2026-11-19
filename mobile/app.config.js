@@ -6,6 +6,16 @@ module.exports = () => {
   const execution =
     process.env.EXPO_PUBLIC_ASSISTANT_EXECUTION_ENABLED === "true";
   const volumeTest = process.env.APP_VARIANT === "assistant-volume-test";
+  const platformPlugin = [
+    "./plugins/with-assistant-platform",
+    {
+      enabled: volumeTest && execution,
+      voiceEnabled:
+        (verification || volumeTest) &&
+        process.env.EXPO_PUBLIC_ASSISTANT_VOICE_ENABLED === "true",
+    },
+  ];
+  const plugins = [...base.plugins, platformPlugin];
   if (verification !== testEntry) {
     throw new Error(
       "Assistant verification requires both the isolated native variant and test entry point.",
@@ -42,9 +52,13 @@ module.exports = () => {
       ios: {
         ...base.ios,
         bundleIdentifier: "ai.contexify.app.assistantvolumetest",
+        infoPlist: {
+          ...base.ios.infoPlist,
+          NSLocalNetworkUsageDescription: "Connect to your selected local test backend while testing Contexify Assistant.",
+        },
       },
       plugins: [
-        ...base.plugins.filter(
+        ...plugins.filter(
           (plugin) =>
             (Array.isArray(plugin) ? plugin[0] : plugin) !==
             "@react-native-google-signin/google-signin",
@@ -58,7 +72,7 @@ module.exports = () => {
       throw new Error(
         "Assistant execution is restricted to the separate test variant pending device acceptance.",
       );
-    return base;
+    return { ...base, plugins };
   }
   if (execution)
     throw new Error(
@@ -87,7 +101,7 @@ module.exports = () => {
       ...base.ios,
       bundleIdentifier: "ai.contexify.app.assistantverification",
     },
-    plugins: base.plugins.filter(
+    plugins: plugins.filter(
       (plugin) =>
         (Array.isArray(plugin) ? plugin[0] : plugin) !==
         "@react-native-google-signin/google-signin",

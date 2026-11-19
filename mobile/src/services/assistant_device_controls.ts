@@ -9,9 +9,20 @@ import type {
   ReminderCopyPage,
   AlarmDraft,
   AlarmHandoffResult,
+  AppleAlarmDraft,
+  AppleAlarmSnapshot,
 } from "@contexify/assistant-core";
 
 export interface DeviceControls {
+  appleAlarmSupported?(): boolean;
+  appleTimerSupported?(): boolean;
+  readAppleAlarms?(userId: string): Promise<AppleAlarmSnapshot>;
+  createAppleAlarm?(
+    userId: string,
+    draft: AppleAlarmDraft,
+  ): Promise<ReminderResult>;
+  cancelAppleAlarm?(userId: string, id: string): Promise<ReminderResult>;
+  requestAppleAlarmPermission?(): Promise<boolean>;
   alarmHandoffSupported?(): boolean;
   requestAlarmHandoff?(
     userId: string,

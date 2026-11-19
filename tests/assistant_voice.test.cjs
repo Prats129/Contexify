@@ -527,10 +527,11 @@ function mobileFixture(os = "android", enabled = true, missing = false) {
     },
   };
 }
-test("disabled, iOS and old native builds retain text input", async () => {
+test("disabled, unsupported and old native builds retain text input", async () => {
   for (const [os, enabled, missing] of [
     ["android", false, false],
-    ["ios", true, false],
+    ["web", true, false],
+    ["ios", true, true],
     ["android", true, true],
   ]) {
     const f = mobileFixture(os, enabled, missing);
@@ -541,9 +542,24 @@ test("disabled, iOS and old native builds retain text input", async () => {
         () => {},
       ),
     );
-    if (!enabled || os === "ios") assert.equal(f.lookups, 0);
+    if (!enabled || os === "web") assert.equal(f.lookups, 0);
     f.adapter.dispose();
   }
+});
+
+test("compatible iOS voice uses the same scoped request and ignores late capture after cancel", async () => {
+  const f = mobileFixture("ios");
+  assert.equal((await f.adapter.availability()).recognition, true);
+  const pending = f.adapter.listen(
+    () => assert.fail("late transcript"),
+    () => {},
+  );
+  const id = f.native.id;
+  f.adapter.cancel();
+  f.native.listening.resolve("private old result");
+  await assert.rejects(pending);
+  assert.deepEqual(f.native.cancels, [id]);
+  f.adapter.dispose();
 });
 
 test("typed speech errors preserve fixed guidance and a bounded Android code", async () => {
@@ -583,13 +599,17 @@ test("an immediate native failure returns idle with a persistent error and remai
   const f = mobileFixture();
   f.native.listen = function (id) {
     this.id = id;
-    return Promise.reject(Object.assign(Error("private engine detail"), { code: "ERR_SPEECH_13" }));
+    return Promise.reject(
+      Object.assign(Error("private engine detail"), { code: "ERR_SPEECH_13" }),
+    );
   };
   const session = f.createCommandSession(f.adapter, "android");
   await session.refreshAvailability();
   session.setConsent(true);
   const phases = [];
-  const unsubscribe = session.subscribe(() => phases.push(session.getSnapshot().phase));
+  const unsubscribe = session.subscribe(() =>
+    phases.push(session.getSnapshot().phase),
+  );
   for (let attempt = 0; attempt < 2; attempt++) {
     await session.listen();
     assert.equal(session.getSnapshot().phase, "idle");

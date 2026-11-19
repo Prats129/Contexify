@@ -24,6 +24,9 @@ import {
   operationPlan,
   operationResult,
   supportedOperationPlan,
+  appleAlarmDraft,
+  appleAlarmSnapshot,
+  type AppleAlarmDraft,
   type OperationPlan,
   type OperationResult,
   type PlanningContext,
@@ -332,7 +335,12 @@ export function createAssistantDeviceSecurity(
     }
   }
   function reminderBridge() {
-    const bridge = controlBridge("volume");
+    const bridge =
+      Platform.OS === "ios" &&
+      process.env.EXPO_PUBLIC_ASSISTANT_EXECUTION_ENABLED === "true" &&
+      process.env.EXPO_PUBLIC_ASSISTANT_NATIVE_TEST !== "true"
+        ? deviceSecurity()
+        : controlBridge("volume");
     if (
       !bridge.reminderSupport?.() ||
       !bridge.readReminders ||
@@ -340,7 +348,9 @@ export function createAssistantDeviceSecurity(
       !bridge.listSavedReminders
     )
       throw new Error(
-        "Reminders require an updated compatible Android build (Android 8 or later).",
+        Platform.OS === "ios"
+          ? "Reminders require an updated compatible iPhone build."
+          : "Reminders require an updated compatible Android build (Android 8 or later).",
       );
     return bridge;
   }
@@ -405,6 +415,8 @@ export function createAssistantDeviceSecurity(
       )
         await onAuthenticationRejected?.(authorization);
       const explanations: Record<string, string> = {
+        ERR_APPLE_SCHEDULE_LIMIT:
+          "This phone supports at most 32 pending owned occurrences. Cancel older alerts or shorten the repetition; no automatic retry will occur.",
         ERR_ALARM_TIME: "Enter an alarm time as HH:mm using the 24-hour clock.",
         ERR_ALARM_SOON: "Choose an alarm time at least one minute away.",
         ERR_ALARM_DST:
@@ -462,6 +474,100 @@ export function createAssistantDeviceSecurity(
     );
   }
   const api = {
+    appleAlarmSupported(): boolean {
+      try {
+        return (
+          Platform.OS === "ios" &&
+          reminderBridge().appleAlarmSupport?.() === true
+        );
+      } catch {
+        return false;
+      }
+    },
+    appleTimerSupported(): boolean {
+      try {
+        return (
+          Platform.OS === "ios" &&
+          reminderBridge().appleTimerSupport?.() === true
+        );
+      } catch {
+        return false;
+      }
+    },
+    async requestAppleAlarmPermission(): Promise<boolean> {
+      const bridge = reminderBridge();
+      if (Platform.OS !== "ios" || !bridge.requestAppleAlarmPermission)
+        throw new Error("Compatible iPhone build required.");
+      return (await bridge.requestAppleAlarmPermission()) === true;
+    },
+    async readAppleAlarms(userId: string) {
+      return privateControlRequest(
+        userId,
+        (bridge, selected, token) => {
+          if (Platform.OS !== "ios" || !bridge.readAppleAlarms)
+            throw new Error("Compatible iPhone build required.");
+          return bridge.readAppleAlarms(
+            selected.host,
+            userId,
+            selected.installationId,
+            token,
+          );
+        },
+        appleAlarmSnapshot,
+      );
+    },
+    async createAppleAlarm(userId: string, value: AppleAlarmDraft) {
+      const draft = appleAlarmDraft(value);
+      return privateControlRequest(
+        userId,
+        (bridge, selected, token) => {
+          if (
+            Platform.OS !== "ios" ||
+            !bridge.executeAppleAlarm ||
+            !bridge.appleAlarmSupport?.() ||
+            (draft.kind === "timer" && !bridge.appleTimerSupport?.())
+          )
+            throw new Error("Compatible AlarmKit build required.");
+          return bridge.executeAppleAlarm(
+            selected.host,
+            userId,
+            selected.installationId,
+            token,
+            "create",
+            draft.kind,
+            JSON.stringify(
+              draft.kind === "alarm"
+                ? draft.schedule
+                : {
+                    title: draft.title,
+                    duration_seconds: draft.duration_seconds,
+                  },
+            ),
+          );
+        },
+        (value) => reminderResult(value, "create"),
+      );
+    },
+    async cancelAppleAlarm(userId: string, id: string) {
+      reminderId(id);
+      return privateControlRequest(
+        userId,
+        (bridge, selected, token) => {
+          if (Platform.OS !== "ios" || !bridge.executeAppleAlarm)
+            throw new Error("Compatible iPhone build required.");
+          return bridge.executeAppleAlarm(
+            selected.host,
+            userId,
+            selected.installationId,
+            token,
+            "cancel",
+            "alarm",
+            JSON.stringify({ reminder_id: id }),
+          );
+        },
+        (value) => reminderResult(value, "cancel", id),
+      );
+    },
     alarmHandoffSupported(): boolean {
       try {
         alarmBridge();
@@ -606,7 +712,7 @@ export function createAssistantDeviceSecurity(
     },
     async clearReminderData(): Promise<void> {
       api.cancel();
-      if (Platform.OS !== "android") return;
+      if (Platform.OS !== "android" && Platform.OS !== "ios") return;
       let bridge: ReturnType<typeof deviceSecurity>;
       try {
         bridge = deviceSecurity();
@@ -616,7 +722,7 @@ export function createAssistantDeviceSecurity(
       await bridge.clearReminders?.();
     },
     async matchReminderAccount(userId: string): Promise<void> {
-      if (Platform.OS !== "android") return;
+      if (Platform.OS !== "android" && Platform.OS !== "ios") return;
       api.cancel();
       const saved = await SecureStore.getItemAsync(BINDING_KEY, storageOptions);
       let selected: Binding | null = null;
@@ -795,7 +901,8 @@ export function createAssistantDeviceSecurity(
       };
     },
     async enableVolume(userId: string): Promise<void> {
-      controlBridge("volume");
+      if (Platform.OS === "ios") reminderBridge();
+      else controlBridge("volume");
       const generation = version;
       const binding = await readBinding(userId);
       if (generation !== version)
@@ -924,6 +1031,7 @@ export function createAssistantDeviceSecurity(
       return result;
     },
     async forget(): Promise<void> {
+      if (Platform.OS === "ios") await api.clearReminderData();
       api.cancel();
       const saved = await SecureStore.getItemAsync(BINDING_KEY, storageOptions);
       const binding: Binding | null = saved ? JSON.parse(saved) : null;

@@ -52,6 +52,7 @@ class ControlAuthority:
     device_id: str
     installation_id: str
     public_key: str
+    platform: str = "android"
 
 
 class PercentControl:
@@ -65,6 +66,10 @@ class PercentControl:
         if mode not in ("volume", "brightness", "application", "reminder", "alarm"):
             raise ValueError("Unsupported compiled control.")
         self.mode = mode
+        # iOS shares only the opaque owned-schedule protocol, never Android effects.
+        self.platforms = frozenset(
+            {"android", "ios"} if mode == "reminder" else {"android"}
+        )
         self.scope = "assistant:" + mode
         self.capability = {
             "volume": "media_volume.set",
@@ -114,9 +119,9 @@ class PercentControl:
         )
         with get_db_connection(write=True) as conn:
             parent = _management(conn, session)
-            if parent["platform"] != "android":
+            if parent["platform"] not in self.platforms:
                 raise HTTPException(
-                    403, "Device control requires an enrolled Android device."
+                    403, "This control is unavailable for the enrolled platform."
                 )
             now = time.time()
             conn.execute(
@@ -154,7 +159,7 @@ class PercentControl:
         if (
             not row
             or row["kind"] != "device"
-            or row["platform"] != "android"
+            or row["platform"] not in self.platforms
             or (row["expires_at"] <= now)
             or (row["management_expiry"] <= now)
             or (row["revoked_at"] is not None)
@@ -169,6 +174,7 @@ class PercentControl:
             row["device_id"],
             row["installation_id"],
             row["public_key"],
+            row["platform"],
         )
 
     def require_authority(self, request: Request) -> ControlAuthority:
@@ -487,7 +493,9 @@ class PercentControl:
             return {
                 "claim_id": claim_id,
                 "action_revision": 3,
-                "execution": self.execution,
+                "execution": "ios_owned_schedule"
+                if self.mode == "reminder" and authority.platform == "ios"
+                else self.execution,
                 "expires_at": expiry,
             }
 

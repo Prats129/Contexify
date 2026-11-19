@@ -13,6 +13,7 @@ public class AssistantDeviceSecurityModule: Module {
   private var approvals: [String: Approval] = [:]
   private var confirming = false
   private var cancelConfirmation: (() -> Void)?
+  private var schedules: AppleScheduleController?
   private func failure() -> NSError {
     NSError(domain: "ContexifyDeviceSecurity", code: 1,
             userInfo: [NSLocalizedDescriptionKey: "Device security unavailable. Unlock this device or enroll again."])
@@ -80,8 +81,50 @@ public class AssistantDeviceSecurityModule: Module {
 
   public func definition() -> ModuleDefinition {
     Name("AssistantDeviceSecurity")
-    OnAppEntersBackground { self.resetSimulation() }
-    OnDestroy { DispatchQueue.main.async { self.resetSimulation() } }
+    OnAppEntersBackground { Task { @MainActor in self.schedules?.cancel(); self.resetSimulation() } }
+    OnDestroy { Task { @MainActor in self.schedules?.cancel(); self.schedules = nil; self.resetSimulation() } }
+
+    Function("reminderSupport") { AppleScheduleDriver.enabled }
+    Function("appleAlarmSupport") { AppleScheduleDriver.alarmsSupported }
+    Function("appleTimerSupport") { AppleScheduleDriver.timerSupported }
+    AsyncFunction("requestReminderNotifications") { (promise: Promise) -> Void in
+      Task { @MainActor in
+        guard UIApplication.shared.applicationState == .active else { promise.reject("ERR_VOICE_FOREGROUND", "Open this app first."); return }
+        do { promise.resolve(["granted": try await AppleScheduleDriver().requestNotifications()]) }
+        catch { promise.resolve(["granted": false]) }
+      }
+    }.runOnQueue(.main)
+    AsyncFunction("requestAppleAlarmPermission") { (promise: Promise) -> Void in
+      Task { @MainActor in
+        guard UIApplication.shared.applicationState == .active else { promise.resolve(false); return }
+        do { promise.resolve(try await AppleScheduleDriver().requestAlarms()) } catch { promise.resolve(false) }
+      }
+    }.runOnQueue(.main)
+    AsyncFunction("cancelReminders") { () -> Void in Task { @MainActor in self.schedules?.cancel() } }.runOnQueue(.main)
+    AsyncFunction("clearReminders") { (promise: Promise) -> Void in
+      Task { @MainActor in
+        do { try await self.scheduleController().clear(); promise.resolve() }
+        catch { promise.reject("ERR_REMINDER_CLEANUP", "Check this app's pending alerts in Settings. Cleanup will be checked again before scheduling.") }
+      }
+    }.runOnQueue(.main)
+    AsyncFunction("readReminders") { (origin: String, user: String, installation: String, token: String, promise: Promise) in
+      self.scheduleCall(promise) { try await $0.read(origin, user, installation, token) }
+    }.runOnQueue(.main)
+    AsyncFunction("readAppleAlarms") { (origin: String, user: String, installation: String, token: String, promise: Promise) in
+      self.scheduleCall(promise) { try await $0.read(origin, user, installation, token, alarms: true) }
+    }.runOnQueue(.main)
+    AsyncFunction("executeReminder") { (origin: String, user: String, installation: String, token: String, kind: String, payload: String, promise: Promise) in
+      self.scheduleCall(promise) { try await $0.execute(origin, user, installation, token, kind: kind, encoded: payload) }
+    }.runOnQueue(.main)
+    AsyncFunction("executeAppleAlarm") { (origin: String, user: String, installation: String, token: String, kind: String, delivery: String, payload: String, promise: Promise) in
+      self.scheduleCall(promise) { try await $0.execute(origin, user, installation, token, kind: kind, encoded: payload, delivery: delivery) }
+    }.runOnQueue(.main)
+    AsyncFunction("listSavedReminders") { (origin: String, user: String, installation: String, token: String, after: String?, promise: Promise) in
+      self.scheduleCall(promise) { try await $0.saved(origin, user, installation, token, after: after) }
+    }.runOnQueue(.main)
+    AsyncFunction("saveReminderCopy") { (origin: String, user: String, installation: String, token: String, id: String, promise: Promise) in
+      self.scheduleCall(promise) { try await $0.saveCopy(origin, user, installation, token, id: id) }
+    }.runOnQueue(.main)
 
     AsyncFunction("createKey") { (origin: String, userId: String) -> [String: String] in
       try self.unlocked()
@@ -197,12 +240,59 @@ public class AssistantDeviceSecurityModule: Module {
       return try self.sign(id, payload)
     }.runOnQueue(.main)
 
-    AsyncFunction("deleteKey") { (id: String) in
-      self.resetSimulation()
-      let status = SecItemDelete(try self.query(id) as CFDictionary)
-      guard status == errSecSuccess || status == errSecItemNotFound else { throw self.failure() }
-      let marker = try self.marker(id)
-      if FileManager.default.fileExists(atPath: marker.path) { try FileManager.default.removeItem(at: marker) }
+    AsyncFunction("deleteKey") { (id: String, promise: Promise) -> Void in
+      Task { @MainActor in
+        do {
+          try await self.scheduleController().clear()
+          self.resetSimulation()
+          let status = SecItemDelete(try self.query(id) as CFDictionary)
+          guard status == errSecSuccess || status == errSecItemNotFound else { throw self.failure() }
+          let marker = try self.marker(id)
+          if FileManager.default.fileExists(atPath: marker.path) { try FileManager.default.removeItem(at: marker) }
+          promise.resolve()
+        } catch { promise.reject("ERR_REMINDER_CLEANUP", "Check pending app alerts before forgetting this device.") }
+      }
     }.runOnQueue(.main)
+  }
+
+  private func scheduleCall(_ promise: Promise, work: @escaping @MainActor (AppleScheduleController) async throws -> String) {
+    Task { @MainActor in
+      do {
+        let schedules = self.scheduleController()
+        promise.resolve(try await work(schedules))
+      } catch AppleScheduleFailure.unauthorized {
+        promise.reject("ERR_REMINDER_AUTH", "Device scheduling authority changed. Sign in and enroll again.")
+      } catch AppleScheduleFailure.gap {
+        promise.reject("ERR_REMINDER_DST_GAP", "Choose a valid local time.")
+      } catch AppleScheduleFailure.overlap {
+        promise.reject("ERR_REMINDER_DST_OVERLAP", "Choose which occurrence of the repeated local time to use.")
+      } catch AppleScheduleFailure.time {
+        promise.reject("ERR_REMINDER_HORIZON", "Choose a time at least one minute ahead and within 90 days.")
+      } catch AppleScheduleFailure.limit {
+        promise.reject("ERR_APPLE_SCHEDULE_LIMIT", "At most 32 owned pending occurrences are supported. Cancel older requests or shorten the repetition.")
+      } catch {
+        promise.reject("ERR_REMINDER_UNAVAILABLE", "Scheduling is interrupted or unavailable. Check your existing alerts before trying again.")
+      }
+    }
+  }
+
+  @MainActor private func scheduleController() -> AppleScheduleController {
+    if let schedules { return schedules }
+    let controller = AppleScheduleController(binding: { [weak self] origin, user, installation in
+      guard let self else { throw AppleScheduleFailure.unavailable }
+      try self.unlocked()
+      guard try Data(contentsOf: self.marker(installation)) == self.binding(origin, user) else { throw AppleScheduleFailure.unauthorized }
+    }, publicKey: { [weak self] installation in
+      guard let self else { throw AppleScheduleFailure.unavailable }
+      return try self.publicKey(self.key(installation))
+    }, sign: { [weak self] installation, payload in
+      guard let self else { throw AppleScheduleFailure.unavailable }
+      return try self.sign(installation, payload)
+    }, acquire: { [weak self] in
+      guard let self, !self.confirming else { throw AppleScheduleFailure.interrupted }
+      self.confirming = true
+    }, release: { [weak self] in self?.confirming = false })
+    schedules = controller
+    return controller
   }
 }

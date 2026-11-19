@@ -10,3 +10,5 @@ export * from "./clarification";
 export * from "./operations";
 export * from "./reminders";
 export * from "./alarms";
+export * from "./platform-features";
+export * from "./apple-schedules";

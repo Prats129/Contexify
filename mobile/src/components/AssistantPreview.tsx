@@ -37,6 +37,8 @@ import {
 import { ReminderManager } from "./ReminderManager";
 import { AlarmManager } from "./AlarmManager";
 import { ClarificationForm } from "./ClarificationForm";
+import { AppleAssistantTools } from "./AppleAssistantTools";
+import { AppleAlarmManager } from "./AppleAlarmManager";
 
 export function AssistantPreview({
   theme,
@@ -56,6 +58,8 @@ export function AssistantPreview({
   const insets = useSafeAreaInsets();
   const [remindersOpen, setRemindersOpen] = useState(false);
   const [alarmsOpen, setAlarmsOpen] = useState(false);
+  const [appleToolsOpen, setAppleToolsOpen] = useState(false);
+  const [appleAlarmsOpen, setAppleAlarmsOpen] = useState(false);
   const sessionRef = useRef<ReturnType<typeof createCommandSession> | null>(
     null,
   );
@@ -136,6 +140,9 @@ export function AssistantPreview({
     Boolean(
       volumeControls?.enableBrightness && volumeControls?.changeBrightness,
     );
+  const remindersAllowed = Boolean(
+    volumeUserId && volumeControls?.reminderSupported?.(),
+  );
   async function runControl(
     setup: boolean,
     kind: "volume" | "brightness" = "volume",
@@ -343,6 +350,16 @@ export function AssistantPreview({
       </TouchableOpacity>
     );
   }
+  if (appleAlarmsOpen && volumeControls && volumeUserId)
+    return (
+      <AppleAlarmManager
+        key={volumeUserId}
+        userId={volumeUserId}
+        controls={volumeControls}
+        theme={theme}
+        onClose={() => setAppleAlarmsOpen(false)}
+      />
+    );
   if (alarmsOpen && volumeControls && volumeUserId)
     return (
       <AlarmManager
@@ -423,6 +440,41 @@ export function AssistantPreview({
             keyboardShouldPersistTaps="handled"
             contentContainerStyle={{ gap: 12, paddingBottom: 8 }}
           >
+            {Platform.OS === "ios" &&
+              button(
+                appleToolsOpen
+                  ? "Hide iPhone tools"
+                  : "iPhone tools and support",
+                () => {
+                  clearCommand();
+                  setAppleToolsOpen((open) => !open);
+                },
+                Boolean(busy),
+              )}
+            {Platform.OS === "ios" && appleToolsOpen && state && (
+              <AppleAssistantTools
+                theme={theme}
+                voice={state.availability}
+                signedIn={Boolean(volumeUserId)}
+                beforeOpen={clearCommand}
+                scheduling={{
+                  reminders: remindersAllowed,
+                  alarms: volumeControls?.appleAlarmSupported?.() === true,
+                  timers: volumeControls?.appleTimerSupported?.() === true,
+                }}
+              />
+            )}
+            {Platform.OS === "ios" &&
+              volumeUserId &&
+              volumeControls?.appleAlarmSupported?.() &&
+              button(
+                "iPhone alarms and timers",
+                () => {
+                  clearCommand();
+                  setAppleAlarmsOpen(true);
+                },
+                Boolean(busy),
+              )}
             {volumeAllowed &&
               button(
                 "Alarms in Clock",
@@ -432,7 +484,7 @@ export function AssistantPreview({
                 },
                 Boolean(busy),
               )}
-            {volumeAllowed &&
+            {(volumeAllowed || remindersAllowed) &&
               button(
                 "Reminders and settings",
                 () => {
@@ -448,7 +500,9 @@ export function AssistantPreview({
                   : "Send a command to review its plan. Device actions are unavailable in this build."
                 : volumeAllowed
                   ? "Review a command, then request confirmation for media volume or Contexify app-window brightness. Other actions remain previews."
-                  : "Type or dictate a command, then review the steps. Device actions are unavailable here."}
+                  : Platform.OS === "ios" && remindersAllowed
+                    ? "Typed commands are previews here. Use Reminders and settings or iPhone alarms and timers to review private schedules."
+                    : "Type or dictate a command, then review the steps. Device actions are unavailable here."}
             </Text>
             <Text style={{ color: theme.textMain, fontWeight: "600" }}>
               Your command or transcript
@@ -698,8 +752,8 @@ export function AssistantPreview({
                 style={{ minHeight: 44, justifyContent: "center" }}
               >
                 <Text style={{ color: theme.textMain }}>
-                  {state.consent ? "☑" : "☐"} Allow the microphone for on-device
-                  English speech in this session.
+                  {state.consent ? "☑" : "☐"} Allow the microphone for
+                  on-device English speech in this session.
                 </Text>
               </TouchableOpacity>
             )}

@@ -21,13 +21,25 @@ function config(env = {}) {
   return JSON.parse(JSON.stringify(module.exports()));
 }
 
-test("normal app identity, backend profiles and plugins are preserved", () => {
-  assert.deepEqual(config(), base);
+function withoutPlatformPlugin(value) {
+  return {
+    ...value,
+    plugins: value.plugins.filter(
+      (item) =>
+        !Array.isArray(item) || item[0] !== "./plugins/with-assistant-platform",
+    ),
+  };
+}
+
+test("normal app identity, backend profiles and existing plugins are preserved", () => {
+  assert.deepEqual(withoutPlatformPlugin(config()), base);
   assert.deepEqual(
-    config({
-      APP_VARIANT: "production",
-      EXPO_PUBLIC_ASSISTANT_NATIVE_TEST: "false",
-    }),
+    withoutPlatformPlugin(
+      config({
+        APP_VARIANT: "production",
+        EXPO_PUBLIC_ASSISTANT_NATIVE_TEST: "false",
+      }),
+    ),
     base,
   );
   assert.equal(profiles.preview.env.EXPO_PUBLIC_APP_ENV, "production");
@@ -35,6 +47,30 @@ test("normal app identity, backend profiles and plugins are preserved", () => {
     profiles.preview.env.EXPO_PUBLIC_API_URL,
     profiles.production.env.EXPO_PUBLIC_API_URL,
   );
+});
+
+test("Apple companion wiring is confined to isolated native test variants", () => {
+  const plugin = (value) =>
+    value.plugins.find(
+      (item) =>
+        Array.isArray(item) && item[0] === "./plugins/with-assistant-platform",
+    );
+  assert.deepEqual(plugin(config())[1], {
+    enabled: false,
+    voiceEnabled: false,
+  });
+  assert.deepEqual(
+    plugin(config({ EXPO_PUBLIC_ASSISTANT_VOICE_ENABLED: "true" }))[1],
+    { enabled: false, voiceEnabled: false },
+  );
+  const offline = config(profiles["assistant-verification"].env);
+  assert.equal(plugin(offline)[1].enabled, false);
+  const online = config({
+    ...profiles["assistant-volume-verification"].env,
+    ASSISTANT_VOLUME_TEST_API_ORIGIN: "https://volume.fixture.invalid",
+    EXPO_PUBLIC_API_URL: "https://volume.fixture.invalid",
+  });
+  assert.equal(plugin(online)[1].enabled, true);
 });
 
 test("verification config has its own identity, no OTA and no app network permission", () => {
@@ -80,7 +116,7 @@ test("verification config has its own identity, no OTA and no app network permis
     !isolated.plugins.includes("@react-native-google-signin/google-signin"),
   );
   assert.deepEqual(
-    config(),
+    withoutPlatformPlugin(config()),
     base,
     "Evaluating the test variant must not mutate normal app settings.",
   );

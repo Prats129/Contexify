@@ -267,7 +267,7 @@ export function describeReminderResult(value: ReminderResult): string {
   switch (value.outcome) {
     case "schedule_requested":
       return (
-        "Reminder scheduled on this phone. Android may delay the alert." +
+        "Reminder scheduled on this phone. The operating system may delay the alert." +
         (value.receipt_recorded
           ? ""
           : " Server receipt unavailable; check saved reminders before making another request.") +

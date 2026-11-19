@@ -15,6 +15,24 @@ export interface PercentExecutionResult {
 export type VolumeExecutionResult = PercentExecutionResult;
 
 interface SecurityModule {
+  appleAlarmSupport?(): boolean;
+  appleTimerSupport?(): boolean;
+  requestAppleAlarmPermission?(): Promise<boolean>;
+  readAppleAlarms?(
+    origin: string,
+    userId: string,
+    installationId: string,
+    token: string,
+  ): Promise<unknown>;
+  executeAppleAlarm?(
+    origin: string,
+    userId: string,
+    installationId: string,
+    token: string,
+    kind: string,
+    delivery: string,
+    payload: string,
+  ): Promise<unknown>;
   alarmHandoffSupport?(): boolean;
   executeAlarmHandoff?(
     origin: string,

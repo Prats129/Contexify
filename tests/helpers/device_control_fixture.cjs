@@ -68,7 +68,7 @@ function fixture(t, overrides = {}) {
       },
       WHEN_UNLOCKED_THIS_DEVICE_ONLY: 6,
     },
-    "react-native": { Platform: { OS: "android" } },
+    "react-native": { Platform: { OS: overrides.platform || "android" } },
     "../../modules/assistant-device-security": { deviceSecurity: () => native },
   });
   global.fetch = async (url) => ({

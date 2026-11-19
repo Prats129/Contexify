@@ -1,0 +1,7 @@
+{
+  "name": "assistant-platform",
+  "version": "0.1.0",
+  "private": true,
+  "main": "index.ts",
+  "description": "Foreground Apple editor and Assistant entry handoffs"
+}
