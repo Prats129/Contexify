@@ -35,6 +35,7 @@ import {
   reviewedBrightnessPercent,
 } from "../services/assistant_brightness";
 import { ReminderManager } from "./ReminderManager";
+import { AlarmManager } from "./AlarmManager";
 import { ClarificationForm } from "./ClarificationForm";
 
 export function AssistantPreview({
@@ -54,6 +55,7 @@ export function AssistantPreview({
 }) {
   const insets = useSafeAreaInsets();
   const [remindersOpen, setRemindersOpen] = useState(false);
+  const [alarmsOpen, setAlarmsOpen] = useState(false);
   const sessionRef = useRef<ReturnType<typeof createCommandSession> | null>(
     null,
   );
@@ -341,6 +343,16 @@ export function AssistantPreview({
       </TouchableOpacity>
     );
   }
+  if (alarmsOpen && volumeControls && volumeUserId)
+    return (
+      <AlarmManager
+        key={volumeUserId}
+        userId={volumeUserId}
+        controls={volumeControls}
+        theme={theme}
+        onClose={() => setAlarmsOpen(false)}
+      />
+    );
   if (remindersOpen && volumeControls && volumeUserId)
     return (
       <ReminderManager
@@ -411,6 +423,15 @@ export function AssistantPreview({
             keyboardShouldPersistTaps="handled"
             contentContainerStyle={{ gap: 12, paddingBottom: 8 }}
           >
+            {volumeAllowed &&
+              button(
+                "Alarms in Clock",
+                () => {
+                  clearCommand();
+                  setAlarmsOpen(true);
+                },
+                Boolean(busy),
+              )}
             {volumeAllowed &&
               button(
                 "Reminders and settings",

@@ -19,6 +19,7 @@ from pydantic.json_schema import models_json_schema  # noqa: E402
 
 from app.schemas import (  # noqa: E402
     assistant,
+    assistant_alarm,
     assistant_application,
     assistant_brightness,
     assistant_operations,
@@ -34,6 +35,12 @@ from app.schemas import (  # noqa: E402
 )
 
 MODELS = (
+    assistant_alarm.AlarmOperationRequest,
+    assistant_alarm.AlarmSessionResponse,
+    assistant_alarm.AlarmTaskView,
+    assistant_alarm.AlarmClaim,
+    assistant_alarm.AlarmReceiptRequest,
+    assistant_alarm.AlarmResultRequest,
     assistant_reminder.ReminderOperationRequest,
     assistant_reminder.ReminderSessionResponse,
     assistant_reminder.ReminderTaskView,

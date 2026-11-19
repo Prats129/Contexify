@@ -888,3 +888,66 @@ export type SavedReminder = {
 export type ReminderIdentityRequest = {
   reminder_id: string;
 };
+
+export type AlarmAction = {
+  capability_id?: "alarm.handoff";
+  schema_version?: 1;
+  request_kind: "set_alarm" | "show_alarms";
+  package_id:
+    | "com.google.android.deskclock"
+    | "com.android.deskclock"
+    | "com.sec.android.app.clockpackage";
+  commitment: string;
+};
+
+export type AlarmClaim = {
+  claim_id: string;
+  action_revision: number;
+  execution?: "android_alarm_handoff";
+  expires_at: number;
+};
+
+export type AlarmOperationRequest = {
+  protocol_version: 2;
+  plan_id: string;
+  plan_revision: number;
+  step_id: number;
+  action: AlarmAction;
+};
+
+export type AlarmReceiptRequest = {
+  outcome: "handoff_requested" | "failed" | "outcome_unknown";
+  expected_revision: number;
+  challenge_id: string;
+  signature: string;
+  claim_id: string;
+};
+
+export type AlarmResultRequest = {
+  outcome: "handoff_requested" | "failed" | "outcome_unknown";
+  expected_revision: number;
+  claim_id: string;
+};
+
+export type AlarmSessionResponse = {
+  access_token: string;
+  expires_at: number;
+  scope?: "assistant:alarm";
+};
+
+export type AlarmTaskView = {
+  task_id: string;
+  mode?: "alarm";
+  action: AlarmAction;
+  revision: number;
+  state:
+    | "awaiting_confirmation"
+    | "authorized"
+    | "executing"
+    | "handoff_requested"
+    | "failed"
+    | "outcome_unknown"
+    | "cancelled"
+    | "expired";
+  result?: ApplicationEvidence | null;
+};

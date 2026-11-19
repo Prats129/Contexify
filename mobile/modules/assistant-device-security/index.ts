@@ -15,6 +15,15 @@ export interface PercentExecutionResult {
 export type VolumeExecutionResult = PercentExecutionResult;
 
 interface SecurityModule {
+  alarmHandoffSupport?(): boolean;
+  executeAlarmHandoff?(
+    origin: string,
+    userId: string,
+    installationId: string,
+    managementToken: string,
+    payload: string,
+  ): Promise<unknown>;
+  cancelAlarmHandoffs?(): Promise<void>;
   reminderSupport?(): boolean;
   readReminders?(
     origin: string,

@@ -61,7 +61,16 @@ test("verification config has its own identity, no OTA and no app network permis
   assert.ok(
     isolated.android.blockedPermissions.includes("android.permission.INTERNET"),
   );
-  assert.ok(isolated.android.blockedPermissions.includes("android.permission.MODIFY_AUDIO_SETTINGS"));
+  assert.ok(
+    isolated.android.blockedPermissions.includes(
+      "android.permission.MODIFY_AUDIO_SETTINGS",
+    ),
+  );
+  assert.ok(
+    isolated.android.blockedPermissions.includes(
+      "com.android.alarm.permission.SET_ALARM",
+    ),
+  );
   assert.ok(
     isolated.android.blockedPermissions.includes(
       "android.permission.ACCESS_NETWORK_STATE",
@@ -78,48 +87,116 @@ test("verification config has its own identity, no OTA and no app network permis
 });
 
 test("shared execution opt-in is a native config change and cannot enable the offline app", () => {
-  const enabled = config({ ...profiles["assistant-volume-verification"].env,
-    ASSISTANT_VOLUME_TEST_API_ORIGIN: "https://volume.fixture.invalid", EXPO_PUBLIC_API_URL: "https://volume.fixture.invalid" });
+  const enabled = config({
+    ...profiles["assistant-volume-verification"].env,
+    ASSISTANT_VOLUME_TEST_API_ORIGIN: "https://volume.fixture.invalid",
+    EXPO_PUBLIC_API_URL: "https://volume.fixture.invalid",
+  });
   assert.ok(enabled.plugins.includes("./plugins/with-assistant-execution"));
   assert.equal(enabled.android.package, "ai.contexify.app.assistantvolumetest");
   assert.notEqual(enabled.android.package, base.android.package);
   assert.equal(enabled.updates.enabled, false);
-  assert.throws(() => config({ EXPO_PUBLIC_ASSISTANT_EXECUTION_ENABLED: "true" }), /restricted to the separate test variant/);
-  assert.throws(() => config({ ...profiles["assistant-verification"].env, EXPO_PUBLIC_ASSISTANT_EXECUTION_ENABLED: "true" }), /cannot enable device actions/);
+  assert.throws(
+    () => config({ EXPO_PUBLIC_ASSISTANT_EXECUTION_ENABLED: "true" }),
+    /restricted to the separate test variant/,
+  );
+  assert.throws(
+    () =>
+      config({
+        ...profiles["assistant-verification"].env,
+        EXPO_PUBLIC_ASSISTANT_EXECUTION_ENABLED: "true",
+      }),
+    /cannot enable device actions/,
+  );
 });
 
 test("online volume variant fails before a build if the test backend is missing or production", () => {
   const profile = profiles["assistant-volume-verification"];
   assert.equal(profile.extends, undefined);
-  for (const origin of [undefined, "http://volume.fixture.invalid", "https://volume.fixture.invalid/path", profiles.production.env.EXPO_PUBLIC_API_URL]) {
-    assert.throws(() => config({ ...profile.env, ASSISTANT_VOLUME_TEST_API_ORIGIN: origin, EXPO_PUBLIC_API_URL: origin }), /separate HTTPS test API origin/);
+  for (const origin of [
+    undefined,
+    "http://volume.fixture.invalid",
+    "https://volume.fixture.invalid/path",
+    profiles.production.env.EXPO_PUBLIC_API_URL,
+  ]) {
+    assert.throws(
+      () =>
+        config({
+          ...profile.env,
+          ASSISTANT_VOLUME_TEST_API_ORIGIN: origin,
+          EXPO_PUBLIC_API_URL: origin,
+        }),
+      /separate HTTPS test API origin/,
+    );
   }
-  assert.throws(() => config({ ...profile.env, ASSISTANT_VOLUME_TEST_API_ORIGIN: "https://volume.fixture.invalid",
-    EXPO_PUBLIC_API_URL: profiles.production.env.EXPO_PUBLIC_API_URL }), /matching public API URL/);
+  assert.throws(
+    () =>
+      config({
+        ...profile.env,
+        ASSISTANT_VOLUME_TEST_API_ORIGIN: "https://volume.fixture.invalid",
+        EXPO_PUBLIC_API_URL: profiles.production.env.EXPO_PUBLIC_API_URL,
+      }),
+    /matching public API URL/,
+  );
 });
 
 test("native manifest opt-in is explicit, preserves other metadata and is idempotent", () => {
   let transform;
   const module = { exports: {} };
-  vm.runInNewContext(fs.readFileSync("mobile/plugins/with-assistant-execution.js", "utf8"), {
-    module,
-    require(name) {
-      assert.equal(name, "expo/config-plugins");
-      return { withAndroidManifest(config, callback) { transform = callback; return config; } };
+  vm.runInNewContext(
+    fs.readFileSync("mobile/plugins/with-assistant-execution.js", "utf8"),
+    {
+      module,
+      require(name) {
+        assert.equal(name, "expo/config-plugins");
+        return {
+          withAndroidManifest(config, callback) {
+            transform = callback;
+            return config;
+          },
+        };
+      },
     },
-  });
+  );
   module.exports({});
-  const manifest = { $: {}, application: [{ $: {}, "meta-data": [
-    { $: { "android:name": "other-metadata", "android:value": "preserved" } },
-    { $: { "android:name": "ai.contexify.assistant.EXECUTION_ENABLED", "android:value": "false" } },
-  ] }] };
+  const manifest = {
+    $: {},
+    application: [
+      {
+        $: {},
+        "meta-data": [
+          {
+            $: {
+              "android:name": "other-metadata",
+              "android:value": "preserved",
+            },
+          },
+          {
+            $: {
+              "android:name": "ai.contexify.assistant.EXECUTION_ENABLED",
+              "android:value": "false",
+            },
+          },
+        ],
+      },
+    ],
+  };
   const mod = { modResults: { manifest } };
   transform(mod);
   transform(mod);
   assert.equal(manifest.application[0]["meta-data"].length, 2);
-  assert.equal(manifest.application[0]["meta-data"][0].$["android:value"], "preserved");
-  assert.equal(manifest.application[0]["meta-data"][1].$["android:value"], "true");
-  assert.equal(manifest.application[0]["meta-data"][1].$["tools:replace"], "android:value");
+  assert.equal(
+    manifest.application[0]["meta-data"][0].$["android:value"],
+    "preserved",
+  );
+  assert.equal(
+    manifest.application[0]["meta-data"][1].$["android:value"],
+    "true",
+  );
+  assert.equal(
+    manifest.application[0]["meta-data"][1].$["tools:replace"],
+    "android:value",
+  );
   assert.equal(manifest.$["xmlns:tools"], "http://schemas.android.com/tools");
 });
 

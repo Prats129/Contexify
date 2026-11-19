@@ -23,6 +23,7 @@ from app.core.config import settings
 from app.core.rate_limits import Budget, consume_budgets
 from app.core.security import Principal, digest
 from app.db.database import get_db_connection
+from app.schemas.assistant_alarm import AlarmOperationRequest
 from app.schemas.assistant_application import ApplicationOperationRequest
 from app.schemas.assistant_operations import OperationIdentity, PercentOperationRequest
 from app.schemas.assistant_reminder import ReminderOperationRequest
@@ -61,7 +62,7 @@ class PercentControl:
         view_model: type[BaseModel],
         policy_version: Callable[[], int],
     ):
-        if mode not in ("volume", "brightness", "application", "reminder"):
+        if mode not in ("volume", "brightness", "application", "reminder", "alarm"):
             raise ValueError("Unsupported compiled control.")
         self.mode = mode
         self.scope = "assistant:" + mode
@@ -70,12 +71,14 @@ class PercentControl:
             "brightness": "brightness.set_app",
             "application": "application.open",
             "reminder": "reminder",
+            "alarm": "alarm.handoff",
         }[mode]
         self.execution = {
             "volume": "android_media_volume",
             "brightness": "android_app_brightness",
             "application": "android_application_handoff",
             "reminder": "android_owned_reminder",
+            "alarm": "android_alarm_handoff",
         }[mode]
         self.action_model, self.view_model = (action_model, view_model)
         self.policy_version = policy_version
@@ -98,6 +101,8 @@ class PercentControl:
                 "settings_revision",
             )
             if mode == "reminder"
+            else ("request_kind", "package_id", "commitment")
+            if mode == "alarm"
             else ("application_id", "package_id")
             if mode == "application"
             else ("percent",)
@@ -310,6 +315,7 @@ class PercentControl:
         authority,
         payload: PercentOperationRequest
         | ApplicationOperationRequest
+        | AlarmOperationRequest
         | ReminderOperationRequest,
     ):
         if payload.action.capability_id not in self.allowed_capabilities:

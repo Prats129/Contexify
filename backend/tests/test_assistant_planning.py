@@ -923,7 +923,7 @@ class PlanningMigrationTests(unittest.TestCase):
                 conn.execute(
                     "SELECT MAX(version) FROM assistant_schema_versions"
                 ).fetchone()[0],
-                7,
+                8,
             )
             self.assertEqual(
                 tuple(

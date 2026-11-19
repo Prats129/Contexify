@@ -1,6 +1,7 @@
 """Inspect the local standalone test APK before manual installation; no device access."""
 
 import argparse
+import base64
 import hashlib
 import json
 import re
@@ -18,7 +19,7 @@ def inspect(host: str, check_live_key: bool = False):
         raise RuntimeError(
             "Run APK inspection without Python optimization; all assertions must be enabled."
         )
-    apk = TOOLS / "Contexify-Assistant-M5-Reminders-Test-1.4.3-5.apk"
+    apk = TOOLS / "Contexify-Assistant-M5-Alarms-Test-1.4.3-6.apk"
     sdk = TOOLS / "sdk/build-tools/37.0.0"
     java = next((TOOLS / "jdk").glob("*/bin/java.exe"))
 
@@ -34,8 +35,8 @@ def inspect(host: str, check_live_key: bool = False):
     assert dump("packagename").strip() == "ai.contexify.app.assistantvolumetest"
     badging = dump("badging")
     assert (
-        "versionName='1.4.3-assistant-test5'" in badging
-        and "versionCode='5'" in badging
+        "versionName='1.4.3-assistant-test6'" in badging
+        and "versionCode='6'" in badging
         and "application-label:'Contexify Volume Test'" in badging
     )
     permissions = set(
@@ -59,8 +60,10 @@ def inspect(host: str, check_live_key: bool = False):
         "BIND_ACCESSIBILITY_SERVICE",
         "SCHEDULE_EXACT_ALARM",
         "USE_EXACT_ALARM",
+        "USE_FULL_SCREEN_INTENT",
     ):
         assert "android.permission." + name not in permissions
+    assert "com.android.alarm.permission.SET_ALARM" in permissions
     manifest = dump("xmltree", "--file", "AndroidManifest.xml")
     receivers = re.findall(r"E: receiver \([^\n]+\)\n((?:\s+A:[^\n]*\n)+)", manifest)
     for name in ("ReminderAlarmReceiver", "ReminderRescheduleReceiver"):
@@ -119,6 +122,20 @@ def inspect(host: str, check_live_key: bool = False):
         from app.assistant.public_evaluation import load_key
 
         live_key = load_key().encode()
+    storage_secrets = []
+    storage_key_file = TOOLS / "private-storage" / f"{state.name}.dpapi"
+    if storage_key_file.is_file():
+        sys.path.insert(0, str(ROOT / "backend"))
+        from app.assistant.private_data import PrivateDataKeys
+        from app.assistant.public_evaluation import _protect
+
+        protected = storage_key_file.read_bytes()
+        encoded = _protect(protected, decrypt=True)
+        storage_keys = PrivateDataKeys.parse(encoded.decode())
+        storage_secrets = [protected, encoded, *storage_keys.keys.values()]
+        storage_secrets.extend(
+            base64.b64encode(key) for key in storage_keys.keys.values()
+        )
     with ZipFile(apk) as archive:
         names = archive.namelist()
         assert "assets/index.android.bundle" in names
@@ -144,6 +161,12 @@ def inspect(host: str, check_live_key: bool = False):
             b"Review and create reminder",
         ):
             assert marker in bundle, "Missing private reminder client integration."
+        for marker in (
+            b"Alarms in Clock",
+            b"executeAlarmHandoff",
+            b"Review alarm request",
+        ):
+            assert marker in bundle, "Missing reviewed Clock handoff integration."
         assert not any(
             "test-account.json" in name
             or "server.key" in name
@@ -154,6 +177,9 @@ def inspect(host: str, check_live_key: bool = False):
             if not name.endswith("/"):
                 content = archive.read(name)
                 assert private_key not in content, "Test private key entered the APK."
+                assert all(secret not in content for secret in storage_secrets), (
+                    "The test private-storage key entered the APK."
+                )
                 assert live_key is None or live_key not in content, (
                     "The backend Gemini key entered the APK."
                 )
@@ -196,7 +222,10 @@ def inspect(host: str, check_live_key: bool = False):
             )
         for marker in (
             b"operationCapabilitiesV2",
-            b"ApplicationExecutor",
+            b"ReviewedHandoffExecutor",
+            b"AlarmHandoff",
+            b"AlarmRequest",
+            b"executeAlarmHandoff",
             b"ApplicationHandoff",
             b"ApplicationTarget",
             b"ReviewedApplications",
@@ -252,7 +281,7 @@ def inspect(host: str, check_live_key: bool = False):
         return certificate.pop()
 
     certificate = verify_signature(apk)
-    previous_apk = TOOLS / "Contexify-Assistant-M5-Test-1.4.3-4.apk"
+    previous_apk = TOOLS / "Contexify-Assistant-M5-Reminders-Test-1.4.3-5.apk"
     if previous_apk.is_file():
         assert verify_signature(previous_apk) == certificate, (
             "Test update signing identity changed."
@@ -261,8 +290,8 @@ def inspect(host: str, check_live_key: bool = False):
         sha = hashlib.file_digest(handle, "sha256").hexdigest()
     report = {
         "package": "ai.contexify.app.assistantvolumetest",
-        "version": "1.4.3-assistant-test5",
-        "version_code": 5,
+        "version": "1.4.3-assistant-test6",
+        "version_code": 6,
         "sha256": sha,
         "apk_bytes": apk.stat().st_size,
         "signature_verified": True,

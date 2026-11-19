@@ -239,6 +239,7 @@ def create_app(
 
     from app.api.v1.endpoints import (
         assistant,
+        assistant_alarm,
         assistant_application,
         assistant_brightness,
         assistant_planning,
@@ -334,6 +335,7 @@ def create_app(
     app.include_router(health.router, prefix="/api/v1/health")
     app.include_router(assistant_security.router, prefix="/api/v1/assistant/security")
     app.include_router(assistant.router, prefix="/api/v1/assistant")
+    app.include_router(assistant_alarm.router, prefix="/api/v1/assistant/alarm")
     app.include_router(assistant_reminder.router, prefix="/api/v1/assistant/reminder")
     app.include_router(
         assistant_application.router, prefix="/api/v1/assistant/application"

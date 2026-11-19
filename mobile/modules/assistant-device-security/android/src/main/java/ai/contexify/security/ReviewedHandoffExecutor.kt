@@ -18,22 +18,32 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import org.json.JSONObject
 
-/** Online, terminal launcher handoff. The encrypted coordinator owns crash recovery.
- * After dispatch, backgrounding can only finish its bounded receipt; never another effect.
+/** Compiled profiles only; callers cannot choose a URL, scope or execution name. */
+internal enum class HandoffControl(val mode: String, val capability: String, val execution: String,
+  val title: String, val button: String) {
+  APPLICATION("application", "application.open", "android_application_handoff", "Open reviewed app", "Open app"),
+  ALARM("alarm", "alarm.handoff", "android_alarm_handoff", "Send request to Clock", "Send to Clock")
+}
+
+internal data class HandoffOutcome(val outcome: String, val recorded: Boolean)
+
+/** Online terminal handoffs. After dispatch, backgrounding can finish only the bounded receipt.
+ * App plans retain their encrypted coordinator; external Clock state is verified in Clock.
  */
-internal class ApplicationExecutor(
+internal class ReviewedHandoffExecutor(
   private val context: () -> Context,
   private val activity: () -> Activity?,
   private val binding: (String, String, String) -> Unit,
   private val publicKey: (String) -> String,
   private val sign: (String, String) -> String,
   private val running: AtomicBoolean,
+  private val control: HandoffControl = HandoffControl.APPLICATION,
 ) {
   private val generation = AtomicLong(0)
   private val handedOff = AtomicBoolean(false)
   private val main = Handler(Looper.getMainLooper())
   private var dialog: AlertDialog? = null
-  private val protocol = NativeControlProtocol("application", "application.open", generation::get, binding, publicKey)
+  private val protocol = NativeControlProtocol(control.mode, control.capability, generation::get, binding, publicKey)
   fun cancel() {
     // A pending action is cancelled. An already dispatched handoff cannot be undone;
     // allow only its receipt to finish while the coordinator stops all continuation.
@@ -63,13 +73,14 @@ internal class ApplicationExecutor(
     return requireNotNull(answer).getOrThrow()
   }
   fun preflight(origin: String, user: String, installation: String, application: String): ApplicationTarget {
+    require(control == HandoffControl.APPLICATION)
     active(generation.get()); NativeControlProtocol.validateOrigin(origin); binding(origin, user, installation)
     return ApplicationHandoff.resolve(context(), application)
   }
   private fun session(origin: String, management: String, ticket: Long, deadline: Long, sessions: MutableMap<String, String>): String =
-    sessions.getOrPut("application") {
+    sessions.getOrPut(control.mode) {
       val response = protocol.post(origin, management, "/sessions", JSONObject(), ticket, deadline)
-      require(response.getString("scope") == "assistant:application")
+      require(response.getString("scope") == "assistant:${control.mode}")
       response.getString("access_token")
     }
   private fun identity(value: OperationIdentity) = JSONObject().put("protocol_version", 2)
@@ -88,7 +99,7 @@ internal class ApplicationExecutor(
     require(UUID.fromString(owner.getString("device_id")).version() == 4)
     onMain { active(ticket); binding(origin, user, installation) }
   }
-  private fun confirm(target: ApplicationTarget, expiry: Double, ticket: Long): Boolean {
+  private fun confirm(message: String, expiry: Double, ticket: Long): Boolean {
     val done = CountDownLatch(1)
     val approved = AtomicBoolean(false)
     val valid = AtomicBoolean(true)
@@ -96,9 +107,9 @@ internal class ApplicationExecutor(
     onMain {
       active(ticket)
       check(dialog == null)
-      val shown = AlertDialog.Builder(requireNotNull(activity())).setTitle("Open reviewed app")
-        .setMessage("Open ${ReviewedApplications.label(target.packageId)} (${target.packageId})?\n\nThis leaves Contexify. No other actions will run in the background. Opening an app does not start music or create an alarm.")
-        .setPositiveButton("Open app") { _, _ ->
+      val shown = AlertDialog.Builder(requireNotNull(activity())).setTitle(control.title)
+        .setMessage(message)
+        .setPositiveButton(control.button) { _, _ ->
           if (valid.get() && System.currentTimeMillis() / 1000.0 < expiry)
             approved.set(runCatching { active(ticket); true }.getOrDefault(false))
         }.setNegativeButton("Cancel", null).create()
@@ -116,6 +127,27 @@ internal class ApplicationExecutor(
   }
   fun execute(origin: String, user: String, installation: String, management: String, target: ApplicationTarget,
     ticket: Long, operation: OperationIdentity, validUntil: Long, sessions: MutableMap<String, String>): StepEvidence {
+    require(control == HandoffControl.APPLICATION)
+    val message = "Open ${ReviewedApplications.label(target.packageId)} (${target.packageId})?\n\nThis leaves Contexify. No other actions will run in the background. Opening an app does not start music or create an alarm."
+    val result = executeHandoff(origin, user, installation, management, action(target), message,
+      { ApplicationHandoff.launch(context(), requireNotNull(activity()), target) }, ticket, operation, validUntil, sessions)
+    return StepEvidence(result.outcome, null, null, result.recorded, target.applicationId, target.packageId)
+  }
+  fun preflightAlarm(origin: String, user: String, installation: String, request: AlarmRequest): AlarmTarget {
+    require(control == HandoffControl.ALARM)
+    active(generation.get()); NativeControlProtocol.validateOrigin(origin); binding(origin, user, installation)
+    return AlarmHandoff.resolve(context(), request)
+  }
+  fun executeAlarm(origin: String, user: String, installation: String, management: String, target: AlarmTarget,
+    ticket: Long, operation: OperationIdentity, validUntil: Long, sessions: MutableMap<String, String>): Map<String, Any?> {
+    require(control == HandoffControl.ALARM)
+    val result = executeHandoff(origin, user, installation, management, target.action(), target.disclosure(),
+      { AlarmHandoff.launch(context(), requireNotNull(activity()), target) }, ticket, operation, validUntil, sessions)
+    return mapOf("protocol_version" to 1, "outcome" to result.outcome, "request_kind" to target.request.kind,
+      "package_id" to target.app.packageId, "receipt_recorded" to result.recorded)
+  }
+  private fun executeHandoff(origin: String, user: String, installation: String, management: String, args: JSONObject, message: String, dispatch: () -> Unit,
+    ticket: Long, operation: OperationIdentity, validUntil: Long, sessions: MutableMap<String, String>): HandoffOutcome {
     var claimed = false
     var outcome = "failed"
     var recorded = false
@@ -124,19 +156,18 @@ internal class ApplicationExecutor(
       check(System.currentTimeMillis() < validUntil)
       val deadline = SystemClock.elapsedRealtime() + minOf(120000, validUntil - System.currentTimeMillis())
       val token = session(origin, management, ticket, deadline, sessions)
-      val args = action(target)
       val task = protocol.post(origin, token, "/operations", identity(operation).put("action", args), ticket, deadline)
       val taskId = task.getString("task_id")
-      require(UUID.fromString(taskId).toString() == taskId && task.getString("mode") == "application" &&
+      require(UUID.fromString(taskId).toString() == taskId && task.getString("mode") == control.mode &&
         task.getString("state") == "awaiting_confirmation" && task.getInt("revision") == 1)
       fun request(path: String, body: JSONObject) = protocol.post(origin, token, "/tasks/$taskId$path", body, ticket, deadline)
-      fun validate(value: JSONObject, purpose: String, revision: Int) = protocol.envelope(value, "assistant_application_$purpose",
+      fun validate(value: JSONObject, purpose: String, revision: Int) = protocol.envelope(value, "assistant_${control.mode}_$purpose",
         revision, origin, user, installation, token, taskId, args)
       fun proof(value: JSONObject, payload: String, revision: Int) = JSONObject().put("expected_revision", revision)
         .put("challenge_id", value.getString("challenge_id")).put("signature", sign(installation, payload))
       val challenge = request("/authorization-challenge", JSONObject().put("expected_revision", 1))
       val payload = validate(challenge, "authorize", 1)
-      if (!confirm(target, minOf(validUntil / 1000.0, challenge.getDouble("expires_at")), ticket)) {
+      if (!confirm(message, minOf(validUntil / 1000.0, challenge.getDouble("expires_at")), ticket)) {
         outcome = "cancelled"
         if (ticket == generation.get()) runCatching { request("/cancel", JSONObject()) }
       } else {
@@ -150,7 +181,7 @@ internal class ApplicationExecutor(
         require(JSONObject(claimPayload).getString("permit_hash") == hash)
         claimed = true // Lost claim responses are unknown and must never be retried.
         val claim = request("/claim", proof(claimChallenge, claimPayload, 2).put("permit", permit.getString("permit")))
-        require(claim.getInt("action_revision") == 3 && claim.getString("execution") == "android_application_handoff")
+        require(claim.getInt("action_revision") == 3 && claim.getString("execution") == control.execution)
         val claimId = claim.getString("claim_id")
         require(UUID.fromString(claimId).toString() == claimId)
         val expiry = claim.getDouble("expires_at")
@@ -159,7 +190,7 @@ internal class ApplicationExecutor(
         onMain {
           active(ticket); binding(origin, user, installation)
           check(System.currentTimeMillis() < validUntil && System.currentTimeMillis() / 1000.0 < expiry && SystemClock.elapsedRealtime() < monotonicExpiry)
-          ApplicationHandoff.launch(context(), requireNotNull(activity()), target)
+          dispatch()
           handedOff.set(true)
           outcome = "handoff_requested"
         }
@@ -179,11 +210,12 @@ internal class ApplicationExecutor(
     } catch (_: Exception) {
       outcome = if (handedOff.get()) "handoff_requested" else if (claimed) "outcome_unknown"
         else if (ticket != generation.get()) "cancelled" else "failed"
-    } finally { running.set(false); handedOff.set(false) }
-    return StepEvidence(outcome, null, null, recorded, target.applicationId, target.packageId)
+    } finally { handedOff.set(false); running.set(false) }
+    return HandoffOutcome(outcome, recorded)
   }
   fun operationStatus(origin: String, user: String, installation: String, management: String, operation: OperationIdentity,
     application: String, ticket: Long, sessions: MutableMap<String, String>): StepEvidence? {
+    require(control == HandoffControl.APPLICATION)
     try {
       onMain { active(ticket); binding(origin, user, installation) }
       val deadline = SystemClock.elapsedRealtime() + 15000

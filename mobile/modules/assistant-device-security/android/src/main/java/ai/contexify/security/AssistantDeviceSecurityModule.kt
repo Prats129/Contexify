@@ -46,7 +46,7 @@ class AssistantDeviceSecurityModule : Module() {
     }, ::publicKey, ::sign, brightnessEffect, controlRunning)
   }
   private val application by lazy {
-    ApplicationExecutor(::context, { appContext.currentActivity }, { origin, user, installation ->
+    ReviewedHandoffExecutor(::context, { appContext.currentActivity }, { origin, user, installation ->
       require(marker(installation).isFile && marker(installation).readText(Charsets.UTF_8) == binding(origin, user))
     }, ::publicKey, ::sign, controlRunning)
   }
@@ -54,6 +54,11 @@ class AssistantDeviceSecurityModule : Module() {
     ReminderController(::context, { appContext.currentActivity }, { origin, user, installation ->
       require(marker(installation).isFile && marker(installation).readText(Charsets.UTF_8) == binding(origin, user))
     }, ::binding, ::publicKey, ::sign, controlRunning)
+  }
+  private val alarms by lazy {
+    ReviewedHandoffExecutor(::context, { appContext.currentActivity }, { origin, user, installation ->
+      require(marker(installation).isFile && marker(installation).readText(Charsets.UTF_8) == binding(origin, user))
+    }, ::publicKey, ::sign, controlRunning, HandoffControl.ALARM)
   }
   private fun reminderWork(promise: Promise, action: (Long) -> String) {
     check(!planRunning.get())
@@ -118,6 +123,7 @@ class AssistantDeviceSecurityModule : Module() {
     volume.cancel()
     brightness.cancel()
     application.cancel()
+    alarms.cancel()
     reminders.cancel()
     brightnessEffect.restore()
     approvals.clear()
@@ -153,6 +159,32 @@ class AssistantDeviceSecurityModule : Module() {
     // Compiled support only: no package query, permission or authority is granted.
     Function("operationCapabilitiesV2") { listOf("media_volume.set", "brightness.set_app", "application.open") }
     Function("reminderSupport") { Build.VERSION.SDK_INT >= 26 }
+    Function("alarmHandoffSupport") { Build.VERSION.SDK_INT >= 26 }
+    AsyncFunction("executeAlarmHandoff") { origin: String, user: String, installation: String, management: String, encoded: String, promise: Promise ->
+      unlocked(); ExecutionGate.requireEnabled(context()); check(!planRunning.get() && Build.VERSION.SDK_INT >= 26)
+      val ticket = alarms.begin()
+      kotlin.concurrent.thread(name = "AssistantAlarmHandoff", isDaemon = true) {
+        var executorOwnsRelease = false
+        try {
+          val request = AlarmHandoff.parse(encoded)
+          val target = foreground { alarms.preflightAlarm(origin, user, installation, request) }
+          val sessions = mutableMapOf<String, String>()
+          alarms.validateOperationBinding(origin, user, installation, management, sessions)
+          executorOwnsRelease = true
+          promise.resolve(alarms.executeAlarm(origin, user, installation, management, target, ticket,
+            OperationIdentity(UUID.randomUUID().toString(), 1, 0), System.currentTimeMillis() + 120000, sessions))
+        } catch (error: AlarmInputException) {
+          promise.reject("ERR_ALARM_" + error.reason.uppercase(), "Review the alarm time, label, days or selected Clock.", null)
+        } catch (_: ApplicationUnavailable) {
+          promise.reject("ERR_ALARM_HANDLER", "Select an installed reviewed Clock that handles this request, or open Clock manually.", null)
+        } catch (error: NativeControlRejected) {
+          promise.reject(if (error.status == 401) "ERR_ALARM_AUTH" else "ERR_ALARM_SERVER", "Alarm authority is unavailable. Check Clock before making a new request.", null)
+        } catch (_: Exception) {
+          promise.reject("ERR_ALARM", "Alarm request interrupted or unavailable. Check Clock before making a new request.", null)
+        } finally { if (!executorOwnsRelease) controlRunning.set(false) }
+      }
+    }.runOnQueue(Queues.MAIN)
+    AsyncFunction("cancelAlarmHandoffs") { alarms.cancel() }.runOnQueue(Queues.MAIN)
     AsyncFunction("readReminders") { origin: String, user: String, installation: String, management: String, promise: Promise ->
       reminderWork(promise) { reminders.read(origin, user, installation, management, it) }
     }.runOnQueue(Queues.MAIN)

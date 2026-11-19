@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.v1.endpoints import (
     assistant,
+    assistant_alarm,
     assistant_application,
     assistant_brightness,
     assistant_planning,
@@ -129,6 +130,11 @@ app.include_router(
     assistant_reminder.router,
     prefix=f"{settings.API_V1_STR}/assistant/reminder",
     tags=["Assistant reminders"],
+)
+app.include_router(
+    assistant_alarm.router,
+    prefix=f"{settings.API_V1_STR}/assistant/alarm",
+    tags=["Assistant Alarm"],
 )
 app.include_router(
     assistant_application.router,

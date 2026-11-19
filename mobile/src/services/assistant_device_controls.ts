@@ -7,9 +7,16 @@ import type {
   ReminderSnapshot,
   ReminderResult,
   ReminderCopyPage,
+  AlarmDraft,
+  AlarmHandoffResult,
 } from "@contexify/assistant-core";
 
 export interface DeviceControls {
+  alarmHandoffSupported?(): boolean;
+  requestAlarmHandoff?(
+    userId: string,
+    draft: AlarmDraft,
+  ): Promise<AlarmHandoffResult>;
   reminderSupported?(): boolean;
   readReminders?(userId: string): Promise<ReminderSnapshot>;
   createReminder?(

@@ -18,7 +18,7 @@ internal class NativeControlProtocol(
   private val binding: (String, String, String) -> Unit,
   private val publicKey: (String) -> String,
 ) {
-  init { require(if (mode == "reminder") capability in setOf("reminder.create", "reminder.cancel", "reminder.storage", "reminder.delete_saved") else mapOf("volume" to "media_volume.set", "brightness" to "brightness.set_app", "application" to "application.open")[mode] == capability) }
+  init { require(if (mode == "reminder") capability in setOf("reminder.create", "reminder.cancel", "reminder.storage", "reminder.delete_saved") else mapOf("volume" to "media_volume.set", "brightness" to "brightness.set_app", "application" to "application.open", "alarm" to "alarm.handoff")[mode] == capability) }
   private fun hash(value: String) = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8))
     .joinToString("") { "%02x".format(it.toInt() and 255) }
   private fun uuid(value: String): String { require(UUID.fromString(value).toString() == value); return value }
@@ -78,7 +78,7 @@ internal class NativeControlProtocol(
     val extra = when (purpose) {
       "assistant_${mode}_authorize" -> emptySet()
       "assistant_${mode}_claim" -> setOf("permit_hash")
-      "assistant_${mode}_receipt" -> setOf("claim_id", "outcome") + if (mode in setOf("application", "reminder")) emptySet() else setOf("observed_index", "max_index")
+      "assistant_${mode}_receipt" -> setOf("claim_id", "outcome") + if (mode in setOf("application", "reminder", "alarm")) emptySet() else setOf("observed_index", "max_index")
       else -> throw IllegalArgumentException("Unsupported device-control purpose.")
     }
     require(fields.keys().asSequence().toSet() == base + extra)

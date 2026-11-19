@@ -80,6 +80,7 @@ module.exports = () => {
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE",
         "android.permission.MODIFY_AUDIO_SETTINGS",
+        "com.android.alarm.permission.SET_ALARM",
       ],
     },
     ios: {

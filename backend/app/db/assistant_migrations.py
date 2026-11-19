@@ -304,7 +304,7 @@ def _migrate_application_v6(conn) -> None:
     conn.execute("INSERT INTO assistant_schema_versions(version) VALUES(6)")
 
 
-def migrate_assistant_security(conn) -> None:
+def _migrate_reminder_v7(conn) -> None:
     _migrate_application_v6(conn)
     if conn.execute(
         "SELECT 1 FROM assistant_schema_versions WHERE version=7"
@@ -373,3 +373,50 @@ def migrate_assistant_security(conn) -> None:
         "CREATE INDEX idx_reminder_copies_expiry ON assistant_reminder_copies(expires_at)"
     )
     conn.execute("INSERT INTO assistant_schema_versions(version) VALUES(7)")
+
+
+def migrate_assistant_security(conn) -> None:
+    _migrate_reminder_v7(conn)
+    if conn.execute(
+        "SELECT 1 FROM assistant_schema_versions WHERE version=8"
+    ).fetchone():
+        return
+    conn.execute("""CREATE TABLE assistant_alarm_sessions (
+        token_hash TEXT PRIMARY KEY, parent_security_hash TEXT NOT NULL,
+        user_id TEXT NOT NULL, device_id TEXT NOT NULL, expires_at REAL NOT NULL,
+        FOREIGN KEY(parent_security_hash) REFERENCES assistant_security_sessions(token_hash) ON DELETE CASCADE,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY(device_id) REFERENCES assistant_devices(id) ON DELETE CASCADE
+    )""")
+    conn.execute("""CREATE TABLE assistant_alarm_tasks (
+        id TEXT PRIMARY KEY, session_hash TEXT NOT NULL, user_id TEXT NOT NULL,
+        device_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, request_kind TEXT NOT NULL, package_id TEXT NOT NULL, commitment TEXT NOT NULL,
+        policy_version INTEGER NOT NULL,
+        state TEXT NOT NULL, revision INTEGER NOT NULL, created_at REAL NOT NULL,
+        expires_at REAL NOT NULL, challenge_id TEXT, challenge_purpose TEXT,
+        challenge_payload TEXT, challenge_expires_at REAL, permit_hash TEXT,
+        permit_expires_at REAL, claim_id TEXT, claim_expires_at REAL, result_json TEXT,
+        UNIQUE(user_id,device_id,idempotency_key),
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY(device_id) REFERENCES assistant_devices(id) ON DELETE CASCADE
+    )""")
+    # Keep task tombstones after short-lived sessions expire: they prevent key reuse.
+    conn.execute(
+        "CREATE INDEX idx_alarm_sessions_parent ON assistant_alarm_sessions(parent_security_hash)"
+    )
+    conn.execute(
+        "CREATE INDEX idx_alarm_sessions_user ON assistant_alarm_sessions(user_id,expires_at)"
+    )
+    conn.execute(
+        "CREATE INDEX idx_alarm_sessions_expiry ON assistant_alarm_sessions(expires_at)"
+    )
+    conn.execute(
+        "CREATE INDEX idx_alarm_tasks_user ON assistant_alarm_tasks(user_id,created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX idx_alarm_tasks_created ON assistant_alarm_tasks(created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX idx_alarm_tasks_device ON assistant_alarm_tasks(device_id)"
+    )
+    conn.execute("INSERT INTO assistant_schema_versions(version) VALUES(8)")

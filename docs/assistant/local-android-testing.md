@@ -1,6 +1,8 @@
 # Local Android test delivery
 
-**Latest reminder delivery, 2026-11-18:** the code-5 [reminder test APK](m5-reminders.md#authorized-reminder-test-apk-delivery---2026-11-18) is built and inspected; the separate hotspot backend has the protected reminder routes. Install over Contexify Volume Test. Begin with device-only reminders; encrypted account-storage key setup and physical reminder checks remain pending. Older delivery entries below are historical.
+**Latest alarm delivery, 2026-11-19:** the code-6 [Clock handoff test APK](m5-alarm-handoffs.md#compatible-local-test-apk---2026-11-19) is built and inspected, including the final daylight-saving regression fix. Install over Contexify Volume Test without uninstalling. The user restored the hotspot/S25 connection; the isolated backend was restarted with its retained public-test/account-storage profile, and trusted HTTPS/alarm-scope checks passed. The user subsequently completed the agreed basic Samsung Clock batch (creation/ringing, Cancel/Home before approval, and view-only opening); advanced acceptance remains pending. No AI planning is needed for the private alarm form. No EAS credit, OTA, production deployment or phone access was used. See the linked delivery record for the exact artifact/hash and pending connection gate.
+
+**Reminder checkpoint, updated 2026-11-19:** the code-5 [reminder test APK](m5-reminders.md#authorized-reminder-test-apk-delivery---2026-11-18) was delivered. Basic device-only reminder and optional encrypted account-copy phone batches are user-reported complete; the protected test-storage key is configured. Advanced physical/release checks remain pending. Older delivery entries below are historical.
 
 **Latest M4 delivery, 2026-11-18:** the code-3 APK is built/inspected and the isolated backend updated. See [M4 delivery](#authorized-m4-test-apk-delivery---2026-11-18). Code-2 and earlier checkpoints below remain historical.
 

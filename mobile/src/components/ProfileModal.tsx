@@ -30,6 +30,7 @@ import {
   checkPasswordStrength,
 } from "./PasswordStrengthMeter";
 import { ReminderManager } from "./ReminderManager";
+import { AlarmManager } from "./AlarmManager";
 import type { User } from "../types";
 
 interface ProfileModalProps {
@@ -58,6 +59,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   theme,
 }) => {
   const [remindersOpen, setRemindersOpen] = useState(false);
+  const [alarmsOpen, setAlarmsOpen] = useState(false);
   useEffect(() => {
     if (!visible || !currentUser) setRemindersOpen(false);
   }, [visible, currentUser?.id]);
@@ -410,6 +412,16 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
     );
   };
 
+  if (alarmsOpen && visible)
+    return (
+      <AlarmManager
+        key={currentUser.id}
+        userId={currentUser.id}
+        controls={apiService.assistantSecurity}
+        theme={theme}
+        onClose={() => setAlarmsOpen(false)}
+      />
+    );
   if (remindersOpen && visible)
     return (
       <ReminderManager
@@ -520,6 +532,23 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
                 >
                   <Text style={{ color: theme.textMain, fontWeight: "600" }}>
                     Reminders and privacy settings
+                  </Text>
+                </TouchableOpacity>
+              )}
+            {Platform.OS === "android" &&
+              process.env.EXPO_PUBLIC_ASSISTANT_EXECUTION_ENABLED === "true" &&
+              process.env.EXPO_PUBLIC_ASSISTANT_NATIVE_TEST !== "true" && (
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  onPress={() => setAlarmsOpen(true)}
+                  style={{
+                    minHeight: 44,
+                    padding: 12,
+                    justifyContent: "center",
+                  }}
+                >
+                  <Text style={{ color: theme.textMain, fontWeight: "600" }}>
+                    Alarms in Clock
                   </Text>
                 </TouchableOpacity>
               )}

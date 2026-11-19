@@ -94,12 +94,11 @@ function assistantUI(platform, props, component = "AssistantPreview") {
     addEventListener: add,
     removeEventListener: document.removeEventListener,
   };
-  const filename =
-    component === "ReminderManager"
-      ? "mobile/src/components/ReminderManager.tsx"
-      : platform === "android"
-        ? "mobile/src/components/AssistantPreview.tsx"
-        : "frontend/src/components/Modals/AssistantPreview.tsx";
+  const filename = ["ReminderManager", "AlarmManager"].includes(component)
+    ? `mobile/src/components/${component}.tsx`
+    : platform === "android"
+      ? "mobile/src/components/AssistantPreview.tsx"
+      : "frontend/src/components/Modals/AssistantPreview.tsx";
   const source = fs
     .readFileSync(filename, "utf8")
     .replaceAll("import.meta.env.VITE_ASSISTANT_VOICE_ENABLED", '"false"');
@@ -120,6 +119,8 @@ function assistantUI(platform, props, component = "AssistantPreview") {
     document,
     window,
     require(name) {
+      if (name === "./AlarmManager")
+        return { AlarmManager: () => jsx("AlarmManager", {}) };
       if (name === "./ReminderManager")
         return { ReminderManager: () => jsx("ReminderManager", {}) };
       if (name === "./ClarificationForm") {

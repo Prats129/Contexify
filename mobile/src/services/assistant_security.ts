@@ -9,6 +9,9 @@ import type {
 import { volumeResult } from "./assistant_volume";
 import { brightnessResult } from "./assistant_brightness";
 import {
+  alarmDraft,
+  alarmHandoffResult,
+  type AlarmDraft,
   reminderDraft,
   reminderSnapshot,
   reminderResult,
@@ -341,7 +344,15 @@ export function createAssistantDeviceSecurity(
       );
     return bridge;
   }
-  async function reminderRequest<T>(
+  function alarmBridge() {
+    const bridge = controlBridge("volume");
+    if (!bridge.alarmHandoffSupport?.() || !bridge.executeAlarmHandoff)
+      throw new Error(
+        "Alarm handoffs require an updated compatible Android build.",
+      );
+    return bridge;
+  }
+  async function privateControlRequest<T>(
     userId: string,
     action: (
       bridge: ReturnType<typeof reminderBridge>,
@@ -349,8 +360,9 @@ export function createAssistantDeviceSecurity(
       token: string,
     ) => Promise<unknown>,
     decode: (value: unknown) => T,
+    bridgeFactory: () => ReturnType<typeof reminderBridge> = reminderBridge,
   ): Promise<T> {
-    const bridge = reminderBridge();
+    const bridge = bridgeFactory();
     if (controlBusy || busy)
       throw new Error("A device operation is already in progress.");
     controlBusy = true;
@@ -369,8 +381,7 @@ export function createAssistantDeviceSecurity(
           "Enable device controls for this signed-in account first.",
         );
       const management = await api.openSession(userId);
-      if (generation !== version)
-        throw new Error("Reminder request cancelled.");
+      if (generation !== version) throw new Error("Device request cancelled.");
       const value = await action(bridge, selected, management.access_token);
       if (
         generation !== version ||
@@ -383,14 +394,28 @@ export function createAssistantDeviceSecurity(
           ).Authorization
       )
         throw new Error(
-          "Your session changed. Reminder details were discarded.",
+          "Your session changed. Private details were discarded.",
         );
       return decode(value);
     } catch (error) {
       const code = (error as { code?: string } | null)?.code;
-      if (code === "ERR_REMINDER_AUTH" && authorization)
+      if (
+        (code === "ERR_REMINDER_AUTH" || code === "ERR_ALARM_AUTH") &&
+        authorization
+      )
         await onAuthenticationRejected?.(authorization);
       const explanations: Record<string, string> = {
+        ERR_ALARM_TIME: "Enter an alarm time as HH:mm using the 24-hour clock.",
+        ERR_ALARM_SOON: "Choose an alarm time at least one minute away.",
+        ERR_ALARM_DST:
+          "That time is skipped or repeated by daylight saving. Review it directly in Clock.",
+        ERR_ALARM_LABEL:
+          "Use at most 120 label characters without control characters.",
+        ERR_ALARM_DAYS: "Select each repeat day at most once.",
+        ERR_ALARM_HANDLER:
+          "Choose an installed Samsung, Google or Android Clock explicitly. If none supports this request, open Clock manually.",
+        ERR_ALARM_AUTH:
+          "Alarm authorization expired or was revoked. Sign in again. Check Clock before making a new request.",
         ERR_REMINDER_DST_GAP:
           "That clock time does not exist when daylight saving time changes. Choose another time.",
         ERR_REMINDER_DST_OVERLAP:
@@ -422,7 +447,7 @@ export function createAssistantDeviceSecurity(
     payload: unknown,
     expectedId?: string,
   ) {
-    return reminderRequest(
+    return privateControlRequest(
       userId,
       (bridge, selected, token) =>
         bridge.executeReminder!(
@@ -437,6 +462,30 @@ export function createAssistantDeviceSecurity(
     );
   }
   const api = {
+    alarmHandoffSupported(): boolean {
+      try {
+        alarmBridge();
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    async requestAlarmHandoff(userId: string, draft: AlarmDraft) {
+      const request = alarmDraft(draft);
+      return privateControlRequest(
+        userId,
+        (bridge, selected, token) =>
+          bridge.executeAlarmHandoff!(
+            selected.host,
+            userId,
+            selected.installationId,
+            token,
+            JSON.stringify(request),
+          ),
+        (value) => alarmHandoffResult(value, request.kind, request.clock),
+        alarmBridge,
+      );
+    },
     reminderSupported(): boolean {
       try {
         reminderBridge();
@@ -446,7 +495,7 @@ export function createAssistantDeviceSecurity(
       }
     },
     async readReminders(userId: string) {
-      return reminderRequest(
+      return privateControlRequest(
         userId,
         (bridge, selected, token) =>
           bridge.readReminders!(
@@ -484,7 +533,7 @@ export function createAssistantDeviceSecurity(
       return changeReminder(userId, "storage", { mode, revision });
     },
     async savedReminders(userId: string, after?: string) {
-      return reminderRequest(
+      return privateControlRequest(
         userId,
         (bridge, selected, token) =>
           bridge.listSavedReminders!(
@@ -507,7 +556,7 @@ export function createAssistantDeviceSecurity(
     },
     async saveReminderCopy(userId: string, id: string): Promise<void> {
       reminderId(id);
-      await reminderRequest(
+      await privateControlRequest(
         userId,
         (bridge, selected, token) => {
           if (!bridge.saveReminderCopy)
@@ -883,6 +932,13 @@ export function createAssistantDeviceSecurity(
     },
     cancel(): void {
       version++;
+      try {
+        void deviceSecurity()
+          .cancelAlarmHandoffs?.()
+          .catch(() => {});
+      } catch {
+        /* Older binaries have no alarm handoff. */
+      }
       try {
         void deviceSecurity()
           .cancelReminders?.()
