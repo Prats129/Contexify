@@ -18,7 +18,7 @@ def inspect(host: str, check_live_key: bool = False):
         raise RuntimeError(
             "Run APK inspection without Python optimization; all assertions must be enabled."
         )
-    apk = TOOLS / "Contexify-Assistant-M5-Test-1.4.3-4.apk"
+    apk = TOOLS / "Contexify-Assistant-M5-Reminders-Test-1.4.3-5.apk"
     sdk = TOOLS / "sdk/build-tools/37.0.0"
     java = next((TOOLS / "jdk").glob("*/bin/java.exe"))
 
@@ -34,14 +34,20 @@ def inspect(host: str, check_live_key: bool = False):
     assert dump("packagename").strip() == "ai.contexify.app.assistantvolumetest"
     badging = dump("badging")
     assert (
-        "versionName='1.4.3-assistant-test4'" in badging
-        and "versionCode='4'" in badging
+        "versionName='1.4.3-assistant-test5'" in badging
+        and "versionCode='5'" in badging
         and "application-label:'Contexify Volume Test'" in badging
     )
     permissions = set(
         re.findall(r"uses-permission: name='([^']+)'", dump("permissions"))
     )
-    for name in ("INTERNET", "RECORD_AUDIO", "MODIFY_AUDIO_SETTINGS"):
+    for name in (
+        "INTERNET",
+        "RECORD_AUDIO",
+        "MODIFY_AUDIO_SETTINGS",
+        "POST_NOTIFICATIONS",
+        "RECEIVE_BOOT_COMPLETED",
+    ):
         assert "android.permission." + name in permissions
     for name in (
         "SEND_SMS",
@@ -51,9 +57,19 @@ def inspect(host: str, check_live_key: bool = False):
         "WRITE_SETTINGS",
         "ACCESS_NOTIFICATION_POLICY",
         "BIND_ACCESSIBILITY_SERVICE",
+        "SCHEDULE_EXACT_ALARM",
+        "USE_EXACT_ALARM",
     ):
         assert "android.permission." + name not in permissions
     manifest = dump("xmltree", "--file", "AndroidManifest.xml")
+    receivers = re.findall(r"E: receiver \([^\n]+\)\n((?:\s+A:[^\n]*\n)+)", manifest)
+    for name in ("ReminderAlarmReceiver", "ReminderRescheduleReceiver"):
+        matching = [
+            entry for entry in receivers if "ai.contexify.security." + name in entry
+        ]
+        assert len(matching) == 1 and re.search(
+            r"exported\([^\n]+\)=false", matching[0]
+        ), "Reminder receivers must be non-exported."
     resources = dump("resources")
 
     def resource_id(name):
@@ -120,6 +136,14 @@ def inspect(host: str, check_live_key: bool = False):
             b"Enable device controls on this device",
         ):
             assert marker in bundle, "Missing M4/M5 client integration."
+        for marker in (
+            b"Reminders and settings",
+            b"readReminders",
+            b"executeReminder",
+            b"Encrypted account storage",
+            b"Review and create reminder",
+        ):
+            assert marker in bundle, "Missing private reminder client integration."
         assert not any(
             "test-account.json" in name
             or "server.key" in name
@@ -183,6 +207,19 @@ def inspect(host: str, check_live_key: bool = False):
             assert any(marker in data for data in dex), (
                 "Missing M5 reviewed application-handoff code."
             )
+        for marker in (
+            b"ReminderController",
+            b"ReminderVault",
+            b"ReminderSchedule",
+            b"ReminderAlarms",
+            b"ReminderAlarmReceiver",
+            b"ReminderRescheduleReceiver",
+            b"setAndAllowWhileIdle",
+            b"android_owned_reminder",
+        ):
+            assert any(marker in data for data in dex), (
+                "Missing native owned-reminder code."
+            )
 
     def verify_signature(path: Path) -> str:
         result = subprocess.run(
@@ -215,7 +252,7 @@ def inspect(host: str, check_live_key: bool = False):
         return certificate.pop()
 
     certificate = verify_signature(apk)
-    previous_apk = TOOLS / "Contexify-Assistant-M4-Test-1.4.3-3.apk"
+    previous_apk = TOOLS / "Contexify-Assistant-M5-Test-1.4.3-4.apk"
     if previous_apk.is_file():
         assert verify_signature(previous_apk) == certificate, (
             "Test update signing identity changed."
@@ -224,8 +261,8 @@ def inspect(host: str, check_live_key: bool = False):
         sha = hashlib.file_digest(handle, "sha256").hexdigest()
     report = {
         "package": "ai.contexify.app.assistantvolumetest",
-        "version": "1.4.3-assistant-test4",
-        "version_code": 4,
+        "version": "1.4.3-assistant-test5",
+        "version_code": 5,
         "sha256": sha,
         "apk_bytes": apk.stat().st_size,
         "signature_verified": True,
@@ -241,6 +278,10 @@ def inspect(host: str, check_live_key: bool = False):
         "m4_client_integration": True,
         "native_m5_code": True,
         "m5_client_integration": True,
+        "native_reminder_code": True,
+        "reminder_client_integration": True,
+        "reminder_receivers_not_exported": True,
+        "exact_alarm_permissions_absent": True,
         "gemini_key_bundled": False if check_live_key else "not_checked",
         "test_ca_only": True,
         "test_private_key_bundled": False,

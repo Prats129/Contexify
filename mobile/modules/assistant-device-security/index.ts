@@ -15,6 +15,38 @@ export interface PercentExecutionResult {
 export type VolumeExecutionResult = PercentExecutionResult;
 
 interface SecurityModule {
+  reminderSupport?(): boolean;
+  readReminders?(
+    origin: string,
+    userId: string,
+    installationId: string,
+    managementToken: string,
+  ): Promise<unknown>;
+  executeReminder?(
+    origin: string,
+    userId: string,
+    installationId: string,
+    managementToken: string,
+    kind: string,
+    payload: string,
+  ): Promise<unknown>;
+  listSavedReminders?(
+    origin: string,
+    userId: string,
+    installationId: string,
+    managementToken: string,
+    after: string | null,
+  ): Promise<unknown>;
+  saveReminderCopy?(
+    origin: string,
+    userId: string,
+    installationId: string,
+    managementToken: string,
+    id: string,
+  ): Promise<unknown>;
+  requestReminderNotifications?(): Promise<unknown>;
+  cancelReminders?(): Promise<void>;
+  clearReminders?(): Promise<void>;
   /** Compiled support only; never grants authority. Missing on older binaries. */
   operationCapabilitiesV2?(): unknown;
   executePlanV2?(

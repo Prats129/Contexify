@@ -32,7 +32,8 @@ let cachedBaseUrl: string | null = null;
 let baseUrlRevision = 0;
 
 // A release binary cannot become a development client via a public env switch.
-const RELEASE_TRANSPORT = process.env.EXPO_PUBLIC_APP_ENV === "production" ||
+const RELEASE_TRANSPORT =
+  process.env.EXPO_PUBLIC_APP_ENV === "production" ||
   (typeof __DEV__ !== "undefined" && !__DEV__);
 
 const normalizeApiBaseUrl = (value: string): string => {
@@ -70,7 +71,8 @@ export const getApiBaseUrl = async (): Promise<string> => {
   const revision = baseUrlRevision;
   if (RELEASE_TRANSPORT) {
     const configured = process.env.EXPO_PUBLIC_API_URL?.trim();
-    if (!configured) throw new Error("The release app has no configured HTTPS server.");
+    if (!configured)
+      throw new Error("The release app has no configured HTTPS server.");
     cachedBaseUrl = normalizeApiBaseUrl(configured);
     return cachedBaseUrl;
   }
@@ -87,14 +89,20 @@ export const getApiBaseUrl = async (): Promise<string> => {
 
 export const setApiBaseUrl = async (newUrl: string) => {
   const clean = normalizeApiBaseUrl(newUrl);
-  if (RELEASE_TRANSPORT && clean !== normalizeApiBaseUrl(process.env.EXPO_PUBLIC_API_URL || ""))
+  if (
+    RELEASE_TRANSPORT &&
+    clean !== normalizeApiBaseUrl(process.env.EXPO_PUBLIC_API_URL || "")
+  )
     throw new Error("The release app cannot switch to an unapproved server.");
+  // Do not await a stale preference read before replacing the selected server.
+  if (clean !== cachedBaseUrl) await assistantSecurity.clearReminderData();
   await AsyncStorage.setItem("contexify_server_url", clean);
   baseUrlRevision++;
   cachedBaseUrl = clean;
 };
 
 export const resetApiBaseUrl = async () => {
+  await assistantSecurity.clearReminderData();
   await AsyncStorage.removeItem("contexify_server_url");
   baseUrlRevision++;
   cachedBaseUrl = null;
@@ -213,14 +221,21 @@ export function extractErrorMessage(
 }
 
 const auth = createAuthTransport(getCleanHost);
-const assistantSecurity = createAssistantDeviceSecurity(getCleanHost, auth.authHeaders);
-const {
-  authenticatedFetch,
-  acceptLogin,
-  authHeaders,
-  readAuth,
-  expireSession,
-} = auth;
+const assistantSecurity = createAssistantDeviceSecurity(
+  getCleanHost,
+  auth.authHeaders,
+  auth.expireSession,
+);
+auth.onSessionExpired(() => {
+  void assistantSecurity.clearReminderData().catch(() => {});
+});
+const { authenticatedFetch, authHeaders, readAuth, expireSession } = auth;
+
+async function acceptLogin(response: Response, url: string): Promise<User> {
+  const user = await auth.acceptLogin(response, url);
+  await assistantSecurity.matchReminderAccount(user.id);
+  return user;
+}
 
 export const apiService = {
   assistantSecurity,
@@ -239,8 +254,11 @@ export const apiService = {
   onSessionExpired: auth.onSessionExpired,
   hasUserSession: auth.hasUserSession,
   async logout(): Promise<void> {
-    assistantSecurity.cancel();
-    await auth.logout();
+    try {
+      await assistantSecurity.clearReminderData();
+    } finally {
+      await auth.logout();
+    }
   },
   // --- Health Check ---
   async pingHealth(baseUrl?: string, signal?: AbortSignal): Promise<boolean> {

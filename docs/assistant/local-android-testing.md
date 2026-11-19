@@ -1,5 +1,7 @@
 # Local Android test delivery
 
+**Latest reminder delivery, 2026-11-18:** the code-5 [reminder test APK](m5-reminders.md#authorized-reminder-test-apk-delivery---2026-11-18) is built and inspected; the separate hotspot backend has the protected reminder routes. Install over Contexify Volume Test. Begin with device-only reminders; encrypted account-storage key setup and physical reminder checks remain pending. Older delivery entries below are historical.
+
 **Latest M4 delivery, 2026-11-18:** the code-3 APK is built/inspected and the isolated backend updated. See [M4 delivery](#authorized-m4-test-apk-delivery---2026-11-18). Code-2 and earlier checkpoints below remain historical.
 
 **Latest delivery, 2026-11-17:** [post-M3 public live evaluation](live-public-evaluation.md) records the inspected version-code-2 APK, active isolated test server and resumed manual S25 checkpoint. The user confirmed installation/test sign-in and, after the reviewed Flash-Lite switch, the live single-volume AI command: native approval, actual volume change and inline result. Earlier provider/interpretation failures remain historical evidence; M3 relative-state and remaining release acceptance stay open. Earlier artifact/checkpoint details below are historical. No EAS job or phone access was used.

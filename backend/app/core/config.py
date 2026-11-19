@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 from typing import Self
 
-from pydantic import Field, ValidationInfo, field_validator, model_validator
+from pydantic import Field, SecretStr, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     ASSISTANT_EXECUTION_ENABLED: bool = False
     # Separate external-processing purpose, not a device-command enable switch.
     ASSISTANT_PLANNING_ENABLED: bool = False
+    # Shared private-data keyring; separate from SQL/backups and never a feature gate.
+    ASSISTANT_PRIVATE_DATA_KEYRING: SecretStr | None = None
     ASSISTANT_API_ORIGIN: str = ""
     ASSISTANT_WEB_ORIGINS: list[str] = []
     ASSISTANT_SESSION_TTL_SECONDS: int = Field(default=900, ge=60, le=900)

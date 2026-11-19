@@ -23,6 +23,7 @@ from app.schemas import (  # noqa: E402
     assistant_brightness,
     assistant_operations,
     assistant_planning,
+    assistant_reminder,
     assistant_security,
     assistant_volume,
     chat,
@@ -33,6 +34,18 @@ from app.schemas import (  # noqa: E402
 )
 
 MODELS = (
+    assistant_reminder.ReminderOperationRequest,
+    assistant_reminder.ReminderSessionResponse,
+    assistant_reminder.ReminderTaskView,
+    assistant_reminder.ReminderClaim,
+    assistant_reminder.ReminderReceiptRequest,
+    assistant_reminder.ReminderResultRequest,
+    assistant_reminder.ReminderStorageView,
+    assistant_reminder.ReminderCopySaved,
+    assistant_reminder.ReminderCopyRequest,
+    assistant_reminder.ReminderCopyPage,
+    assistant_reminder.ReminderCopyPageRequest,
+    assistant_reminder.ReminderIdentityRequest,
     assistant_application.ApplicationOperationRequest,
     assistant_application.ApplicationSessionResponse,
     assistant_application.ApplicationTaskView,
@@ -221,7 +234,11 @@ def main() -> int:
             model
             for model in MODELS
             if model.__module__
-            in ("app.schemas.assistant", "app.schemas.assistant_planning")
+            in (
+                "app.schemas.assistant",
+                "app.schemas.assistant_planning",
+                "app.schemas.assistant_reminder",
+            )
         )
     )
     core_sources = {}

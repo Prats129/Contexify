@@ -749,3 +749,142 @@ export type ApplicationTaskView = {
     | "expired";
   result?: ApplicationEvidence | null;
 };
+
+export type ReminderAction = {
+  capability_id:
+    | "reminder.create"
+    | "reminder.cancel"
+    | "reminder.storage"
+    | "reminder.delete_saved";
+  schema_version?: 1;
+  commitment: string;
+  reminder_id?: string | null;
+  storage_mode?: "device_only" | "account" | null;
+  settings_revision?: number | null;
+};
+
+export type ReminderClaim = {
+  claim_id: string;
+  action_revision: number;
+  execution?: "android_owned_reminder";
+  expires_at: number;
+};
+
+export type ReminderCopyPage = {
+  items: Array<SavedReminder>;
+  next_after: string | null;
+};
+
+export type ReminderCopyPageRequest = {
+  after?: string | null;
+};
+
+export type ReminderCopyRequest = {
+  task_id: string;
+  salt: string;
+  payload_json: string;
+};
+
+export type ReminderCopySaved = {
+  reminder_id: string;
+  stored?: true;
+};
+
+export type ReminderDetails = {
+  reminder_id: string;
+  title: string;
+  date: string;
+  time: string;
+  zone: string;
+  repeat: "none" | "daily" | "weekly";
+  until: string | null;
+  overlap: "ask" | "earlier" | "later";
+  occurrences: Array<number>;
+};
+
+export type ReminderEvidence = {
+  outcome:
+    | "schedule_requested"
+    | "reminder_cancelled"
+    | "storage_updated"
+    | "saved_copy_deleted"
+    | "failed"
+    | "outcome_unknown";
+};
+
+export type ReminderOperationRequest = {
+  protocol_version: 2;
+  plan_id: string;
+  plan_revision: number;
+  step_id: number;
+  action: ReminderAction;
+};
+
+export type ReminderReceiptRequest = {
+  outcome:
+    | "schedule_requested"
+    | "reminder_cancelled"
+    | "storage_updated"
+    | "saved_copy_deleted"
+    | "failed"
+    | "outcome_unknown";
+  expected_revision: number;
+  challenge_id: string;
+  signature: string;
+  claim_id: string;
+};
+
+export type ReminderResultRequest = {
+  outcome:
+    | "schedule_requested"
+    | "reminder_cancelled"
+    | "storage_updated"
+    | "saved_copy_deleted"
+    | "failed"
+    | "outcome_unknown";
+  expected_revision: number;
+  claim_id: string;
+};
+
+export type ReminderSessionResponse = {
+  access_token: string;
+  expires_at: number;
+  scope?: "assistant:reminder";
+};
+
+export type ReminderStorageView = {
+  revision: number;
+  mode: "device_only" | "account";
+  account_storage_available: boolean;
+  consent_policy_version?: 1;
+};
+
+export type ReminderTaskView = {
+  task_id: string;
+  mode?: "reminder";
+  action: ReminderAction;
+  revision: number;
+  state:
+    | "awaiting_confirmation"
+    | "authorized"
+    | "executing"
+    | "schedule_requested"
+    | "reminder_cancelled"
+    | "storage_updated"
+    | "saved_copy_deleted"
+    | "failed"
+    | "outcome_unknown"
+    | "cancelled"
+    | "expired";
+  result?: ReminderEvidence | null;
+};
+
+export type SavedReminder = {
+  details: ReminderDetails;
+  source_device_id: string;
+  created_at: number;
+};
+
+export type ReminderIdentityRequest = {
+  reminder_id: string;
+};

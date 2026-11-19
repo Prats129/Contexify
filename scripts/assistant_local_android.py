@@ -48,10 +48,10 @@ def prepare(host: str):
         )
     content, versions = re.subn(
         r'(?m)^(\s*)versionName "[^"]+"$',
-        r'\1versionName "1.4.3-assistant-test4"',
+        r'\1versionName "1.4.3-assistant-test5"',
         content,
     )
-    content, codes = re.subn(r"(?m)^(\s*)versionCode \d+$", r"\1versionCode 4", content)
+    content, codes = re.subn(r"(?m)^(\s*)versionCode \d+$", r"\1versionCode 5", content)
     if versions != 1 or codes != 1:
         raise RuntimeError("Unsupported generated test version configuration.")
     if "debuggableVariants = []" not in content:

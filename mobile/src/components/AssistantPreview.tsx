@@ -34,6 +34,7 @@ import {
   describeBrightnessResult,
   reviewedBrightnessPercent,
 } from "../services/assistant_brightness";
+import { ReminderManager } from "./ReminderManager";
 import { ClarificationForm } from "./ClarificationForm";
 
 export function AssistantPreview({
@@ -52,6 +53,7 @@ export function AssistantPreview({
   volumeUserId?: string;
 }) {
   const insets = useSafeAreaInsets();
+  const [remindersOpen, setRemindersOpen] = useState(false);
   const sessionRef = useRef<ReturnType<typeof createCommandSession> | null>(
     null,
   );
@@ -339,6 +341,16 @@ export function AssistantPreview({
       </TouchableOpacity>
     );
   }
+  if (remindersOpen && volumeControls && volumeUserId)
+    return (
+      <ReminderManager
+        key={volumeUserId}
+        userId={volumeUserId}
+        controls={volumeControls}
+        theme={theme}
+        onClose={() => setRemindersOpen(false)}
+      />
+    );
   return (
     <Modal
       visible
@@ -399,6 +411,15 @@ export function AssistantPreview({
             keyboardShouldPersistTaps="handled"
             contentContainerStyle={{ gap: 12, paddingBottom: 8 }}
           >
+            {volumeAllowed &&
+              button(
+                "Reminders and settings",
+                () => {
+                  clearCommand();
+                  setRemindersOpen(true);
+                },
+                Boolean(busy),
+              )}
             <Text style={{ color: theme.textMuted }}>
               {state?.planningConsent
                 ? volumeAllowed

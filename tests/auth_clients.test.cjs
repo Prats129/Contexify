@@ -5,6 +5,10 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const ts = require("../frontend/node_modules/typescript");
+const { createTypeScriptLoader } = require("./helpers/typescript_modules.cjs");
+const assistantCore = createTypeScriptLoader()(
+  "packages/assistant-core/src/index.ts",
+);
 
 for (const platform of ["frontend", "mobile"]) {
   test(`${platform}: extracted conversation hook preserves drafts and binds setters to their conversation`, () => {
@@ -1606,7 +1610,17 @@ function client(platform, handleRequest, environment = {}) {
       removeItem: (key) => storage.delete(key),
     },
     require: (name) => {
-      if (["./auth_transport", "./credential_storage", "./assistant_security"].includes(name)) {
+      if (name === "@contexify/assistant-core") return assistantCore;
+      if (
+        [
+          "./auth_transport",
+          "./credential_storage",
+          "./assistant_security",
+          "./assistant_volume",
+          "./assistant_brightness",
+          "./assistant_device_controls",
+        ].includes(name)
+      ) {
         const filename = path.join(
           __dirname,
           "..",
@@ -1631,17 +1645,28 @@ function client(platform, handleRequest, environment = {}) {
           __esModule: true,
           default: asyncStorage,
         };
-      if (name === "expo-secure-store") return {
-        WHEN_UNLOCKED_THIS_DEVICE_ONLY: 6,
-        isAvailableAsync: async () => true,
-        getItemAsync: async (key) => secureCredentials.get(key) ?? null,
-        setItemAsync: async (key, value) => { secureCredentials.set(key, value); },
-        deleteItemAsync: async (key) => { secureCredentials.delete(key); },
-      };
+      if (name === "expo-secure-store")
+        return {
+          WHEN_UNLOCKED_THIS_DEVICE_ONLY: 6,
+          isAvailableAsync: async () => true,
+          getItemAsync: async (key) => secureCredentials.get(key) ?? null,
+          setItemAsync: async (key, value) => {
+            secureCredentials.set(key, value);
+          },
+          deleteItemAsync: async (key) => {
+            secureCredentials.delete(key);
+          },
+        };
       if (name === "../../modules/assistant-device-security")
-        return { deviceSecurity: () => { throw new Error("Native device fixture unavailable"); } };
+        return {
+          deviceSecurity: () => {
+            throw new Error("Native device fixture unavailable");
+          },
+        };
       if (name === "react-native")
-        return { Platform: { OS: "android", select: () => "http://fixture.invalid" } };
+        return {
+          Platform: { OS: "android", select: () => "http://fixture.invalid" },
+        };
       throw new Error(`Unexpected runtime import: ${name}`);
     },
     fetch: async (url, options = {}) => {
@@ -1696,23 +1721,45 @@ const credentials = (token) => ({
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
 test("mobile release: saved development server cannot override the configured HTTPS host", async () => {
-  const fixture = client("mobile", () => response(credentials("release-fixture-token")), {
-    EXPO_PUBLIC_APP_ENV: "production", EXPO_PUBLIC_API_URL: "https://approved.fixture.invalid",
-  });
-  await fixture.asyncStorage.setItem("contexify_server_url", "http://old-development.invalid");
-  assert.equal(await fixture.getApiBaseUrl(), "https://approved.fixture.invalid");
+  const fixture = client(
+    "mobile",
+    () => response(credentials("release-fixture-token")),
+    {
+      EXPO_PUBLIC_APP_ENV: "production",
+      EXPO_PUBLIC_API_URL: "https://approved.fixture.invalid",
+    },
+  );
+  await fixture.asyncStorage.setItem(
+    "contexify_server_url",
+    "http://old-development.invalid",
+  );
+  assert.equal(
+    await fixture.getApiBaseUrl(),
+    "https://approved.fixture.invalid",
+  );
   await fixture.api.login("fixture", "password");
-  assert.equal(fixture.requests[0].url, "https://approved.fixture.invalid/api/v1/user/login");
+  assert.equal(
+    fixture.requests[0].url,
+    "https://approved.fixture.invalid/api/v1/user/login",
+  );
   assert.equal(fixture.storage.has("contexify_auth_session"), false);
   assert.ok(fixture.credentials.get("contexify_auth_session"));
-  await assert.rejects(fixture.setApiBaseUrl("https://evil.invalid"), /unapproved server/);
+  await assert.rejects(
+    fixture.setApiBaseUrl("https://evil.invalid"),
+    /unapproved server/,
+  );
 });
 
 test("mobile release: absent or cleartext deployment URLs fail before network access", async () => {
   for (const url of [undefined, "http://insecure.fixture.invalid"]) {
-    const fixture = client("mobile", () => assert.fail("No insecure release request"), {
-      EXPO_PUBLIC_APP_ENV: "production", EXPO_PUBLIC_API_URL: url,
-    });
+    const fixture = client(
+      "mobile",
+      () => assert.fail("No insecure release request"),
+      {
+        EXPO_PUBLIC_APP_ENV: "production",
+        EXPO_PUBLIC_API_URL: url,
+      },
+    );
     await assert.rejects(fixture.api.login("fixture", "password"), /HTTPS/);
     assert.equal(fixture.requests.length, 0);
   }
@@ -2296,7 +2343,8 @@ for (const platform of ["frontend", "mobile"]) {
     release(response(credentials("guest-token")));
     await pending;
     assert.equal(
-      JSON.parse(fixture.credentials.get("contexify_auth_session")).access_token,
+      JSON.parse(fixture.credentials.get("contexify_auth_session"))
+        .access_token,
       "signed-token",
     );
   });
@@ -2318,7 +2366,8 @@ for (const platform of ["frontend", "mobile"]) {
     release(response({ detail: "Session expired" }, 401));
     await assert.rejects(pending);
     assert.equal(
-      JSON.parse(fixture.credentials.get("contexify_auth_session")).access_token,
+      JSON.parse(fixture.credentials.get("contexify_auth_session"))
+        .access_token,
       "signed-2",
     );
   });
@@ -3003,7 +3052,8 @@ for (const platform of ["frontend", "mobile"]) {
     release(response({ items: [{ id: "previous-owner" }], total: 1 }));
     await assert.rejects(pending, /session changed/);
     assert.equal(
-      JSON.parse(fixture.credentials.get("contexify_auth_session")).access_token,
+      JSON.parse(fixture.credentials.get("contexify_auth_session"))
+        .access_token,
       "signed-2",
     );
   });

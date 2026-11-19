@@ -184,12 +184,38 @@ def deny_external_network(event, args):
             )
 
 
-def create_app(live_planner: bool = False, *, flash_lite_evaluation: bool = False):
+def load_private_storage_keyring() -> str:
+    """Read a separately prepared, Windows-user-protected test key; never replace it."""
+    from app.assistant.private_data import PrivateDataKeys
+    from app.assistant.public_evaluation import _protect
+
+    key_file = STATE_ROOT / "private-storage" / f"{STATE.name}.dpapi"
+    if (
+        not key_file.is_file()
+        or key_file.is_symlink()
+        or not 1 <= key_file.stat().st_size <= 16384
+    ):
+        raise RuntimeError(
+            "Prepare the separate protected test-storage key before account-storage startup."
+        )
+    encoded = _protect(key_file.read_bytes(), decrypt=True).decode("utf-8")
+    PrivateDataKeys.parse(encoded)
+    return encoded
+
+
+def create_app(
+    live_planner: bool = False,
+    *,
+    flash_lite_evaluation: bool = False,
+    account_storage: bool = False,
+):
     if flash_lite_evaluation and not live_planner:
         raise ValueError(
             "The public evaluation budget requires an explicit live planner."
         )
     data = configure(live_planner)
+    if account_storage:
+        os.environ["ASSISTANT_PRIVATE_DATA_KEYRING"] = load_private_storage_keyring()
     provider = None
     if live_planner:
         from app.assistant.public_evaluation import (
@@ -216,6 +242,7 @@ def create_app(live_planner: bool = False, *, flash_lite_evaluation: bool = Fals
         assistant_application,
         assistant_brightness,
         assistant_planning,
+        assistant_reminder,
         assistant_security,
         assistant_volume,
         health,
@@ -307,6 +334,7 @@ def create_app(live_planner: bool = False, *, flash_lite_evaluation: bool = Fals
     app.include_router(health.router, prefix="/api/v1/health")
     app.include_router(assistant_security.router, prefix="/api/v1/assistant/security")
     app.include_router(assistant.router, prefix="/api/v1/assistant")
+    app.include_router(assistant_reminder.router, prefix="/api/v1/assistant/reminder")
     app.include_router(
         assistant_application.router, prefix="/api/v1/assistant/application"
     )
@@ -326,6 +354,11 @@ def main():
     parser.add_argument("--live-planner", action="store_true")
     parser.add_argument("--confirm-free-tier", action="store_true")
     parser.add_argument(
+        "--account-storage",
+        action="store_true",
+        help="Load the separately prepared Windows-protected local account-storage key.",
+    )
+    parser.add_argument(
         "--flash-lite-evaluation",
         action="store_true",
         help="Use the separately approved 30/day public-test cap with the pinned Flash-Lite model.",
@@ -341,6 +374,8 @@ def main():
         parser.error(
             "Live evaluation requires --confirm-free-tier and cannot run in preparation mode."
         )
+    if args.account_storage and args.prepare_only:
+        parser.error("Account storage is a server option, not TLS/config preparation.")
     if args.lan_host:
         host = ipaddress.ip_address(args.lan_host)
         private_networks = [
@@ -363,7 +398,9 @@ def main():
         for name in ("google_genai", "httpx", "httpcore"):
             logging.getLogger(name).setLevel(logging.CRITICAL)
     app = create_app(
-        args.live_planner, flash_lite_evaluation=args.flash_lite_evaluation
+        args.live_planner,
+        flash_lite_evaluation=args.flash_lite_evaluation,
+        account_storage=args.account_storage,
     )
     import uvicorn
 

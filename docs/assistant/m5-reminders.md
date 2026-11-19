@@ -1,0 +1,105 @@
+# M5 second slice: owned Android reminders
+
+Source checkpoint: 2026-11-18. This is the reminder source implementation, not full M5 completion or phone acceptance. The previously delivered code-4 APK contains app opening, not these reminder changes.
+
+## User decisions retained
+
+- Device-only private details by default, with a visible setting for optional encrypted account storage. Storage location is separate from processing consent: this setting never authorizes Gemini access to reminder content.
+- Already-approved alerts may notify offline. Creating or cancelling schedules, changing storage preferences and viewing private records require an authenticated online session on the enrolled device. No new effect is queued for reconnection.
+- Signing out locally deletes local reminder details and disables this phone's alerts. Remote sign-out/revocation cannot be observed while offline; it takes effect when the phone reconnects and authentication is checked. Account copies the user explicitly saved remain until expiry or deletion and never restore execution authority.
+
+These settle the development reminder storage choice in D8 and the limited already-approved-alert portion of D12. Production legal/retention/key-recovery approval, private cloud processing, general offline commands and previously deferred physical checks remain open.
+
+## Entry and behavior
+
+On a compatible Android build, open **Assistant → Reminders and settings**, or **Profile → Reminders and privacy settings**. A passcode-protected, unlocked foreground activity is required. If not enrolled, use **Enable assistant on this device**, which reuses shared enrollment without changing volume. Use **Allow reminder notifications** if Android permission/channel access is missing.
+
+The private reminder form accepts title, explicit date, 24-hour time, IANA time zone, once/daily/weekly recurrence and an end date. This slice deliberately does not send private free-text commands to the existing public-test-only Gemini planner or add a natural-language lookup table. Model-assisted private reminder interpretation needs the separate processing decision and evaluation path; the existing settings/app-opening planner is unchanged.
+
+Native Java time resolves the form. Initial nonexistent DST times are rejected; future gaps in a repeating series are skipped. Repeated hours require the user's explicit first/second choice if ambiguity occurs anywhere in the series. Native confirmation shows the exact title, date/time/zone, recurrence and privacy destination. Approved UTC occurrences remain fixed when travelling; time-zone-rule changes do not silently reinterpret approval. Limits: at least one minute ahead, within 90 days, at most 91 occurrences and 64 active/uncertain local records.
+
+Android's inexact `AlarmManager.setAndAllowWhileIdle` requests generic notifications. This is not an exact alarm or delivery/heard guarantee. No exact-alarm permission, foreground service, wake lock, server cron, cloud push or new package dependency is introduced. Android 8+ is required for this adapter; older binaries/OS versions show unavailable. Web/iOS native parity remains M6 work. [Android alarm guidance](https://developer.android.com/develop/background-work/services/alarms), [notification permission](https://developer.android.com/develop/ui/compose/notifications/notification-permission).
+
+Notifications contain no reminder title, time, account or private payload. Open the authenticated app to read details. The list shows active/uncertain records and eight recent terminal records. A notification request retains encrypted details for reading; explicit removal erases the local body and cancels future alerts. History is pruned opportunistically seven days after the final approved due time, on later app/receiver work; this is not a timed deletion guarantee while the app is stopped. Total local records are bounded to 512. Sign-out/forget removes all local records and keys. Force-stop, notification denial, OEM power management and reboot before first unlock may prevent or delay alerts. No Direct Boot private payload is used. [Direct Boot storage](https://developer.android.com/privacy-and-security/direct-boot).
+
+## Authority and durable execution
+
+The existing security-management credential obtains a separate `assistant:reminder` session. The shared trusted control protocol supplies immutable operations, device-bound signed challenges, short-lived one-use claims, transactional state changes, scoped readback and signed receipts. Create/cancel/storage/delete-saved are compiled capabilities with strict DTOs. Device-only control sends a salted payload commitment and opaque identities, never the title or calendar details.
+
+The native controller verifies the enrolled server/account/installation/public-key identity before private reads, and rechecks foreground/unlock, binding, lifecycle generation and expiry before effects. Native confirmation filters obscured touches. Authenticated local AES-256-GCM records live under no-backup storage with owner/epoch/record/kind AAD, durable AtomicFile writes, bounded reads and compare-and-set transitions. Metadata uses a distinct Keystore key so locked-phone generic alerts need not decrypt text. On Android 15+ the private body key additionally requires an unlocked device; older supported versions retain foreground/unlock API guards.
+
+Scheduling starts with a durable uncertain reservation; an uncertain claim/effect is never retried automatically. The receiver validates explicit immutable PendingIntent identity, current ownership, state and a rotating opaque nonce. It writes notification uncertainty before calling the OS. Recurrence advances only to a future instant from the approved list. Crash uncertainty stops automatic progression. Alerts over 24 hours late or blocked by notification permissions terminate the remaining series with visible missed/blocked evidence; they are not silently replayed.
+
+Boot, package update, clock/time-zone changes and foreground restoration reconcile only previously scheduled immutable occurrences. Cancellation/logout and receivers share the vault lock. Logout persists a disabled marker before removing files, alarms, notifications and keys; cleanup failure cannot reactivate the old epoch. A fresh login/server change discards late private responses. Outcome labels distinguish schedule requested, notification requested, blocked, missed and unknown; none proves delivery.
+
+## Optional encrypted account copies
+
+`ASSISTANT_PRIVATE_DATA_KEYRING` is a shared private-storage configuration, not a per-command enable flag. Leave it unset to keep device-only reminders functional and the optional account setting unavailable. Configure it only through the deployment secret store, using the JSON shape `{"active":"key-id","keys":{"key-id":"<base64 of an independently generated 32-byte key>"}}`. Do not paste real keys into docs/chat, commit them or store them with the database. Keep protected key backups separate from database backups. This source work does not configure a real key or restart any backend.
+
+AES-256-GCM uses a fresh 12-byte nonce and authenticates key version plus user/device/reminder identity. Up to eight retained key IDs allow rotation: add a new ID/key, select it as active for new writes, retain old IDs until their copies have expired or been explicitly migrated/deleted and recovery is verified. Reads never rewrite ciphertext, replace missing keys or fall back to plaintext. Production secret distribution, key rotation/migration and disaster-recovery drills remain operational release gates.
+
+The setting applies per user/device to new reminders. Its native disclosure explains that the server can decrypt authenticated account copies and that no Gemini processing is granted. Only a matching signed successful schedule receipt and exact salted payload commitment can save a copy. Explicit **Save encrypted account copy** retries storage alone, never scheduling. A failed automatic upload is shown and does not retry in the background. The shared control ledger retains seven-day tombstones; an upload retry cannot outlive its retained schedule receipt.
+
+Turning storage off atomically changes the consent revision and deletes that device's saved copies. Concurrent stale changes cannot overwrite a newer choice. Late uploads without consent, modified content, cancelled reminders and another user's access are rejected. A cancellation whose server receipt is lost may leave an account copy; the UI says so rather than claiming remote deletion. Deleting a saved copy has its own exact native confirmation and does not cancel another phone's alerts. Saved account pages contain six items; storage is capped at 512 per account, with bounded opportunistic expiry cleanup. Copies expire at the earlier of 90 days from saving or seven days after their final scheduled time. SQL/user/device foreign keys preserve existing account deletion semantics.
+
+Authenticated account recovery loads a saved copy only as an editable unscheduled draft. The user must review/update dates and approve a new native schedule. There is no automatic restore after reinstall, sign-in, key loss or backup recovery, and no cross-device control or silent rescheduling.
+
+## Verification and remaining acceptance
+
+Automated checks exercise disposable SQLite and loopback Turso, strict contracts and private validation errors, signed claims/receipts/replay, encrypted copies and key rotation/tampering, ownership, storage revision conflicts, cancelled-copy upload rejection, client lifecycle/account cleanup and real component handlers. Native JVM tests exercise DST/time bounds and receiver transition decisions. Type checks and native module compilation are separate from real notification/Keystore/OS evidence.
+
+Final source verification: **244 backend/contract tests** passed in isolated processes (212 existing assistant regressions, 21 reminder tests including both database adapters, 11 API-contract tests); **334 client tests** passed (187 assistant and 147 authentication/client regressions); **39 native device-security JVM tests** passed, including 11 new schedule/delivery-policy cases. Both client TypeScript checks, changed Python Ruff/ty checks and offline Android module compilation passed. No new dependency or build-credit usage was required. Ignored evidence is under `backend/.pytest_cache/m5-reminder-*`, with final contract results in `m5-reminder-contract-tests.log` superseding the earlier generation mismatch during development. These results do not establish real-device notification, Keystore or reboot behavior.
+
+Remaining phone acceptance on the compatible code-5 APK (user-reported passes are recorded below):
+
+1. Confirm private-detail access specifically after offline delivery and reconnection; private-title viewing after restart has passed separately. Actual delivery timing has not been recorded; passing the basic delivery check does not establish exact timing.
+2. Obtain an explicit result for cancelling native approval. Notification denial, backgrounding before approval and cancellation of an already-created future reminder have passed separately.
+3. Check a bounded recurring schedule across reboot after first unlock and clock/zone changes, with no duplicate past occurrence. Check reconnecting after remote revocation clears authority. One-time reminder delivery after restart, local sign-out alert cancellation and clearing of local details have passed separately.
+4. The basic account-storage phone batch is user-reported complete: opt in, create/save/list, draft autofill, saved-copy deletion and storage-off cleanup (details below). Production key recovery/rotation and broader restore/isolation acceptance remain open. Draft autofill alone does not establish absence of a new OS schedule; no private Gemini processing is authorized by storage consent.
+
+No new APK, EAS build, OTA, production write, live Gemini request or device access is included in this source checkpoint. Existing M2/M3/M4/app-opening deferred checks remain listed in their acceptance documents. Exact alarm handoff/owned-alarm feasibility and full M5 release acceptance remain separate unfinished work.
+
+
+## Authorized reminder test APK delivery - 2026-11-18
+
+The user requested a compatible reminder APK. The local offline build succeeded in **8m 19s**, with 408 tasks (34 executed, 374 up-to-date), using the existing bounded-memory toolchain. No cloud build/retry, OTA, production deployment, USB/ADB or phone access was used. The builder/preparation/inspector now identify this update as code 5 and inspect reminder code, notification/boot permissions, non-exported receivers and absence of exact-alarm permissions. The previous code-4 APK is preserved with its verified original hash.
+
+Artifact: `backend/.pytest_cache/assistant-local-android/Contexify-Assistant-M5-Reminders-Test-1.4.3-5.apk`, version **1.4.3-assistant-test5**, code **5**, **62640437 bytes** (about 59.7 MiB). SHA-256: `1d14922a3691120c179f1978fc06ced30c2a37ce3047e310bf428a423f8b5548`. Verified signing certificate SHA-256: `fac61745dc0903786fb9ede62a962b399f7348f0bb6f899b8332667591033b9c`, matching the prior installed test-app update. Package/name stay `ai.contexify.app.assistantvolumetest` / **Contexify Volume Test**. Install over that test app without uninstalling it; production and the offline Assistant Test app retain separate identities.
+
+APK inspection passed for package/version/signature, required/forbidden permissions, non-exported reminder receivers, native reminder/app-opening/settings/recovery code, embedded reminder UI, execution enabled/OTA disabled metadata, hostname-scoped test CA/cleartext refusal, SecureStore backup exclusions and absence of both the protected Gemini key and test TLS private key. Native module test tasks passed; their reports contain 39 device-security and 7 voice cases, zero failures/errors (unchanged tasks cached). The eight build-isolation cases, changed helper Ruff/ty checks and PowerShell syntax check also passed. These checks are not phone acceptance.
+
+Only the verified isolated hotspot backend was restarted, preserving its test account/database/certificate and the existing public-only Flash-Lite profile. Certificate-verified HTTPS health returned 200; protected reminder routes denied unauthenticated probes with 401/403. These probes made no model-generation requests or device actions. The source v7 migration applies only to this disposable test database in this delivery. Optional encrypted account storage remains unconfigured on this server; start with **device-only reminders**. Its separate key setup and the pending physical reminder batch above remain open. Do not send reminder text through the public Gemini test path.
+
+Evidence: ignored `m5-reminders-apk-build.log`, `apk-inspection-code5.json` and `m5-reminders-backend-readiness.json` under the local tool directory. APK delivery and backend readiness were verified during delivery; the phone results below are user-reported acceptance evidence.
+
+## User-reported reminder checks - 2026-11-19
+
+On the Samsung S25 with the code-5 test APK, the user reported these checks passed:
+
+- Created a device-only reminder, saw its title in the app and received the generic notification. The absence of private reminder text in the notification was explained as intentional.
+- Removed a future reminder and cancelled its alerts; no notification arrived at its scheduled time.
+- Created and approved another reminder, then followed the offline/locked-screen test instructions and confirmed the notification arrived as expected.
+- Opened the native confirmation for a new reminder, pressed Home without approving and returned; the user confirmed the expected dismissed popup, no new reminder and no later notification.
+- Disabled test-app notifications in Android settings, refreshed the reminder screen and tried creating a reminder; the user confirmed the instructed blocked/enable-notifications outcome. The report did not distinguish which of those two UI responses appeared.
+- Created an approved future reminder and signed out before it was due. The user reported no notification, then signed back in and explicitly confirmed the local reminder list was empty. This passes local sign-out cleanup; remote revocation and interruption during an OS effect remain separate checks.
+- Created and approved a one-time reminder for ten minutes ahead, restarted the phone, unlocked once and left the app closed. The user reported receiving the notification, then opened the reminder list and confirmed the "Restart test" title was still visible. This passes that one-time restart-delivery and private-title-retention case; it does not establish recurring-schedule recovery or clock/zone-change behavior.
+
+These reports confirm basic creation, cancellation, already-approved offline delivery, Home-before-approval interruption, notification-denial handling, local sign-out cleanup and one-time delivery after restart. The user replied "perfect" after the separate Cancel-in-confirmation instructions without detailing that result, so that specific case still needs explicit confirmation. Exact alert latency, the remaining privacy/lifecycle/recurrence/account-storage checks above, and full M5 acceptance remain open. No phone access or automated inspection of its notification history was performed.
+
+## Authorized local account-storage setup - 2026-11-19
+
+The user authorized enabling the separate test backend's optional encrypted account storage. An independent random 32-byte key was generated locally and protected for the current Windows user with the existing DPAPI helper. Only its protected blob is retained, outside the SQL data directory, at ignored `backend/.pytest_cache/assistant-local-android/private-storage/backend-192-168-137-1.dpapi`. No plaintext key is written to dotenv, SQL, logs, chat or the APK. Production configuration and keys were not read or changed for this setup.
+
+The local launcher now accepts `--account-storage` to load and validate that prepared key after discarding inherited environment secrets. Default startup remains device-only. Missing, invalid or oversized key files stop this opt-in startup; restarting never generates or replaces a key. Keep the protected file and its Windows-user identity available for test-copy recovery. This local test setup does not settle production key backup, rotation or disaster recovery.
+
+The identified hotspot test service was restarted with its existing database/account/TLS identity and public-only Flash-Lite profile retained:
+
+```powershell
+backend\venv\Scripts\python.exe -B scripts/assistant_local_backend.py --lan-host 192.168.137.1 --live-planner --confirm-free-tier --flash-lite-evaluation --account-storage
+```
+
+Verification: four new isolated launcher/key tests and all 21 existing reminder SQLite/loopback-Turso tests passed. The protected key passed an authenticated-encryption round trip. Certificate-verified live HTTPS checks used a temporary software test device to confirm `account_storage_available: true`, default `device_only`, and denial of anonymous storage access; the temporary device was revoked and its login ended afterwards. No phone access, reminder operation or Gemini generation request was performed. Readiness evidence is in ignored `m5-reminders-account-storage-preparation.json` and `m5-reminders-account-storage-readiness.json` under the local tool directory.
+
+The existing code-5 APK is compatible. On the phone, the user followed the instructions to refresh reminders, explicitly enable encrypted account storage, create and approve a new "Account test" reminder, then show saved account reminders. The user confirmed it worked in response to the question whether that title appeared in the saved list. This passes the basic opt-in/create/account-copy/list flow; existing local reminders are not uploaded automatically. The user then confirmed "Use as new draft" autofilled the form fields, and confirmed both instructed deletion outcomes: the saved account copy disappeared from the refreshed saved list while the original phone reminder remained. Saving/loading a copy never grants new scheduling authority or Gemini processing consent; the draft-autofill report does not independently verify absence of a new OS schedule.
+
+For the final storage-off case, the user was instructed to create and save a new "Storage off test" reminder with storage On, turn storage Off with native approval, refresh the saved list and check that account copies were gone while the phone reminder remained. The user replied "done". Record this as a user-reported pass of that instructed case, not independently inspected SQL/phone evidence. This closes the bounded basic account-storage batch; it does not close the remaining reminder checks above or full M5. No additional cases are added to this batch.

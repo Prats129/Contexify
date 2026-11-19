@@ -8,6 +8,8 @@ import java.util.UUID
 import javax.net.ssl.HttpsURLConnection
 import org.json.JSONObject
 
+internal class NativeControlRejected(val status: Int) : IllegalStateException("Control request rejected.")
+
 /** Shared, fixed-origin control protocol. No redirects, retries or model-selected paths. */
 internal class NativeControlProtocol(
   private val mode: String,
@@ -16,7 +18,7 @@ internal class NativeControlProtocol(
   private val binding: (String, String, String) -> Unit,
   private val publicKey: (String) -> String,
 ) {
-  init { require(mapOf("volume" to "media_volume.set", "brightness" to "brightness.set_app", "application" to "application.open")[mode] == capability) }
+  init { require(if (mode == "reminder") capability in setOf("reminder.create", "reminder.cancel", "reminder.storage", "reminder.delete_saved") else mapOf("volume" to "media_volume.set", "brightness" to "brightness.set_app", "application" to "application.open")[mode] == capability) }
   private fun hash(value: String) = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8))
     .joinToString("") { "%02x".format(it.toInt() and 255) }
   private fun uuid(value: String): String { require(UUID.fromString(value).toString() == value); return value }
@@ -46,14 +48,15 @@ internal class NativeControlProtocol(
       val bytes = body.toString().toByteArray(Charsets.UTF_8)
       connection.setFixedLengthStreamingMode(bytes.size)
       connection.outputStream.use { it.write(bytes) }
-      check(connection.responseCode == 200)
+      if (connection.responseCode != 200) throw NativeControlRejected(connection.responseCode)
       val response = connection.inputStream.use { stream ->
         val output = java.io.ByteArrayOutputStream()
         val buffer = ByteArray(1024)
         while (true) {
           val size = stream.read(buffer)
           if (size < 0) break
-          check(output.size() + size <= 8192 && SystemClock.elapsedRealtime() < deadline)
+          val limit = if (mode == "reminder") 65536 else 8192
+          check(output.size() + size <= limit && SystemClock.elapsedRealtime() < deadline)
           output.write(buffer, 0, size)
         }
         JSONObject(output.toString("UTF-8"))
@@ -75,7 +78,7 @@ internal class NativeControlProtocol(
     val extra = when (purpose) {
       "assistant_${mode}_authorize" -> emptySet()
       "assistant_${mode}_claim" -> setOf("permit_hash")
-      "assistant_${mode}_receipt" -> setOf("claim_id", "outcome") + if (mode == "application") emptySet() else setOf("observed_index", "max_index")
+      "assistant_${mode}_receipt" -> setOf("claim_id", "outcome") + if (mode in setOf("application", "reminder")) emptySet() else setOf("observed_index", "max_index")
       else -> throw IllegalArgumentException("Unsupported device-control purpose.")
     }
     require(fields.keys().asSequence().toSet() == base + extra)

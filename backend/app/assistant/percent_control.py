@@ -25,6 +25,7 @@ from app.core.security import Principal, digest
 from app.db.database import get_db_connection
 from app.schemas.assistant_application import ApplicationOperationRequest
 from app.schemas.assistant_operations import OperationIdentity, PercentOperationRequest
+from app.schemas.assistant_reminder import ReminderOperationRequest
 from app.services import assistant_security as security
 
 TERMINAL = frozenset(
@@ -35,6 +36,10 @@ TERMINAL = frozenset(
         "cancelled",
         "expired",
         "handoff_requested",
+        "schedule_requested",
+        "reminder_cancelled",
+        "storage_updated",
+        "saved_copy_deleted",
     }
 )
 
@@ -56,7 +61,7 @@ class PercentControl:
         view_model: type[BaseModel],
         policy_version: Callable[[], int],
     ):
-        if mode not in ("volume", "brightness", "application"):
+        if mode not in ("volume", "brightness", "application", "reminder"):
             raise ValueError("Unsupported compiled control.")
         self.mode = mode
         self.scope = "assistant:" + mode
@@ -64,16 +69,38 @@ class PercentControl:
             "volume": "media_volume.set",
             "brightness": "brightness.set_app",
             "application": "application.open",
+            "reminder": "reminder",
         }[mode]
         self.execution = {
             "volume": "android_media_volume",
             "brightness": "android_app_brightness",
             "application": "android_application_handoff",
+            "reminder": "android_owned_reminder",
         }[mode]
         self.action_model, self.view_model = (action_model, view_model)
         self.policy_version = policy_version
+        self.allowed_capabilities = frozenset(
+            {
+                "reminder.create",
+                "reminder.cancel",
+                "reminder.storage",
+                "reminder.delete_saved",
+            }
+            if mode == "reminder"
+            else {self.capability}
+        )
         self.argument_columns = (
-            ("application_id", "package_id") if mode == "application" else ("percent",)
+            (
+                "capability_id",
+                "commitment",
+                "reminder_id",
+                "storage_mode",
+                "settings_revision",
+            )
+            if mode == "reminder"
+            else ("application_id", "package_id")
+            if mode == "application"
+            else ("percent",)
         )
 
     def create_session(self, session):
@@ -222,6 +249,12 @@ class PercentControl:
             }
         )
 
+    def _check_new_request(self, conn, authority, action):
+        pass
+
+    def _after_receipt(self, conn, authority, row, result):
+        pass
+
     def create_task(self, authority, payload):
         with self._transaction(authority) as conn:
             existing = conn.execute(
@@ -237,6 +270,7 @@ class PercentControl:
                         409, "Idempotency key belongs to another control request."
                     )
                 return self._view(self._task(conn, authority, existing["id"]))
+            self._check_new_request(conn, authority, payload.action)
             now = time.time()
             count = conn.execute(
                 f"SELECT COUNT(*) AS count FROM assistant_{self.mode}_tasks WHERE user_id=? AND created_at>?",
@@ -272,9 +306,13 @@ class PercentControl:
             return self._view(self._task(conn, authority, task_id))
 
     def create_operation(
-        self, authority, payload: PercentOperationRequest | ApplicationOperationRequest
+        self,
+        authority,
+        payload: PercentOperationRequest
+        | ApplicationOperationRequest
+        | ReminderOperationRequest,
     ):
-        if payload.action.capability_id != self.capability:
+        if payload.action.capability_id not in self.allowed_capabilities:
             raise HTTPException(422, "Operation capability does not match its scope.")
         # Reuse v1's immutable action, session isolation, atomic claim and receipts.
         # The trusted coordinator supplies a stable key instead of a fresh UUID.
@@ -503,6 +541,7 @@ class PercentControl:
                     task_id,
                 ),
             )
+            self._after_receipt(conn, authority, row, result)
             return self._view(self._task(conn, authority, task_id))
 
     def cancel(self, authority, task_id):

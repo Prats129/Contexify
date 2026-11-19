@@ -9,6 +9,13 @@ import type {
 import { volumeResult } from "./assistant_volume";
 import { brightnessResult } from "./assistant_brightness";
 import {
+  reminderDraft,
+  reminderSnapshot,
+  reminderResult,
+  reminderId,
+  savedReminderPage,
+  type ReminderDraft,
+  type ReminderKind,
   planningJson,
   planningPath,
   operationPlan,
@@ -35,6 +42,7 @@ interface Binding {
 export function createAssistantDeviceSecurity(
   getHost: () => Promise<string>,
   authHeaders: (url: string) => Promise<Record<string, string>>,
+  onAuthenticationRejected?: (authorization: string) => Promise<void>,
 ) {
   let busy = false;
   let version = 0;
@@ -96,6 +104,8 @@ export function createAssistantDeviceSecurity(
           redirect: "error",
           signal: controller.signal,
         });
+        if (response.status === 401)
+          await onAuthenticationRejected?.(authorization.Authorization);
         if (!response.ok)
           throw new Error(
             "Device security request was rejected. Sign in again or revoke the old device.",
@@ -318,7 +328,261 @@ export function createAssistantDeviceSecurity(
       controlBusy = false;
     }
   }
+  function reminderBridge() {
+    const bridge = controlBridge("volume");
+    if (
+      !bridge.reminderSupport?.() ||
+      !bridge.readReminders ||
+      !bridge.executeReminder ||
+      !bridge.listSavedReminders
+    )
+      throw new Error(
+        "Reminders require an updated compatible Android build (Android 8 or later).",
+      );
+    return bridge;
+  }
+  async function reminderRequest<T>(
+    userId: string,
+    action: (
+      bridge: ReturnType<typeof reminderBridge>,
+      binding: Binding,
+      token: string,
+    ) => Promise<unknown>,
+    decode: (value: unknown) => T,
+  ): Promise<T> {
+    const bridge = reminderBridge();
+    if (controlBusy || busy)
+      throw new Error("A device operation is already in progress.");
+    controlBusy = true;
+    const generation = version;
+    let authorization: string | undefined;
+    try {
+      const selectedHost = await host();
+      authorization = (
+        await authHeaders(
+          selectedHost + "/api/v1/assistant/security/device-session",
+        )
+      ).Authorization;
+      const selected = await readBinding(userId);
+      if (!selected)
+        throw new Error(
+          "Enable device controls for this signed-in account first.",
+        );
+      const management = await api.openSession(userId);
+      if (generation !== version)
+        throw new Error("Reminder request cancelled.");
+      const value = await action(bridge, selected, management.access_token);
+      if (
+        generation !== version ||
+        selected.host !== (await host()) ||
+        authorization !==
+          (
+            await authHeaders(
+              selectedHost + "/api/v1/assistant/security/device-session",
+            )
+          ).Authorization
+      )
+        throw new Error(
+          "Your session changed. Reminder details were discarded.",
+        );
+      return decode(value);
+    } catch (error) {
+      const code = (error as { code?: string } | null)?.code;
+      if (code === "ERR_REMINDER_AUTH" && authorization)
+        await onAuthenticationRejected?.(authorization);
+      const explanations: Record<string, string> = {
+        ERR_REMINDER_DST_GAP:
+          "That clock time does not exist when daylight saving time changes. Choose another time.",
+        ERR_REMINDER_DST_OVERLAP:
+          "That clock time occurs twice. Choose First or Second occurrence for repeated hours.",
+        ERR_REMINDER_HORIZON:
+          "Choose a future time at least one minute away and within 90 days.",
+        ERR_REMINDER_UNTIL:
+          "Choose a valid repetition end date within 90 days.",
+        ERR_REMINDER_ZONE: "Choose a valid time zone, such as Asia/Kolkata.",
+        ERR_REMINDER_DATE_TIME:
+          "Enter a real date as YYYY-MM-DD and time as HH:mm.",
+        ERR_REMINDER_TITLE:
+          "Use a title of 1-120 characters without control characters.",
+        ERR_REMINDER_REPEAT: "Review the reminder repetition and end date.",
+        ERR_REMINDER_AUTH:
+          "Your reminder session expired or was revoked. Local alerts were disabled. Sign in again.",
+        ERR_REMINDER_SERVER:
+          "The reminder server rejected the request. Refresh reminders and check storage availability before retrying.",
+      };
+      if (code && explanations[code]) throw new Error(explanations[code]);
+      throw error;
+    } finally {
+      controlBusy = false;
+    }
+  }
+  function changeReminder(
+    userId: string,
+    kind: ReminderKind,
+    payload: unknown,
+    expectedId?: string,
+  ) {
+    return reminderRequest(
+      userId,
+      (bridge, selected, token) =>
+        bridge.executeReminder!(
+          selected.host,
+          userId,
+          selected.installationId,
+          token,
+          kind,
+          JSON.stringify(payload),
+        ),
+      (value) => reminderResult(value, kind, expectedId),
+    );
+  }
   const api = {
+    reminderSupported(): boolean {
+      try {
+        reminderBridge();
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    async readReminders(userId: string) {
+      return reminderRequest(
+        userId,
+        (bridge, selected, token) =>
+          bridge.readReminders!(
+            selected.host,
+            userId,
+            selected.installationId,
+            token,
+          ),
+        reminderSnapshot,
+      );
+    },
+    async createReminder(userId: string, draft: ReminderDraft) {
+      return changeReminder(userId, "create", reminderDraft(draft));
+    },
+    async cancelReminder(userId: string, id: string) {
+      return changeReminder(
+        userId,
+        "cancel",
+        { reminder_id: reminderId(id) },
+        id,
+      );
+    },
+    async setReminderStorage(
+      userId: string,
+      mode: "device_only" | "account",
+      revision: number,
+    ) {
+      if (
+        !["device_only", "account"].includes(mode) ||
+        !Number.isInteger(revision) ||
+        revision < 0 ||
+        revision > 1000000
+      )
+        throw new Error("Invalid reminder storage choice.");
+      return changeReminder(userId, "storage", { mode, revision });
+    },
+    async savedReminders(userId: string, after?: string) {
+      return reminderRequest(
+        userId,
+        (bridge, selected, token) =>
+          bridge.listSavedReminders!(
+            selected.host,
+            userId,
+            selected.installationId,
+            token,
+            after ? reminderId(after) : null,
+          ),
+        savedReminderPage,
+      );
+    },
+    async deleteSavedReminder(userId: string, id: string) {
+      return changeReminder(
+        userId,
+        "delete_saved",
+        { reminder_id: reminderId(id) },
+        id,
+      );
+    },
+    async saveReminderCopy(userId: string, id: string): Promise<void> {
+      reminderId(id);
+      await reminderRequest(
+        userId,
+        (bridge, selected, token) => {
+          if (!bridge.saveReminderCopy)
+            throw new Error("Updated reminder build required.");
+          return bridge.saveReminderCopy(
+            selected.host,
+            userId,
+            selected.installationId,
+            token,
+            id,
+          );
+        },
+        (value) => {
+          if (typeof value !== "string" || value.length > 512)
+            throw new Error("Invalid saved reminder result.");
+          let result: unknown;
+          try {
+            result = JSON.parse(value);
+          } catch {
+            throw new Error("Invalid saved reminder result.");
+          }
+          if (
+            !result ||
+            typeof result !== "object" ||
+            !("reminder_id" in result) ||
+            !("stored" in result) ||
+            result.reminder_id !== id ||
+            result.stored !== true ||
+            Object.keys(result).length !== 2
+          )
+            throw new Error("Saved reminder result changed.");
+        },
+      );
+    },
+    async requestReminderNotifications(): Promise<boolean> {
+      const bridge = reminderBridge();
+      if (!bridge.requestReminderNotifications)
+        throw new Error("Compatible reminder build required.");
+      const result = await bridge.requestReminderNotifications();
+      if (
+        !result ||
+        typeof result !== "object" ||
+        typeof (result as { granted?: unknown }).granted !== "boolean"
+      )
+        throw new Error("Invalid notification permission result.");
+      return (result as { granted: boolean }).granted;
+    },
+    async clearReminderData(): Promise<void> {
+      api.cancel();
+      if (Platform.OS !== "android") return;
+      let bridge: ReturnType<typeof deviceSecurity>;
+      try {
+        bridge = deviceSecurity();
+      } catch {
+        return;
+      }
+      await bridge.clearReminders?.();
+    },
+    async matchReminderAccount(userId: string): Promise<void> {
+      if (Platform.OS !== "android") return;
+      api.cancel();
+      const saved = await SecureStore.getItemAsync(BINDING_KEY, storageOptions);
+      let selected: Binding | null = null;
+      try {
+        selected = saved ? (JSON.parse(saved) as Binding) : null;
+      } catch {
+        /* Corrupt ownership cannot retain local reminder authority. */
+      }
+      if (
+        !selected ||
+        selected.userId !== userId ||
+        selected.host !== (await host())
+      )
+        await api.clearReminderData();
+    },
     supportsPlan,
     async executePlan(
       userId: string,
@@ -619,6 +883,13 @@ export function createAssistantDeviceSecurity(
     },
     cancel(): void {
       version++;
+      try {
+        void deviceSecurity()
+          .cancelReminders?.()
+          .catch(() => {});
+      } catch {
+        /* Compatible older binaries have no reminder state. */
+      }
       for (const request of requests) request.abort();
       try {
         void deviceSecurity()

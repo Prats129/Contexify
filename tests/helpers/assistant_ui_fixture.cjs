@@ -5,7 +5,7 @@ const vm = require("node:vm");
 const ts = require("../../frontend/node_modules/typescript");
 const { createTypeScriptLoader } = require("./typescript_modules.cjs");
 
-function assistantUI(platform, props) {
+function assistantUI(platform, props, component = "AssistantPreview") {
   const slots = [],
     events = new Map();
   let frame = slots;
@@ -95,9 +95,11 @@ function assistantUI(platform, props) {
     removeEventListener: document.removeEventListener,
   };
   const filename =
-    platform === "android"
-      ? "mobile/src/components/AssistantPreview.tsx"
-      : "frontend/src/components/Modals/AssistantPreview.tsx";
+    component === "ReminderManager"
+      ? "mobile/src/components/ReminderManager.tsx"
+      : platform === "android"
+        ? "mobile/src/components/AssistantPreview.tsx"
+        : "frontend/src/components/Modals/AssistantPreview.tsx";
   const source = fs
     .readFileSync(filename, "utf8")
     .replaceAll("import.meta.env.VITE_ASSISTANT_VOICE_ENABLED", '"false"');
@@ -118,6 +120,8 @@ function assistantUI(platform, props) {
     document,
     window,
     require(name) {
+      if (name === "./ReminderManager")
+        return { ReminderManager: () => jsx("ReminderManager", {}) };
       if (name === "./ClarificationForm") {
         const filename =
           platform === "android"
@@ -190,7 +194,7 @@ function assistantUI(platform, props) {
       index = 0;
       dirty = false;
       effects = [];
-      tree = exports.AssistantPreview(props);
+      tree = exports[component](props);
       effects.forEach((run) => run());
       if (!dirty) return tree;
     }

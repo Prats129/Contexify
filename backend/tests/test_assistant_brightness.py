@@ -368,7 +368,7 @@ class AssistantBrightnessTests(bootstrap.AssistantSecurityFixture):
                 conn.execute(
                     "SELECT MAX(version) AS version FROM assistant_schema_versions"
                 ).fetchone()["version"],
-                6,
+                7,
             )
         response = self.create()
         self.assertEqual(response.headers["cache-control"], "no-store")

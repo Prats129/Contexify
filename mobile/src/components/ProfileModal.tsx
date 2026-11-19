@@ -29,6 +29,7 @@ import {
   PasswordStrengthMeter,
   checkPasswordStrength,
 } from "./PasswordStrengthMeter";
+import { ReminderManager } from "./ReminderManager";
 import type { User } from "../types";
 
 interface ProfileModalProps {
@@ -56,6 +57,10 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   onLogout,
   theme,
 }) => {
+  const [remindersOpen, setRemindersOpen] = useState(false);
+  useEffect(() => {
+    if (!visible || !currentUser) setRemindersOpen(false);
+  }, [visible, currentUser?.id]);
   // Display name state
   const [displayName, setDisplayName] = useState("");
   const [isUpdatingName, setIsUpdatingName] = useState(false);
@@ -405,6 +410,16 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
     );
   };
 
+  if (remindersOpen && visible)
+    return (
+      <ReminderManager
+        key={currentUser.id}
+        userId={currentUser.id}
+        controls={apiService.assistantSecurity}
+        theme={theme}
+        onClose={() => setRemindersOpen(false)}
+      />
+    );
   return (
     <Modal
       visible={visible}
@@ -491,6 +506,23 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
             keyboardShouldPersistTaps="handled"
             nestedScrollEnabled={true}
           >
+            {Platform.OS === "android" &&
+              process.env.EXPO_PUBLIC_ASSISTANT_EXECUTION_ENABLED === "true" &&
+              process.env.EXPO_PUBLIC_ASSISTANT_NATIVE_TEST !== "true" && (
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  onPress={() => setRemindersOpen(true)}
+                  style={{
+                    minHeight: 44,
+                    padding: 12,
+                    justifyContent: "center",
+                  }}
+                >
+                  <Text style={{ color: theme.textMain, fontWeight: "600" }}>
+                    Reminders and privacy settings
+                  </Text>
+                </TouchableOpacity>
+              )}
             {/* User Hero Badge with Profile Photo Upload */}
             <View
               style={[

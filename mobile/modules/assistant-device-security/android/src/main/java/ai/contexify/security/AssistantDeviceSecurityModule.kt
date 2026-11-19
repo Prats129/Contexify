@@ -50,6 +50,25 @@ class AssistantDeviceSecurityModule : Module() {
       require(marker(installation).isFile && marker(installation).readText(Charsets.UTF_8) == binding(origin, user))
     }, ::publicKey, ::sign, controlRunning)
   }
+  private val reminders by lazy {
+    ReminderController(::context, { appContext.currentActivity }, { origin, user, installation ->
+      require(marker(installation).isFile && marker(installation).readText(Charsets.UTF_8) == binding(origin, user))
+    }, ::binding, ::publicKey, ::sign, controlRunning)
+  }
+  private fun reminderWork(promise: Promise, action: (Long) -> String) {
+    check(!planRunning.get())
+    val ticket = reminders.begin()
+    kotlin.concurrent.thread(name = "AssistantReminder", isDaemon = true) {
+      try { promise.resolve(action(ticket)) }
+      catch (error: ReminderInputException) { promise.reject("ERR_REMINDER_" + error.reason.uppercase(), "Review the reminder date, time, time zone or repetition.", null) }
+      catch (error: NativeControlRejected) {
+        if (error.status == 401) runCatching { reminders.clear() }
+        promise.reject(if (error.status == 401) "ERR_REMINDER_AUTH" else "ERR_REMINDER_SERVER", "Reminder authority or storage is unavailable. No automatic retry is allowed.", null)
+      }
+      catch (_: Exception) { promise.reject("ERR_REMINDER", "Reminder operation is unavailable. Check saved reminders before trying again.", null) }
+      finally { reminders.end() }
+    }
+  }
   private val keyStore: KeyStore get() = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
   private fun context(): Context = requireNotNull(appContext.reactContext)
   private fun unlocked() {
@@ -99,6 +118,7 @@ class AssistantDeviceSecurityModule : Module() {
     volume.cancel()
     brightness.cancel()
     application.cancel()
+    reminders.cancel()
     brightnessEffect.restore()
     approvals.clear()
     cancelConfirmation?.invoke()
@@ -132,6 +152,32 @@ class AssistantDeviceSecurityModule : Module() {
     Name("AssistantDeviceSecurity")
     // Compiled support only: no package query, permission or authority is granted.
     Function("operationCapabilitiesV2") { listOf("media_volume.set", "brightness.set_app", "application.open") }
+    Function("reminderSupport") { Build.VERSION.SDK_INT >= 26 }
+    AsyncFunction("readReminders") { origin: String, user: String, installation: String, management: String, promise: Promise ->
+      reminderWork(promise) { reminders.read(origin, user, installation, management, it) }
+    }.runOnQueue(Queues.MAIN)
+    AsyncFunction("executeReminder") { origin: String, user: String, installation: String, management: String, kind: String, encoded: String, promise: Promise ->
+      reminderWork(promise) { reminders.execute(origin, user, installation, management, kind, encoded, it) }
+    }.runOnQueue(Queues.MAIN)
+    AsyncFunction("listSavedReminders") { origin: String, user: String, installation: String, management: String, after: String?, promise: Promise ->
+      reminderWork(promise) { reminders.saved(origin, user, installation, management, after, it) }
+    }.runOnQueue(Queues.MAIN)
+    AsyncFunction("saveReminderCopy") { origin: String, user: String, installation: String, management: String, id: String, promise: Promise ->
+      reminderWork(promise) { reminders.saveCopy(origin, user, installation, management, id, it) }
+    }.runOnQueue(Queues.MAIN)
+    AsyncFunction("cancelReminders") { reminders.cancel() }.runOnQueue(Queues.MAIN)
+    AsyncFunction("clearReminders") { reminders.clear() }
+    AsyncFunction("requestReminderNotifications") { promise: Promise ->
+      unlocked(); ExecutionGate.requireEnabled(context()); check(Build.VERSION.SDK_INT >= 26)
+      ReminderAlarms.channel(context())
+      if (Build.VERSION.SDK_INT >= 33)
+        expo.modules.interfaces.permissions.Permissions.askForPermissionsWithPermissionsManager(appContext.permissions, promise, android.Manifest.permission.POST_NOTIFICATIONS)
+      else promise.resolve(mapOf("granted" to true))
+    }.runOnQueue(Queues.MAIN)
+    OnActivityEntersForeground {
+      // Restore only immutable, previously approved occurrences. No new command or cloud processing.
+      kotlin.concurrent.thread(name = "ReminderReconcile", isDaemon = true) { runCatching { ReminderAlarms.reconcile(context()) } }
+    }
     // Separate from signing/enrollment. This method cannot authorize or dispatch actions.
     AsyncFunction("deviceControlReadiness") {
       DeviceControlReadiness.inspect(context(), appContext.currentActivity)
@@ -146,7 +192,7 @@ class AssistantDeviceSecurityModule : Module() {
         catch (_: Exception) { promise.reject("ERR_VOLUME", "Volume control is unavailable. Check media volume before trying again.", null) }
       }
     }.runOnQueue(Queues.MAIN)
-    AsyncFunction("cancelVolume") { planGeneration.incrementAndGet(); volume.cancel(); if (planRunning.get()) { brightness.cancel(); application.cancel() } }.runOnQueue(Queues.MAIN)
+    AsyncFunction("cancelVolume") { planGeneration.incrementAndGet(); volume.cancel(); if (planRunning.get()) { brightness.cancel(); application.cancel() }; reminders.cancel() }.runOnQueue(Queues.MAIN)
     AsyncFunction("readVolumeContext") { origin: String, user: String, installation: String ->
       check(!planRunning.get())
       volume.readVolumeContext(origin, user, installation)
@@ -167,7 +213,7 @@ class AssistantDeviceSecurityModule : Module() {
         catch (_: Exception) { promise.reject("ERR_BRIGHTNESS", "App brightness is unavailable. Review the app window before trying again.", null) }
       }
     }.runOnQueue(Queues.MAIN)
-    AsyncFunction("cancelBrightness") { planGeneration.incrementAndGet(); brightness.cancel(); if (planRunning.get()) { volume.cancel(); application.cancel() } }.runOnQueue(Queues.MAIN)
+    AsyncFunction("cancelBrightness") { planGeneration.incrementAndGet(); brightness.cancel(); if (planRunning.get()) { volume.cancel(); application.cancel() }; reminders.cancel() }.runOnQueue(Queues.MAIN)
 
     AsyncFunction("executePlanV2") { origin: String, user: String, installation: String, management: String, encoded: String, promise: Promise ->
       unlocked()
@@ -387,6 +433,7 @@ class AssistantDeviceSecurityModule : Module() {
 
     AsyncFunction("deleteKey") { installation: String ->
       resetSimulation()
+      reminders.clear()
       keyStore.deleteEntry(alias(installation))
       marker(installation).delete()
       volume.forget(installation)

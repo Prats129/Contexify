@@ -3,9 +3,29 @@ import type {
   OperationPlan,
   OperationResult,
   PlanningAccess,
+  ReminderDraft,
+  ReminderSnapshot,
+  ReminderResult,
+  ReminderCopyPage,
 } from "@contexify/assistant-core";
 
 export interface DeviceControls {
+  reminderSupported?(): boolean;
+  readReminders?(userId: string): Promise<ReminderSnapshot>;
+  createReminder?(
+    userId: string,
+    draft: ReminderDraft,
+  ): Promise<ReminderResult>;
+  cancelReminder?(userId: string, id: string): Promise<ReminderResult>;
+  setReminderStorage?(
+    userId: string,
+    mode: "device_only" | "account",
+    revision: number,
+  ): Promise<ReminderResult>;
+  savedReminders?(userId: string, after?: string): Promise<ReminderCopyPage>;
+  deleteSavedReminder?(userId: string, id: string): Promise<ReminderResult>;
+  saveReminderCopy?(userId: string, id: string): Promise<void>;
+  requestReminderNotifications?(): Promise<boolean>;
   supportsPlan?(plan: OperationPlan): boolean;
   executePlan?(userId: string, plan: OperationPlan): Promise<OperationResult>;
   reconcilePlans?(userId: string): Promise<OperationResult[]>;

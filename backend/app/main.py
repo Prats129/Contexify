@@ -19,6 +19,7 @@ from app.api.v1.endpoints import (
     assistant_application,
     assistant_brightness,
     assistant_planning,
+    assistant_reminder,
     assistant_security,
     assistant_volume,
     chat,
@@ -123,6 +124,11 @@ app.include_router(
     assistant.router,
     prefix=f"{settings.API_V1_STR}/assistant",
     tags=["Assistant simulation"],
+)
+app.include_router(
+    assistant_reminder.router,
+    prefix=f"{settings.API_V1_STR}/assistant/reminder",
+    tags=["Assistant reminders"],
 )
 app.include_router(
     assistant_application.router,
