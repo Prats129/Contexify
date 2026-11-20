@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import {
   createCommandSession,
-  createCommandPlanner,
+  createPublicAssistantPlanner,
+  PlanningError,
   companionFeatures,
   type CommandSessionState,
   type PlanningAccess,
@@ -32,8 +33,13 @@ export function AssistantPreview({
       ),
       "web",
       planningAccess && planningUserId
-        ? createCommandPlanner((signal) =>
-            planningAccess.planningContext(planningUserId, signal),
+        ? createPublicAssistantPlanner(
+            (signal) => planningAccess.planningContext(planningUserId, signal),
+            () => {
+              throw new PlanningError(
+                "Calls and messages require a supported native app. No phone action was performed.",
+              );
+            },
           )
         : undefined,
     );

@@ -951,3 +951,23 @@ export type AlarmTaskView = {
     | "expired";
   result?: ApplicationEvidence | null;
 };
+
+export type CommunicationPlanningResponse = {
+  plan_id: string;
+  revision?: 1;
+  owner_user_id: string;
+  owner_device_id: string | null;
+  expires_at: number;
+  execution?: "not_authorized";
+  proposal: CommunicationProposal | PlanningFeedback;
+};
+
+export type CommunicationProposal = {
+  protocol_version?: 1;
+  mode?: "proposal";
+  status: "communication_proposed";
+  capability_id?: "communication.compose";
+  request_kind: "dial" | "sms";
+  recipient?: "local_picker";
+  message?: string | null;
+};

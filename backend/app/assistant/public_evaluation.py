@@ -14,6 +14,7 @@ import sys
 import time
 from collections.abc import Callable
 from contextlib import closing
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -23,6 +24,7 @@ from fastapi import HTTPException
 from app.assistant.planning_provider import (
     APPROVED_MODELS,
     MODEL,
+    CommunicationPlanningInput,
     GeminiPlanningProvider,
     PlanningInput,
     PlanningModel,
@@ -312,8 +314,10 @@ class PublicEvaluationProvider(GeminiPlanningProvider):
         flash_lite_evaluation: bool = False,
     ):
         self.cases = public_cases()
+        from app.assistant.communication_evaluation import COMMUNICATION_CASES
+
         super().__init__(
-            approved_cases=self.cases,
+            approved_cases={**self.cases, **COMMUNICATION_CASES},
             api_key=api_key,
             client_factory=self._make_client,
             model=model,
@@ -333,7 +337,21 @@ class PublicEvaluationProvider(GeminiPlanningProvider):
         self.http: httpx.AsyncClient | None = None
 
     def _approved(self, value: PlanningInput) -> PlanningInput:
+        if isinstance(value, CommunicationPlanningInput):
+            from app.assistant.communication_evaluation import (
+                approved_communication_input,
+            )
+
+            try:
+                text, case_id = approved_communication_input(
+                    value.text, value.synthetic_case_id
+                )
+            except ValueError:
+                raise ProviderDataScopeError() from None
+            return replace(value, text=text, synthetic_case_id=case_id)
         if value.synthetic_case_id is not None:
+            if value.synthetic_case_id not in self.cases:
+                raise ProviderDataScopeError()
             return value
         # Only case, whitespace and one sentence-ending period may vary.
         # Always send the reviewed canonical text, never arbitrary original text.
@@ -428,6 +446,10 @@ async def smoke(
                 authorize_attempt=admit,
                 disconnected=connected,
             )
+            if value.status == "communication_proposed":
+                raise RuntimeError(
+                    "Unexpected communications output in settings evaluation."
+                )
             passed = (
                 (
                     value.status == "proposed"

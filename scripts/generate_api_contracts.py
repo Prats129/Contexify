@@ -22,6 +22,7 @@ from app.schemas import (  # noqa: E402
     assistant_alarm,
     assistant_application,
     assistant_brightness,
+    assistant_communication,
     assistant_operations,
     assistant_planning,
     assistant_reminder,
@@ -35,6 +36,8 @@ from app.schemas import (  # noqa: E402
 )
 
 MODELS = (
+    assistant_communication.CommunicationProposal,
+    assistant_communication.CommunicationPlanningResponse,
     assistant_alarm.AlarmOperationRequest,
     assistant_alarm.AlarmSessionResponse,
     assistant_alarm.AlarmTaskView,
@@ -244,6 +247,7 @@ def main() -> int:
             in (
                 "app.schemas.assistant",
                 "app.schemas.assistant_planning",
+                "app.schemas.assistant_communication",
                 "app.schemas.assistant_reminder",
             )
         )

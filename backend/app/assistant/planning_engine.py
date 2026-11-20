@@ -11,12 +11,17 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from app.assistant.planning_provider import (
+    CommunicationPlanningInput,
     PlanningInput,
     PlanningProvider,
     ProviderDataScopeError,
     ProviderIncompleteOutput,
     ProviderQuotaExceeded,
     ProviderUnavailable,
+)
+from app.schemas.assistant_communication import (
+    COMMUNICATION_PROPOSAL_ADAPTER,
+    CommunicationProposal,
 )
 from app.schemas.assistant_planning import (
     PROPOSAL_ADAPTER,
@@ -39,7 +44,9 @@ def _pairs(values):
     return result
 
 
-def parse_proposal(text: str) -> PlanningActions | PlanningFeedback:
+def parse_proposal(
+    text: str, *, communications: bool = False
+) -> PlanningActions | PlanningFeedback | CommunicationProposal:
     try:
         if not isinstance(text, str) or len(text.encode("utf-8")) > 8192:
             raise InvalidProposal(False)
@@ -51,7 +58,8 @@ def parse_proposal(text: str) -> PlanningActions | PlanningFeedback:
     except (ValueError, RecursionError, UnicodeError):
         raise InvalidProposal(True) from None
     try:
-        return PROPOSAL_ADAPTER.validate_python(value)
+        adapter = COMMUNICATION_PROPOSAL_ADAPTER if communications else PROPOSAL_ADAPTER
+        return adapter.validate_python(value)
     except ValidationError as error:
         # Never repair an authority injection, invalid capability, policy value or DAG.
         fatal = {"extra_forbidden", "union_tag_invalid", "literal_error", "value_error"}
@@ -93,7 +101,7 @@ class PlanningEngine:
         *,
         authorize_attempt: Callable[[], Awaitable[None]],
         disconnected: Callable[[], Awaitable[bool]],
-    ) -> PlanningActions | PlanningFeedback:
+    ) -> PlanningActions | PlanningFeedback | CommunicationProposal:
         provider = self.provider
         if provider is None:
             raise HTTPException(503, "No live planning provider is enabled.")
@@ -123,7 +131,10 @@ class PlanningEngine:
                     output = await provider.propose(
                         value, repair=bool(attempt), timeout=remaining
                     )
-                    return parse_proposal(output)
+                    return parse_proposal(
+                        output,
+                        communications=isinstance(value, CommunicationPlanningInput),
+                    )
                 except InvalidProposal as error:
                     if not error.repairable or attempt:
                         raise HTTPException(

@@ -19,7 +19,7 @@ def inspect(host: str, check_live_key: bool = False):
         raise RuntimeError(
             "Run APK inspection without Python optimization; all assertions must be enabled."
         )
-    apk = TOOLS / "Contexify-Assistant-M5-Alarms-Test-1.4.3-6.apk"
+    apk = TOOLS / "Contexify-Assistant-M7-Communications-Test-1.4.3-7.apk"
     sdk = TOOLS / "sdk/build-tools/37.0.0"
     java = next((TOOLS / "jdk").glob("*/bin/java.exe"))
 
@@ -35,8 +35,8 @@ def inspect(host: str, check_live_key: bool = False):
     assert dump("packagename").strip() == "ai.contexify.app.assistantvolumetest"
     badging = dump("badging")
     assert (
-        "versionName='1.4.3-assistant-test6'" in badging
-        and "versionCode='6'" in badging
+        "versionName='1.4.3-assistant-test7'" in badging
+        and "versionCode='7'" in badging
         and "application-label:'Contexify Volume Test'" in badging
     )
     permissions = set(
@@ -167,6 +167,14 @@ def inspect(host: str, check_live_key: bool = False):
             b"Review alarm request",
         ):
             assert marker in bundle, "Missing reviewed Clock handoff integration."
+        for marker in (
+            b"Calls and messages",
+            b"Send public command",
+            b"/communication-proposals",
+            b"local_picker",
+            b"openPlannedCommunication",
+        ):
+            assert marker in bundle, "Missing M7 AI/composer client integration."
         assert not any(
             "test-account.json" in name
             or "server.key" in name
@@ -188,6 +196,16 @@ def inspect(host: str, check_live_key: bool = False):
             for name in names
             if re.fullmatch(r"classes\d*\.dex", name)
         ]
+        for marker in (
+            b"AssistantPlatformModule",
+            b"pickPhoneNumber",
+            b"openCommunication",
+            b"openPlannedCommunication",
+            b"cancelCommunicationRequest",
+        ):
+            assert any(marker in data for data in dex), (
+                "Missing M7 native composer code."
+            )
         for marker in (
             b"executeVolume",
             b"cancelVolume",
@@ -290,8 +308,8 @@ def inspect(host: str, check_live_key: bool = False):
         sha = hashlib.file_digest(handle, "sha256").hexdigest()
     report = {
         "package": "ai.contexify.app.assistantvolumetest",
-        "version": "1.4.3-assistant-test6",
-        "version_code": 6,
+        "version": "1.4.3-assistant-test7",
+        "version_code": 7,
         "sha256": sha,
         "apk_bytes": apk.stat().st_size,
         "signature_verified": True,
@@ -309,6 +327,8 @@ def inspect(host: str, check_live_key: bool = False):
         "m5_client_integration": True,
         "native_reminder_code": True,
         "reminder_client_integration": True,
+        "native_m7_code": True,
+        "m7_ai_client_integration": True,
         "reminder_receivers_not_exported": True,
         "exact_alarm_permissions_absent": True,
         "gemini_key_bundled": False if check_live_key else "not_checked",

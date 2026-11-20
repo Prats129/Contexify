@@ -109,13 +109,16 @@ PROPOSAL_ADAPTER: TypeAdapter[PlanningActions | PlanningFeedback] = TypeAdapter(
 )
 
 
-class PlanningResponse(SecurityModel):
+class PlanningResponseEnvelope(SecurityModel):
     plan_id: Identifier
     revision: VersionOne = 1
     owner_user_id: str
     owner_device_id: str | None
     expires_at: float
     execution: Literal["not_authorized"] = "not_authorized"
+
+
+class PlanningResponse(PlanningResponseEnvelope):
     proposal: PlanningProposal
 
 

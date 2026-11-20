@@ -1,4 +1,5 @@
 {
-  "platforms": ["apple"],
-  "apple": { "modules": ["AssistantPlatformModule"] }
+  "platforms": ["apple", "android"],
+  "apple": { "modules": ["AssistantPlatformModule"] },
+  "android": { "modules": ["ai.contexify.platform.AssistantPlatformModule"] }
 }

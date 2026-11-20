@@ -113,6 +113,7 @@ function assistantUI(
     "AlarmManager",
     "AppleAssistantTools",
     "AppleAlarmManager",
+    "CommunicationManager",
   ].includes(component)
     ? `mobile/src/components/${component}.tsx`
     : platform === "android" || platform === "ios"
@@ -140,6 +141,10 @@ function assistantUI(
     require(name) {
       if (name === "./AppleAssistantTools")
         return { AppleAssistantTools: () => jsx("AppleAssistantTools", {}) };
+      if (name === "./CommunicationManager")
+        return {
+          CommunicationManager: (props) => jsx("CommunicationManager", props),
+        };
       if (name === "./AppleAlarmManager")
         return { AppleAlarmManager: () => jsx("AppleAlarmManager", {}) };
       if (name === "./AlarmManager")
@@ -203,6 +208,8 @@ function assistantUI(
       if (name.endsWith("/assistant_volume"))
         return load("mobile/src/services/assistant_volume.ts");
       if (name.endsWith("/assistant_platform")) return ports.apple;
+      if (name.endsWith("/assistant_communications"))
+        return ports.communications;
       if (name.endsWith("/assistant_brightness"))
         return load("mobile/src/services/assistant_brightness.ts");
       if (name.endsWith("/assistant_device_readiness"))

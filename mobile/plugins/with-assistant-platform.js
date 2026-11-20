@@ -34,6 +34,24 @@ module.exports = function withAssistantPlatform(
   if (typeof enabled !== "boolean" || typeof voiceEnabled !== "boolean")
     throw new Error("Assistant platform build options must be booleans.");
   config = withInfoPlist(config, (mod) => {
+    // canOpenURL requires an explicit scheme query. Preserve queries owned by the app.
+    const phoneQueryMarker = "ContexifyAssistantOwnsPhoneQuery";
+    const queries = mod.modResults.LSApplicationQueriesSchemes ?? [];
+    if (
+      !Array.isArray(queries) ||
+      queries.some((query) => typeof query !== "string")
+    )
+      throw new Error("iOS URL query schemes must be strings.");
+    if (enabled && !queries.includes("tel")) {
+      mod.modResults.LSApplicationQueriesSchemes = [...queries, "tel"];
+      mod.modResults[phoneQueryMarker] = true;
+    } else if (!enabled && mod.modResults[phoneQueryMarker] === true) {
+      const remaining = queries.filter((query) => query !== "tel");
+      if (remaining.length)
+        mod.modResults.LSApplicationQueriesSchemes = remaining;
+      else delete mod.modResults.LSApplicationQueriesSchemes;
+      delete mod.modResults[phoneQueryMarker];
+    }
     mod.modResults.ContexifyAssistantExtensionsEnabled = enabled;
     mod.modResults.ContexifyAssistantVoiceEnabled = voiceEnabled;
     mod.modResults.ContexifyAssistantCountdownWidget = enabled;

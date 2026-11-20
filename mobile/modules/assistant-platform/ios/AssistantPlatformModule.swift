@@ -3,6 +3,7 @@ import AppIntents
 import EventKit
 import EventKitUI
 import UIKit
+import MessageUI
 
 // An entry request carries no command, private data or authority. Main queue only.
 public enum AssistantEntry {
@@ -45,6 +46,7 @@ private final class CalendarEditor: NSObject, EKEventEditViewDelegate {
   private var editor: EKEventEditViewController?
   private var pending: Promise?
   private var requestId: String?
+  var active: Bool { pending != nil }
   func open(_ presenter: UIViewController, id: String, promise: Promise) {
     guard editor == nil, !id.isEmpty, id.utf8.count <= 128 else {
       promise.reject("ERR_EDITOR_BUSY", "An editor is already open or unavailable."); return
@@ -90,23 +92,37 @@ private final class CalendarEditor: NSObject, EKEventEditViewDelegate {
 
 public final class AssistantPlatformModule: Module {
   private let calendar = CalendarEditor()
+  private let communications = CommunicationEditor()
   private var observer: NSObjectProtocol?
+  private var inactiveObserver: NSObjectProtocol?
   private func foreground() -> Bool {
     UIApplication.shared.applicationState == .active && UIApplication.shared.isProtectedDataAvailable
+  }
+  private func presenter() -> UIViewController? {
+    guard foreground(), AssistantEntry.enabled, !calendar.active, !communications.active,
+      let scene = UIApplication.shared.connectedScenes.first(where: { $0.activationState == .foregroundActive }) as? UIWindowScene,
+      var presenter = scene.windows.first(where: { $0.isKeyWindow })?.rootViewController else { return nil }
+    while let presented = presenter.presentedViewController { presenter = presented }
+    return !(presenter is UIAlertController) && !presenter.isBeingDismissed && presenter.viewIfLoaded?.window != nil ? presenter : nil
   }
   public func definition() -> ModuleDefinition {
     Name("AssistantPlatform")
     Events("onAssistantEntry")
     OnCreate {
+      self.inactiveObserver = NotificationCenter.default.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+        self?.communications.resignActive()
+      }
       self.observer = NotificationCenter.default.addObserver(forName: AssistantEntry.notification, object: nil, queue: .main) { [weak self] _ in
         self?.sendEvent("onAssistantEntry")
       }
     }
-    OnAppEntersBackground { DispatchQueue.main.async { self.calendar.cancel() } }
+    OnAppEntersBackground { DispatchQueue.main.async { self.calendar.cancel(); self.communications.cancel() } }
     OnDestroy {
       if let observer = self.observer { NotificationCenter.default.removeObserver(observer) }
       self.observer = nil
-      DispatchQueue.main.async { self.calendar.cancel() }
+      if let inactiveObserver = self.inactiveObserver { NotificationCenter.default.removeObserver(inactiveObserver) }
+      self.inactiveObserver = nil
+      DispatchQueue.main.async { self.calendar.cancel(); self.communications.cancel() }
     }
     AsyncFunction("support") { () -> [String: Bool] in
       if #available(iOS 17.0, *) {
@@ -119,7 +135,7 @@ public final class AssistantPlatformModule: Module {
       return AssistantEntry.consume()
     }.runOnQueue(.main)
     AsyncFunction("editCalendarEvent") { (id: String, promise: Promise) in
-      guard #available(iOS 17.0, *), AssistantEntry.enabled, self.foreground(),
+      guard #available(iOS 17.0, *), !self.communications.active, AssistantEntry.enabled, self.foreground(),
             let scene = UIApplication.shared.connectedScenes.first(where: { $0.activationState == .foregroundActive }) as? UIWindowScene,
             var presenter = scene.windows.first(where: { $0.isKeyWindow })?.rootViewController else {
         promise.reject("ERR_EDITOR_UNAVAILABLE", "Use Calendar directly on this device."); return
@@ -131,5 +147,29 @@ public final class AssistantPlatformModule: Module {
       self.calendar.open(presenter, id: id, promise: promise)
     }.runOnQueue(.main)
     AsyncFunction("cancelCalendarEditor") { (id: String) in self.calendar.cancel(id) }.runOnQueue(.main)
+    AsyncFunction("communicationSupport") { () -> [String: Bool] in
+      let enabled = AssistantEntry.enabled
+      return ["picker": enabled, "dial": enabled && UIApplication.shared.canOpenURL(URL(string: "tel:+12025550123")!),
+        "sms": enabled && MFMessageComposeViewController.canSendText()]
+    }.runOnQueue(.main)
+    AsyncFunction("pickPhoneNumber") { (id: String, promise: Promise) in
+      guard let presenter = self.presenter() else {
+        promise.reject("ERR_CONTACT_PICKER", "Contact picker unavailable. Enter a number manually."); return
+      }
+      self.communications.pick(presenter, id: id, promise: promise)
+    }.runOnQueue(.main)
+    AsyncFunction("openCommunication") { (id: String, encoded: String, promise: Promise) in
+      guard let presenter = self.presenter() else {
+        promise.reject("ERR_COMMUNICATION_UNAVAILABLE", "Phone presentation unavailable or already open."); return
+      }
+      self.communications.open(presenter, id: id, encoded: encoded, promise: promise)
+    }.runOnQueue(.main)
+    AsyncFunction("cancelCommunicationRequest") { (id: String) in self.communications.cancel(id) }.runOnQueue(.main)
+    AsyncFunction("openPlannedCommunication") { (id: String, encoded: String, expiresAt: Double, promise: Promise) in
+      guard let presenter = self.presenter() else {
+        promise.reject("ERR_COMMUNICATION_UNAVAILABLE", "Phone presentation unavailable or already open."); return
+      }
+      self.communications.open(presenter, id: id, encoded: encoded, promise: promise, expiresAt: expiresAt)
+    }.runOnQueue(.main)
   }
 }

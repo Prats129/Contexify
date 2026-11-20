@@ -12,3 +12,6 @@ export * from "./reminders";
 export * from "./alarms";
 export * from "./platform-features";
 export * from "./apple-schedules";
+export * from "./communications";
+export * from "./public-command-scope";
+export * from "./communication-planning";

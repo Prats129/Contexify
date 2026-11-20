@@ -386,3 +386,24 @@ test("shortcut build wiring targets the app, is repeatable and refuses to overwr
   f.files.set(filename, "// User code");
   assert.throws(() => f.runProject(), /manually maintained/);
 });
+
+test("phone availability query preserves existing schemes and removes only the plugin's own query when disabled", () => {
+  const enabled = pluginFixture({ enabled: true });
+  const disabled = pluginFixture({ enabled: false });
+  const info = { LSApplicationQueriesSchemes: ["existing-app"] };
+  enabled.hooks.info({ modResults: info });
+  enabled.hooks.info({ modResults: info });
+  assert.deepEqual(Array.from(info.LSApplicationQueriesSchemes), [
+    "existing-app",
+    "tel",
+  ]);
+  disabled.hooks.info({ modResults: info });
+  assert.deepEqual(Array.from(info.LSApplicationQueriesSchemes), [
+    "existing-app",
+  ]);
+  assert.equal(info.ContexifyAssistantOwnsPhoneQuery, undefined);
+  const existing = { LSApplicationQueriesSchemes: ["tel"] };
+  enabled.hooks.info({ modResults: existing });
+  disabled.hooks.info({ modResults: existing });
+  assert.deepEqual(existing.LSApplicationQueriesSchemes, ["tel"]);
+});

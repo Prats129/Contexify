@@ -1,6 +1,26 @@
 import { requireOptionalNativeModule, type EventSubscription } from "expo";
+import type { CommunicationOutcome } from "@contexify/assistant-core";
 
 export interface AssistantPlatformModule {
+  communicationSupport?(): Promise<{
+    picker: boolean;
+    dial: boolean;
+    sms: boolean;
+  }>;
+  pickPhoneNumber?(requestId: string): Promise<{
+    outcome: "selected" | "cancelled" | "outcome_unknown";
+    number: string | null;
+  }>;
+  openCommunication?(
+    requestId: string,
+    draft: string,
+  ): Promise<CommunicationOutcome>;
+  openPlannedCommunication?(
+    requestId: string,
+    draft: string,
+    expiresAt: number,
+  ): Promise<CommunicationOutcome>;
+  cancelCommunicationRequest?(requestId: string): Promise<void>;
   support(): Promise<{ calendar_editor: boolean; shortcuts: boolean }>;
   editCalendarEvent(
     requestId: string,

@@ -13,5 +13,5 @@ Pod::Spec.new do |s|
   s.dependency 'ExpoModulesCore'
   s.source_files = '**/*.swift'
   s.resource_bundles = { 'AssistantPlatformPrivacy' => ['PrivacyInfo.xcprivacy'] }
-  s.frameworks = 'AppIntents', 'EventKit', 'EventKitUI', 'UIKit'
+  s.frameworks = 'AppIntents', 'EventKit', 'EventKitUI', 'UIKit', 'ContactsUI', 'MessageUI'
 end

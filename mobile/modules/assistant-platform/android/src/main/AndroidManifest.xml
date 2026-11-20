@@ -1,0 +1,17 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!-- Discovery of only the OS contact picker and configured Phone/Messages handlers. -->
+  <queries>
+    <intent>
+      <action android:name="android.intent.action.PICK" />
+      <data android:mimeType="vnd.android.cursor.dir/phone_v2" />
+    </intent>
+    <intent>
+      <action android:name="android.intent.action.DIAL" />
+      <data android:scheme="tel" />
+    </intent>
+    <intent>
+      <action android:name="android.intent.action.SENDTO" />
+      <data android:scheme="smsto" />
+    </intent>
+  </queries>
+</manifest>

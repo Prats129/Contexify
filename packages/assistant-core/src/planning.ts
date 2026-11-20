@@ -63,10 +63,10 @@ export function planningFeedback(value: PlanningFeedback): string {
   return reasons[value.reason];
 }
 
-export function validatePlanningResponse(
+export function validatePlanningEnvelope(
   value: unknown,
   context: Pick<PlanningContext, "userId" | "deviceId">,
-): PlanningResponse {
+): Omit<PlanningResponse, "proposal"> & { proposal: unknown } {
   const row = dataRecord(
     value,
     [
@@ -103,6 +103,22 @@ export function validatePlanningResponse(
     throw new PlanningError(
       "The planning response expired or belongs to another session.",
     );
+  return {
+    plan_id: row.plan_id,
+    revision: 1,
+    owner_user_id: context.userId,
+    owner_device_id: context.deviceId,
+    expires_at: row.expires_at,
+    execution: "not_authorized",
+    proposal: row.proposal,
+  };
+}
+
+export function validatePlanningResponse(
+  value: unknown,
+  context: Pick<PlanningContext, "userId" | "deviceId">,
+): PlanningResponse {
+  const row = validatePlanningEnvelope(value, context);
   const candidate = dataRecord(
     row.proposal,
     ["protocol_version", "mode", "status", "steps", "reason"],
@@ -245,6 +261,7 @@ export function planningPath(path: string): string {
   if (
     path !== "/grants" &&
     path !== "/proposals" &&
+    path !== "/communication-proposals" &&
     !/^\/grants\/[a-f0-9-]{36}\/revoke$/.test(path)
   )
     throw new PlanningError("Invalid planning path.");
@@ -255,6 +272,18 @@ export function planningPath(path: string): string {
 export function createCommandPlanner(
   connect: (signal: AbortSignal) => Promise<PlanningContext>,
 ): CommandPlanner {
+  return createProposalPlanner(connect, "/proposals", validatePlanningResponse);
+}
+
+/** Shared grant, owner, cancellation and deadline protocol; never an effect dispatcher. */
+export function createProposalPlanner<T extends { expires_at: number }>(
+  connect: (signal: AbortSignal) => Promise<PlanningContext>,
+  path: "/proposals" | "/communication-proposals",
+  validate: (value: unknown, context: PlanningContext) => T,
+  admit: (text: string) => { text: string; synthetic_case_id?: string } = (
+    text,
+  ) => ({ text }),
+): { plan(text: string, signal: AbortSignal): Promise<T>; close(): void } {
   let cached: { context: PlanningContext; grant: PlanningGrant } | null = null;
   let active: AbortController | null = null;
   let version = 0;
@@ -269,6 +298,7 @@ export function createCommandPlanner(
         new TextEncoder().encode(text).length > 3072
       )
         throw new PlanningError("Enter a command of at most 1,024 characters.");
+      const input = admit(text); // Before connecting: rejected private text stays local.
       const current = version;
       const controller = new AbortController();
       active = controller;
@@ -344,12 +374,12 @@ export function createCommandPlanner(
         const { context, grant } = cached;
         check();
         const result = await context.request(
-          "/proposals",
-          { grant_id: grant.grant_id, text, source: "user" },
+          path,
+          { grant_id: grant.grant_id, ...input, source: "user" },
           controller.signal,
         );
         check();
-        const response = validatePlanningResponse(result, context);
+        const response = validate(result, context);
         if (response.expires_at > grant.expires_at)
           throw new PlanningError("Planning response outlived its consent.");
         return response;

@@ -14,7 +14,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   createCommandSession,
-  createCommandPlanner,
+  createPublicAssistantPlanner,
   type CommandSessionState,
   describeOperationResult,
   supportedOperationPlan,
@@ -39,6 +39,7 @@ import { AlarmManager } from "./AlarmManager";
 import { ClarificationForm } from "./ClarificationForm";
 import { AppleAssistantTools } from "./AppleAssistantTools";
 import { AppleAlarmManager } from "./AppleAlarmManager";
+import { CommunicationManager } from "./CommunicationManager";
 
 export function AssistantPreview({
   theme,
@@ -60,6 +61,19 @@ export function AssistantPreview({
   const [alarmsOpen, setAlarmsOpen] = useState(false);
   const [appleToolsOpen, setAppleToolsOpen] = useState(false);
   const [appleAlarmsOpen, setAppleAlarmsOpen] = useState(false);
+  const [communicationsOpen, setCommunicationsOpen] = useState(false);
+  const [initialCommunicationRequest, setInitialCommunicationRequest] =
+    useState<{
+      text: string;
+      consent: true;
+      createdAt: number;
+      ownerUserId: string;
+    } | null>(null);
+  const planningAllowed =
+    Boolean(volumeUserId && volumeControls?.planningContext) &&
+    (Platform.OS === "android" || Platform.OS === "ios") &&
+    process.env.EXPO_PUBLIC_ASSISTANT_EXECUTION_ENABLED === "true" &&
+    process.env.EXPO_PUBLIC_ASSISTANT_NATIVE_TEST !== "true";
   const sessionRef = useRef<ReturnType<typeof createCommandSession> | null>(
     null,
   );
@@ -297,11 +311,19 @@ export function AssistantPreview({
           process.env.EXPO_PUBLIC_ASSISTANT_VOICE_ENABLED === "true",
       ),
       platform,
-      volumeUserId &&
-        volumeControls?.planningContext &&
-        Platform.OS === "android"
-        ? createCommandPlanner((signal) =>
-            volumeControls.planningContext!(volumeUserId, signal),
+      volumeUserId && volumeControls?.planningContext && planningAllowed
+        ? createPublicAssistantPlanner(
+            (signal) => volumeControls.planningContext!(volumeUserId, signal),
+            (text) => {
+              sessionRef.current?.clear();
+              setInitialCommunicationRequest({
+                text,
+                consent: true,
+                createdAt: Date.now(),
+                ownerUserId: volumeUserId,
+              });
+              setCommunicationsOpen(true);
+            },
           )
         : undefined,
       volumeUserId && volumeControls?.readVolumeContext
@@ -324,7 +346,7 @@ export function AssistantPreview({
       session.dispose();
       sessionRef.current = null;
     };
-  }, [voiceAllowed, volumeUserId, volumeControls]);
+  }, [voiceAllowed, volumeUserId, volumeControls, planningAllowed]);
   const capturing = state?.phase === "starting" || state?.phase === "listening";
   const busy = state?.phase !== "idle" || controlBusy;
   function button(label: string, action: () => void, disabled = false) {
@@ -350,6 +372,24 @@ export function AssistantPreview({
       </TouchableOpacity>
     );
   }
+  if (communicationsOpen && volumeUserId)
+    return (
+      <CommunicationManager
+        key={volumeUserId}
+        userId={volumeUserId}
+        theme={theme}
+        initialRequest={initialCommunicationRequest}
+        planningConnect={
+          planningAllowed && volumeUserId && volumeControls?.planningContext
+            ? (signal) => volumeControls.planningContext!(volumeUserId, signal)
+            : undefined
+        }
+        onClose={() => {
+          setInitialCommunicationRequest(null);
+          setCommunicationsOpen(false);
+        }}
+      />
+    );
   if (appleAlarmsOpen && volumeControls && volumeUserId)
     return (
       <AppleAlarmManager
@@ -574,7 +614,7 @@ export function AssistantPreview({
             )}
             {volumeUserId &&
               volumeControls?.planningContext &&
-              Platform.OS === "android" && (
+              planningAllowed && (
                 <TouchableOpacity
                   accessibilityRole="checkbox"
                   accessibilityState={{
@@ -596,10 +636,12 @@ export function AssistantPreview({
                   </Text>
                   <Text style={{ color: theme.textMuted, fontSize: 12 }}>
                     Currently limited to approved public test commands. Do not
-                    enter personal information. Enroll this device first. A
-                    supported plan opens Android confirmations. App opening must
-                    be the final action and needs a compatible Android build.
-                    Voice transcripts are submitted after you finish speaking.
+                    enter personal information. Enroll this device first.
+                    Supported phone/message examples open local recipient
+                    selection and native review. Android setting plans open
+                    Android confirmations. App opening must be the final action
+                    and needs a compatible Android build. Voice transcripts are
+                    submitted after you finish speaking.
                   </Text>
                 </TouchableOpacity>
               )}
@@ -633,6 +675,18 @@ export function AssistantPreview({
                 )}
               </View>
             ))}
+            {volumeUserId &&
+              process.env.EXPO_PUBLIC_ASSISTANT_EXECUTION_ENABLED === "true" &&
+              process.env.EXPO_PUBLIC_ASSISTANT_NATIVE_TEST !== "true" &&
+              button(
+                "Calls and messages",
+                () => {
+                  clearCommand();
+                  setInitialCommunicationRequest(null);
+                  setCommunicationsOpen(true);
+                },
+                busy,
+              )}
             {Platform.OS === "android" && deviceChecksAllowed && (
               <View style={{ gap: 8 }}>
                 <Text style={{ color: theme.textMuted, fontSize: 12 }}>
@@ -752,8 +806,8 @@ export function AssistantPreview({
                 style={{ minHeight: 44, justifyContent: "center" }}
               >
                 <Text style={{ color: theme.textMain }}>
-                  {state.consent ? "☑" : "☐"} Allow the microphone for
-                  on-device English speech in this session.
+                  {state.consent ? "☑" : "☐"} Allow the microphone for on-device
+                  English speech in this session.
                 </Text>
               </TouchableOpacity>
             )}
