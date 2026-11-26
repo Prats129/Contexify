@@ -11,6 +11,8 @@ import shutil
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+from assistant_artifact import VERSION_CODE, VERSION_NAME
+
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = "ai.contexify.app.assistantvolumetest"
 ANDROID = "http://schemas.android.com/apk/res/android"
@@ -48,10 +50,14 @@ def prepare(host: str):
         )
     content, versions = re.subn(
         r'(?m)^(\s*)versionName "[^"]+"$',
-        r'\1versionName "1.4.3-assistant-test7"',
+        lambda match: f'{match[1]}versionName "{VERSION_NAME}"',
         content,
     )
-    content, codes = re.subn(r"(?m)^(\s*)versionCode \d+$", r"\1versionCode 7", content)
+    content, codes = re.subn(
+        r"(?m)^(\s*)versionCode \d+$",
+        lambda match: f"{match[1]}versionCode {VERSION_CODE}",
+        content,
+    )
     if versions != 1 or codes != 1:
         raise RuntimeError("Unsupported generated test version configuration.")
     if "debuggableVariants = []" not in content:

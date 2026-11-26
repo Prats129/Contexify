@@ -87,7 +87,7 @@ function assistantUI(
   };
   const load = createTypeScriptLoader();
   const core = load("packages/assistant-core/src/index.ts");
-  const voice = {
+  const voice = ports.voice ?? {
     availability: async () => ({
       recognition: false,
       synthesis: false,
@@ -204,6 +204,11 @@ function assistantUI(
         return {
           createMobileVoiceAdapter: () => voice,
           createBrowserVoiceAdapter: () => voice,
+        };
+      if (name.endsWith("/assistant_wake"))
+        return ports.wake ?? {
+          mobileWakeAvailable: () => false,
+          createMobileWakeAdapter: () => ({ listen: async () => false }),
         };
       if (name.endsWith("/assistant_volume"))
         return load("mobile/src/services/assistant_volume.ts");

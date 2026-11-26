@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "artifacts": {
+    "android": "8bbbec0752309e623c5f69e5c99ce16ef00e36aa0320875d44cd5cbf558a9b05",
+    "ios": null,
+    "web": null
+  },
+  "gates": {
+    "A": {"status": "pending", "owner": "unassigned", "reference": "docs/assistant/merged-implementation-plan.md"},
+    "B": {"status": "pending", "owner": "unassigned", "reference": "docs/assistant/testing-strategy.md"},
+    "C.android": {"status": "pending", "owner": "unassigned", "reference": "docs/assistant/m7-communications.md"},
+    "C.ios": {"status": "deferred", "owner": "unassigned", "reference": "docs/assistant/m6-platform-extensions.md"},
+    "C.web": {"status": "pending", "owner": "unassigned", "reference": "docs/assistant/m6-platform-extensions.md"},
+    "D": {"status": "pending", "owner": "unassigned", "reference": "docs/assistant/permissions.md"},
+    "E": {"status": "pending", "owner": "unassigned", "reference": "docs/assistant/security-threat-model.md"},
+    "F": {"status": "pending", "owner": "unassigned", "reference": "docs/assistant/m8-operations.md"}
+  },
+  "smoke": {"android_m7": "user_reported_pass", "ios_m6_m7": "deferred", "web_m6": "pending"},
+  "wake": {"enabled": false, "decision": "pending"}
+}

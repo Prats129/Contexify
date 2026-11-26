@@ -46,6 +46,8 @@ $env:PATH = (Join-Path $jdk.FullName 'bin') + ';' + $env:PATH
 
 Push-Location $projectRoot
 try {
+    & $python -B scripts/assistant_wake_model.py --check
+    if ($LASTEXITCODE -ne 0) { throw 'Prepare the pinned public wake model before building. See docs/assistant/m8-wake.md.' }
     & $python -B scripts/assistant_local_backend.py --prepare-only --lan-host $LanHost
     if ($LASTEXITCODE -ne 0) { throw 'Test TLS/config preparation failed.' }
     $applicationGradle = Join-Path $mobileRoot 'android\app\build.gradle'
@@ -57,12 +59,20 @@ try {
     $sdkProperty = 'sdk.dir=' + $sdk.Replace('\', '/')
     [IO.File]::WriteAllText((Join-Path $mobileRoot 'android\local.properties'), $sdkProperty + "`n")
     if ($PrepareOnly) { return }
+    $artifactJson = & $python -B scripts/assistant_artifact.py describe
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve the test artifact identity.' }
+    $artifactInfo = $artifactJson | ConvertFrom-Json
+    $sourceSnapshot = Join-Path $toolRoot ('build-source-' + [guid]::NewGuid().ToString('N') + '.json')
+    if (!$NativeTestsOnly) {
+        & $python -B scripts/assistant_artifact.py snapshot --output $sourceSnapshot
+        if ($LASTEXITCODE -ne 0) { throw 'Cannot snapshot native build inputs.' }
+    }
     Push-Location (Join-Path $mobileRoot 'android')
     try {
         # Local compilation only. Single phone architecture, bounded worker count, no install/ADB command.
         $gradle = Join-Path $toolRoot 'gradle-distribution\gradle-9.4.1\bin\gradle.bat'
         if (!(Test-Path -LiteralPath $gradle)) { $gradle = '.\gradlew.bat' }
-        $nativeTasks = @(':assistant-voice:testDebugUnitTest', ':assistant-device-security:testDebugUnitTest')
+        $nativeTasks = @(':assistant-voice:testDebugUnitTest', ':assistant-device-security:testDebugUnitTest', ':assistant-platform:testDebugUnitTest')
         if (!$NativeTestsOnly) { $nativeTasks += ':app:assembleDebug' }
         & $gradle @nativeTasks `
             '-PreactNativeArchitectures=arm64-v8a' '--offline' '--max-workers=1' '--console=plain' '--no-daemon' `
@@ -73,9 +83,9 @@ try {
     if ($NativeTestsOnly) { Write-Output 'Native modules compiled and unit-test tasks passed. No APK assembled or phone accessed.'; return }
     $apk = Join-Path $mobileRoot 'android\app\build\outputs\apk\debug\app-debug.apk'
     if (!(Test-Path -LiteralPath $apk)) { throw 'The expected test APK was not generated.' }
-    $destination = Join-Path $toolRoot 'Contexify-Assistant-M5-Alarms-Test-1.4.3-6.apk'
+    $destination = Join-Path $toolRoot $artifactInfo.apk_filename
     Copy-Item -LiteralPath $apk -Destination $destination
-    $inspectionArguments = @('--lan-host', $LanHost)
+    $inspectionArguments = @('--lan-host', $LanHost, '--source-snapshot', $sourceSnapshot)
     if ($CheckLiveKey) { $inspectionArguments += '--check-live-key' }
     & $python -B scripts/inspect_assistant_local_apk.py @inspectionArguments
     if ($LASTEXITCODE -ne 0) { throw 'Test APK inspection failed; do not install it.' }

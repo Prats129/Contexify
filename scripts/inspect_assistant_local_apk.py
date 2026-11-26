@@ -10,16 +10,38 @@ import sys
 from pathlib import Path
 from zipfile import ZipFile
 
+from assistant_artifact import (
+    APK_FILENAME,
+    VERSION_CODE,
+    VERSION_NAME,
+    matching_artifact,
+    verify_snapshot,
+)
+from assistant_wake_model import (
+    DESTINATION as WAKE_ASSETS,
+)
+from assistant_wake_model import (
+    FILES as WAKE_FILES,
+)
+from assistant_wake_model import (
+    check as check_wake_model,
+)
+
 ROOT = Path(__file__).resolve().parents[1]
 TOOLS = ROOT / "backend/.pytest_cache/assistant-local-android"
 
 
-def inspect(host: str, check_live_key: bool = False):
+def inspect(
+    host: str, check_live_key: bool = False, source_snapshot: Path | None = None
+):
     if not __debug__:
         raise RuntimeError(
             "Run APK inspection without Python optimization; all assertions must be enabled."
         )
-    apk = TOOLS / "Contexify-Assistant-M7-Communications-Test-1.4.3-7.apk"
+    apk = TOOLS / APK_FILENAME
+    built_apk = ROOT / "mobile/android/app/build/outputs/apk/debug/app-debug.apk"
+    sha = matching_artifact(apk, built_apk)
+    source_proof = verify_snapshot(source_snapshot, ROOT) if source_snapshot else None
     sdk = TOOLS / "sdk/build-tools/37.0.0"
     java = next((TOOLS / "jdk").glob("*/bin/java.exe"))
 
@@ -35,8 +57,8 @@ def inspect(host: str, check_live_key: bool = False):
     assert dump("packagename").strip() == "ai.contexify.app.assistantvolumetest"
     badging = dump("badging")
     assert (
-        "versionName='1.4.3-assistant-test7'" in badging
-        and "versionCode='7'" in badging
+        f"versionName='{VERSION_NAME}'" in badging
+        and f"versionCode='{VERSION_CODE}'" in badging
         and "application-label:'Contexify Volume Test'" in badging
     )
     permissions = set(
@@ -105,6 +127,7 @@ def inspect(host: str, check_live_key: bool = False):
         )
     for key, expected in (
         ("ai.contexify.assistant.EXECUTION_ENABLED", "true"),
+        ("ai.contexify.assistant.WAKE_ENABLED", "true"),
         ("expo.modules.updates.ENABLED", "false"),
     ):
         data = manifest.split(key, 1)[1].split("E: ", 1)[0]
@@ -137,6 +160,24 @@ def inspect(host: str, check_live_key: bool = False):
             base64.b64encode(key) for key in storage_keys.keys.values()
         )
     with ZipFile(apk) as archive:
+        check_wake_model()
+        for wake_file in (*WAKE_FILES, "keywords.txt"):
+            assert (
+                hashlib.sha256(
+                    archive.read("assets/assistant-wake/" + wake_file)
+                ).digest()
+                == hashlib.sha256((WAKE_ASSETS / wake_file).read_bytes()).digest()
+            ), "Bundled wake model differs from reviewed inputs."
+        assert b"HELLO_WORLD" not in archive.read("assets/assistant-wake/keywords.txt")
+        assert "lib/arm64-v8a/libsherpa-onnx-jni.so" in archive.namelist()
+        assert "lib/arm64-v8a/libonnxruntime.so" in archive.namelist()
+        for notice in (
+            ROOT / "mobile/modules/assistant-wake/licenses/assistant-wake-notices"
+        ).iterdir():
+            assert (
+                archive.read("assets/assistant-wake-notices/" + notice.name)
+                == notice.read_bytes()
+            ), "Wake license notice missing or changed."
         names = archive.namelist()
         assert "assets/index.android.bundle" in names
         assert any(name.startswith("lib/arm64-v8a/") for name in names)
@@ -304,15 +345,22 @@ def inspect(host: str, check_live_key: bool = False):
         assert verify_signature(previous_apk) == certificate, (
             "Test update signing identity changed."
         )
-    with apk.open("rb") as handle:
-        sha = hashlib.file_digest(handle, "sha256").hexdigest()
+    if matching_artifact(apk, built_apk) != sha:
+        raise ValueError(
+            "APK changed during inspection. Inspect the rebuilt artifact again."
+        )
+    if source_snapshot and verify_snapshot(source_snapshot, ROOT) != source_proof:
+        raise ValueError("Source snapshot changed during inspection.")
     report = {
+        "artifact_kind": "internal_test",
         "package": "ai.contexify.app.assistantvolumetest",
-        "version": "1.4.3-assistant-test7",
-        "version_code": 7,
+        "version": VERSION_NAME,
+        "version_code": VERSION_CODE,
         "sha256": sha,
         "apk_bytes": apk.stat().st_size,
         "signature_verified": True,
+        "source_apk_matches": True,
+        "source_proof": source_proof,
         "signer_sha256": certificate,
         "previous_test_signer_matches": True
         if previous_apk.is_file()
@@ -328,6 +376,8 @@ def inspect(host: str, check_live_key: bool = False):
         "native_reminder_code": True,
         "reminder_client_integration": True,
         "native_m7_code": True,
+        "foreground_wake_bundled": True,
+        "wake_keyword": "HEY_CONTEXIFY",
         "m7_ai_client_integration": True,
         "reminder_receivers_not_exported": True,
         "exact_alarm_permissions_absent": True,
@@ -350,5 +400,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--lan-host", required=True)
     parser.add_argument("--check-live-key", action="store_true")
+    parser.add_argument("--source-snapshot", type=Path)
     args = parser.parse_args()
-    inspect(args.lan_host, args.check_live_key)
+    inspect(args.lan_host, args.check_live_key, args.source_snapshot)

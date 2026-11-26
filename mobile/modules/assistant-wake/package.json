@@ -1,0 +1,7 @@
+{
+  "name": "assistant-wake",
+  "version": "0.1.0",
+  "private": true,
+  "main": "index.ts",
+  "description": "Bounded foreground microphone transport for local Sherpa wake detection"
+}

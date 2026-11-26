@@ -15,7 +15,10 @@ module.exports = () => {
         process.env.EXPO_PUBLIC_ASSISTANT_VOICE_ENABLED === "true",
     },
   ];
-  const plugins = [...base.plugins, platformPlugin];
+  const plugins = [...base.plugins, platformPlugin, [
+    "./plugins/with-assistant-wake",
+    { enabled: volumeTest && execution && process.env.EXPO_PUBLIC_ASSISTANT_VOICE_ENABLED === "true" },
+  ]];
   if (verification !== testEntry) {
     throw new Error(
       "Assistant verification requires both the isolated native variant and test entry point.",

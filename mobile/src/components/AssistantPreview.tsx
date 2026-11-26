@@ -15,11 +15,14 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   createCommandSession,
   createPublicAssistantPlanner,
+  createWakeSession,
+  type WakeState,
   type CommandSessionState,
   describeOperationResult,
   supportedOperationPlan,
 } from "@contexify/assistant-core";
 import { createMobileVoiceAdapter } from "../services/assistant_voice";
+import { createMobileWakeAdapter, mobileWakeAvailable } from "../services/assistant_wake";
 import {
   readDeviceControlReadiness,
   describeDeviceControlReadiness,
@@ -78,6 +81,8 @@ export function AssistantPreview({
     null,
   );
   const [state, setState] = useState<CommandSessionState | null>(null);
+  const wakeRef = useRef<ReturnType<typeof createWakeSession> | null>(null);
+  const [wakeState, setWakeState] = useState<WakeState>({ phase: "idle", message: "" });
   const readinessRequest = useRef<AbortController | null>(null);
   const [checkingDevice, setCheckingDevice] = useState(false);
   const [deviceMessage, setDeviceMessage] = useState("");
@@ -245,6 +250,7 @@ export function AssistantPreview({
       void runControl(false);
   }, [state?.reviewed, volumeAllowed]);
   function clearCommand() {
+    wakeRef.current?.cancel();
     controlOperation.current++;
     volumeControls?.cancel();
     setControlMessage("");
@@ -332,23 +338,40 @@ export function AssistantPreview({
       volumeControls?.supportsPlan ?? supportedOperationPlan,
     );
     sessionRef.current = session;
+    const wake = createWakeSession(
+      createMobileWakeAdapter(),
+      () => sessionRef.current === session &&
+        AppState.currentState === "active" && !controlRunning.current &&
+        session.getSnapshot().phase === "idle" && session.getSnapshot().consent,
+      async () => { await session.listen(); },
+    );
+    wakeRef.current = wake;
+    setWakeState(wake.getSnapshot());
+    const unsubscribeWake = wake.subscribe(() => setWakeState(wake.getSnapshot()));
     setState(session.getSnapshot());
     const unsubscribe = session.subscribe(() =>
       setState(session.getSnapshot()),
     );
     const lifecycle = AppState.addEventListener("change", (next) => {
-      if (next !== "active") session.clear();
+      if (next !== "active") { wake.cancel(); session.clear(); }
     });
     void session.refreshAvailability();
     return () => {
       unsubscribe();
+      unsubscribeWake();
+      wake.dispose();
+      if (wakeRef.current === wake) wakeRef.current = null;
       lifecycle.remove();
       session.dispose();
       sessionRef.current = null;
     };
   }, [voiceAllowed, volumeUserId, volumeControls, planningAllowed]);
   const capturing = state?.phase === "starting" || state?.phase === "listening";
-  const busy = state?.phase !== "idle" || controlBusy;
+  const wakeBusy = wakeState.phase !== "idle";
+  const wakeAllowed = mobileWakeAvailable(
+    voiceAllowed && process.env.EXPO_PUBLIC_ASSISTANT_VOICE_ENABLED === "true",
+  );
+  const busy = state?.phase !== "idle" || controlBusy || wakeBusy;
   function button(label: string, action: () => void, disabled = false) {
     return (
       <TouchableOpacity
@@ -553,6 +576,7 @@ export function AssistantPreview({
               maxLength={1024}
               autoCorrect={false}
               editable={
+                !wakeBusy &&
                 !controlBusy &&
                 !capturing &&
                 (state?.phase !== "processing" || state.planningConsent)
@@ -617,6 +641,7 @@ export function AssistantPreview({
               planningAllowed && (
                 <TouchableOpacity
                   accessibilityRole="checkbox"
+                  disabled={wakeBusy && !state?.planningConsent}
                   accessibilityState={{
                     checked: state?.planningConsent ?? false,
                   }}
@@ -794,15 +819,18 @@ export function AssistantPreview({
             >
               {!voiceAllowed
                 ? "Sign in to use assistant voice and device controls. You can still review typed commands."
-                : controlMessage ||
-                  state?.message ||
+                : (wakeBusy && wakeState.phase !== "handoff" && wakeState.message) || controlMessage ||
+                  state?.message || wakeState.message ||
                   state?.availability.message}
             </Text>
             {state?.availability.recognition && (
               <TouchableOpacity
                 accessibilityRole="checkbox"
                 accessibilityState={{ checked: state.consent }}
-                onPress={() => sessionRef.current?.setConsent(!state.consent)}
+                onPress={() => {
+                  wakeRef.current?.cancel();
+                  sessionRef.current?.setConsent(!state.consent);
+                }}
                 style={{ minHeight: 44, justifyContent: "center" }}
               >
                 <Text style={{ color: theme.textMain }}>
@@ -812,6 +840,18 @@ export function AssistantPreview({
               </TouchableOpacity>
             )}
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+              {wakeAllowed && state?.availability.recognition && button(
+                wakeBusy ? "Stop wake listening" : "Listen for Hey Contexify",
+                () => {
+                  if (wakeBusy) { wakeRef.current?.cancel(); sessionRef.current?.clear(); }
+                  else {
+                    setControlMessage("");
+                    sessionRef.current?.setTranscript("");
+                    void wakeRef.current?.start();
+                  }
+                },
+                wakeBusy ? wakeState.phase === "stopping" : busy || !state.consent,
+              )}
               {state?.availability.recognition &&
                 button(
                   capturing ? "Stop microphone" : "Use microphone",
@@ -832,6 +872,14 @@ export function AssistantPreview({
                   busy || !state.preview,
                 )}
             </View>
+            {wakeAllowed && (
+              <Text style={{ color: theme.textMuted, fontSize: 12 }}>
+                Wake listening is optional and stays on this phone for up to 30 seconds while Assistant is open.
+                Say “Hey Contexify”, pause, then speak when the command microphone is ready.
+                It stops after one command or when you leave. AI planning still needs its own consent;
+                actions still need their existing confirmation.
+              </Text>
+            )}
             {state?.availability.recognition && !state.consent && (
               <Text style={{ color: theme.textMuted, fontSize: 12 }}>
                 Select "Allow the microphone" above before starting voice.

@@ -15,3 +15,4 @@ export * from "./apple-schedules";
 export * from "./communications";
 export * from "./public-command-scope";
 export * from "./communication-planning";
+export { createWakeSession, WakePermissionRequired, type ForegroundWakeAdapter, type WakeState } from "./wake";

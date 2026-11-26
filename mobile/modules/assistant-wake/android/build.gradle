@@ -1,0 +1,12 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'ai.contexify.wake'
+version = '0.1.0'
+
+android {
+  namespace 'ai.contexify.wake'
+  sourceSets.main.assets.srcDirs += ['../model', '../licenses']
+}

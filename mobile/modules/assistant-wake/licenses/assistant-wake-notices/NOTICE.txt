@@ -1,0 +1,20 @@
+Android foreground wake uses @siteed/sherpa-onnx.rn 2.0.1 (MIT),
+https://github.com/deeeed/audiolab/tree/main/packages/sherpa-onnx.rn
+Copyright (c) 2024 Arthur Breton.
+
+Sherpa-onnx 2.0.1 (Apache-2.0), https://github.com/k2-fsa/sherpa-onnx
+contains source copyright notices for Xiaomi Corporation and contributors.
+The accompanying English GigaSpeech KWS 3.3M 2024-01-01 model declares
+Apache License 2.0 in the packaged assistant-wake/MODEL-README.md.
+No upstream engine/model binary is modified; keyword configuration is supplied
+by Contexify. See APACHE-2.0.txt and MIT.txt in this directory.
+
+The bundled ONNX Runtime library is MIT-licensed. Its shipped C API header
+states: Copyright (c) Microsoft Corporation. All rights reserved.
+ONNXRUNTIME-MIT.txt supplies standard MIT terms with that attribution.
+Upstream project: https://github.com/microsoft/onnxruntime
+
+Sources, model hashes and the local trial are documented in
+docs/assistant/wake-library-comparison.md and docs/assistant/m8-wake.md.
+Full dependency/SBOM review and public-distribution approval remain separate
+release requirements; this notice is not an assertion of completed review.

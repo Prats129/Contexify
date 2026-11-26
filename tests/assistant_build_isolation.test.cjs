@@ -26,7 +26,7 @@ function withoutPlatformPlugin(value) {
     ...value,
     plugins: value.plugins.filter(
       (item) =>
-        !Array.isArray(item) || item[0] !== "./plugins/with-assistant-platform",
+        !Array.isArray(item) || !["./plugins/with-assistant-platform", "./plugins/with-assistant-wake"].includes(item[0]),
     ),
   };
 }
@@ -47,6 +47,16 @@ test("normal app identity, backend profiles and existing plugins are preserved",
     profiles.preview.env.EXPO_PUBLIC_API_URL,
     profiles.production.env.EXPO_PUBLIC_API_URL,
   );
+});
+
+test("wake native opt-in is restricted to the signed-in test build configuration", () => {
+  const wake = (value) => value.plugins.find((item) => Array.isArray(item) && item[0] === "./plugins/with-assistant-wake")[1];
+  assert.equal(wake(config()).enabled, false);
+  assert.equal(wake(config(profiles["assistant-verification"].env)).enabled, false);
+  assert.equal(wake(config({ ...profiles["assistant-volume-verification"].env,
+    ASSISTANT_VOLUME_TEST_API_ORIGIN: "https://volume.fixture.invalid",
+    EXPO_PUBLIC_API_URL: "https://volume.fixture.invalid" })).enabled, true);
+  assert.equal(require("../mobile/react-native.config.js").dependencies["@siteed/sherpa-onnx.rn"].platforms.ios, null);
 });
 
 test("Apple companion wiring is confined to isolated native test variants", () => {

@@ -62,3 +62,6 @@ Thumbs.db
 .idea/
 *.sublime-project
 *.sublime-workspace
+
+# Hash-verified wake model assets are prepared from the pinned archive before a native build.
+mobile/modules/assistant-wake/model/

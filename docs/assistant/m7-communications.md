@@ -1,5 +1,7 @@
 # M7: private contacts and phone composers
 
+**User-reported Android acceptance, 2026-11-20:** the user reports the supplied practical code-7/S25 M7 batch and five public AI safety commands tested successfully, after the separate HTTPS test backend was started. This includes the new voice/typed handoffs, private completion/country correction, local input rejection, Cancel/lock, duplicate taps, picker/approval expiry, cleanup and basic multiline/emoji/large-font usability. Do not repeat these unchanged checks. This report does not establish iPhone/browser acceptance, multi-account/traffic capture, handler replacement, process recreation, offline/extreme-input behavior, extended proposal expiry or independent assessment. Full matrix rows below that include those variants remain partially open; their older Pending labels are not instructions to rerun the completed practical batch. See [M8's retained gates](m8-operations.md).
+
 Source implementation started 2026-11-19 after the user authorized M7. M6 Apple compilation/signing/device tests remain deferred at the user's request. This document does not close them or prior M2-M5 acceptance.
 
 ## Implemented scope
@@ -10,7 +12,7 @@ The isolated native test app now connects the approved **public-test AI command 
 
 The first supported messaging adapter is the system SMS composer. No WhatsApp, business-messaging or other cloud connector has been selected under D13. The user will bring a ready-made library candidate for compatibility/security review later; no framework or connector is selected silently. M6's Apple Calendar editor remains separate. Direct call/send, multiple recipients and communications mixed into a settings-effect plan remain outside the approved composer-first D6 boundary.
 
-Source, automated checks, binary inspection and device acceptance are separate. The combined phone batch below remains **Pending**, including real-model interpretation. M6 Apple compilation/signing/physical checks stay deferred until the agreed Mac/iPhone setup. Production enablement is unchanged.
+Source, automated checks, binary inspection and device acceptance are separate. The supplied practical Android batch is now **user-reported passed**, including live public-command interpretation; the broader matrix retains its unrun variants. M6 Apple compilation/signing/physical checks stay deferred until the agreed Mac/iPhone setup. Production enablement is unchanged.
 
 ## Architecture and privacy
 
@@ -110,7 +112,7 @@ M6 Apple and browser acceptance, prior deferred Android checks, independent sens
 - Frontend/mobile TypeScript, Ruff, ty, Python parsing, generated wire-contract verification and the repository diff check passed. The original staged entries remain unchanged; implementation updates stay in the working tree. Generated declarations retain their existing order/format with only the two new wire types added.
 - Local Android build/artifact inspection is tracked separately below. Sandboxed Expo and CMake subprocesses stalled; normal Expo export outside the sandbox passed. Temporary ignored export diagnostics were removed and the generated Gradle configuration restored to the normal CLI. Final assembly uses the normal toolchain outside the sandbox, a bounded JVM/one Gradle worker and one native compiler/link pool in ignored local configuration ([CMake job-pool reference](https://cmake.org/cmake/help/v3.22/prop_gbl/JOB_POOLS.html)). No dependency edit, skipped native compilation/signature check, product-runtime workaround or EAS credit is included. The restricted-run failures are local build-environment evidence, not a passed native/device check.
 
- Live Gemini M7 interpretation and C1-C8/A1-A6 phone results remain Pending; Apple checks remain Deferred at user request. These statuses do not close earlier M2-M6 verification or direct-operation/connector/release decisions.
+ At the source-only checkpoint, live Gemini M7 interpretation and phone results were pending. The later practical Android batch is user-reported passed above; unrun matrix variants and Apple deferrals remain open. These statuses do not close earlier M2-M6 verification or direct-operation/connector/release decisions.
 
 ### Android artifact verification - 2026-11-20
 
@@ -118,4 +120,4 @@ M6 Apple and browser acceptance, prior deferred Android checks, independent sens
 - Built and inspected `backend/.pytest_cache/assistant-local-android/Contexify-Assistant-M7-Communications-Test-1.4.3-7.apk`, version `1.4.3-assistant-test7`, code **7**, **62,748,249 bytes**. Its separate identity is `ai.contexify.app.assistantvolumetest` / **Contexify Volume Test**. Its verified signer also matches the previous code-6 alarm test APK, so install it over that test app without uninstalling. The production app has a different package.
 - APK inspection passed for signature, execution/test flags, disabled OTA updates, embedded bundle/new native module, M7 client/bridge markers, test-host-only custom CA trust, cleartext prohibition, existing SecureStore backup exclusions and absence of broad contact/direct-call/direct-SMS permissions. Protected Gemini, private-storage and TLS private keys were checked for absence. The packaged source map matches the current M7 components and shared planning modules. Evidence: ignored `apk-inspection.json` in the local toolchain directory; the inspector ran with `--check-live-key` and made no provider request.
 - SHA-256: `672fa5c7ba66f1bbda75facf70b5db755a399388158b7b4470b0635eb4e6f97e`.
-- No APK installation, phone access, production change or live Gemini M7 interpretation was performed. C1-C8/A1-A6 remain **Pending** for the agreed combined batch. Apple compilation/signing/binary delivery and physical M6/M7 acceptance remain **Deferred at user request**, with the existing Mac/iPhone setup retained. No release gate is closed by building this internal test APK.
+- At artifact inspection time no APK installation, phone access, production change or live Gemini M7 interpretation had been performed. The user subsequently reported the supplied practical Android batch passed; remaining matrix variants retain their pending status. Apple compilation/signing/binary delivery and physical M6/M7 acceptance remain **Deferred at user request**, with the existing Mac/iPhone setup retained. No release gate is closed by building this internal test APK.
