@@ -189,6 +189,12 @@ function assistantUI(
         return {
           Platform: { OS: platform },
           AppState: appState,
+          PermissionsAndroid: ports.permissions ?? {
+            PERMISSIONS: { RECORD_AUDIO: "android.permission.RECORD_AUDIO" },
+            RESULTS: { GRANTED: "granted", DENIED: "denied", NEVER_ASK_AGAIN: "never_ask_again" },
+            check: async () => true,
+            request: async () => "granted",
+          },
           Keyboard: { dismiss() {} },
           Modal: "Modal",
           KeyboardAvoidingView: "KeyboardAvoidingView",

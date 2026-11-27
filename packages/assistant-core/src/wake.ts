@@ -5,7 +5,7 @@ export interface ForegroundWakeAdapter {
 
 export class WakePermissionRequired extends Error {
   constructor() {
-    super("Microphone access is needed. Use microphone once to grant access, then start wake listening.");
+    super("Microphone access is needed. Tap Grant microphone access in Voice setup, then choose session consent before listening.");
   }
 }
 
@@ -48,7 +48,7 @@ export function createWakeSession(
       try {
         const detected = await adapter.listen(request.signal, () => {
           if (pending === request && !request.signal.aborted && !disposed)
-            update("listening", 'Say “Hey Contexify”, then pause. Listening for up to 30 seconds.');
+            update("listening", "Wake microphone ready. Waiting for the wake phrase for up to 30 seconds.");
         });
         clearTimeout(deadline);
         if (disposed || request.signal.aborted || !allowed()) return;

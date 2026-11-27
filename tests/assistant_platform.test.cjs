@@ -138,6 +138,8 @@ test("iPhone support stays collapsed until requested and opening it clears the o
   assert.equal(ui.find("AppleAssistantTools"), undefined);
   ui.find("TextInput").props.onChangeText("set volume to 40%");
   ui.render();
+  ui.find("TouchableOpacity", "Tools and support").props.onPress();
+  ui.render();
   ui.find("TouchableOpacity", "iPhone tools and support").props.onPress();
   ui.render();
   assert.ok(ui.find("AppleAssistantTools"));

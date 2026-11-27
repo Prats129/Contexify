@@ -205,7 +205,7 @@ export const Header: React.FC<HeaderProps> = ({
               >
                 <Feather name="mic" size={18} color={theme.textMain} />
                 <Text style={[styles.menuText, { color: theme.textMain }]}>
-                  Assistant preview
+                  Assistant
                 </Text>
               </TouchableOpacity>
             )}

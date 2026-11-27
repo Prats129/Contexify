@@ -8,9 +8,9 @@ from pathlib import Path
 from typing import TypedDict
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION_CODE = 8
-VERSION_NAME = "1.4.3-assistant-test8"
-APK_FILENAME = "Contexify-Assistant-M8-Wake-Test-1.4.3-8.apk"
+VERSION_CODE = 9
+VERSION_NAME = "1.4.3-assistant-test9"
+APK_FILENAME = "Contexify-Assistant-M8-Wake-Test-1.4.3-9.apk"
 SOURCE_DIRS = (
     "mobile/src",
     "mobile/modules",

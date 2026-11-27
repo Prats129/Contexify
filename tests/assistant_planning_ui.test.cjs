@@ -214,6 +214,8 @@ test("previous-action checks show historical uncertainty and do not dispatch eff
       ];
     },
   });
+  f.ui.find("TouchableOpacity", "Tools and support").props.onPress();
+  f.ui.render();
   f.ui.find("TouchableOpacity", "Check previous actions").props.onPress();
   await f.ui.flush();
   assert.match(f.ui.text(), /Recorded results, not current device readings/);

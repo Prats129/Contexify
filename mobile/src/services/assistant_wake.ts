@@ -25,7 +25,7 @@ export function createMobileWakeAdapter(): ForegroundWakeAdapter {
       let engine: typeof import("@siteed/sherpa-onnx.rn")["default"] | null = null;
       const current = () => !signal.aborted && AppState.currentState === "active";
       try {
-        // Permission must already have been granted through explicit push-to-talk.
+        // Permission must already have been granted through explicit OS setup.
         // A system permission dialog must not resurrect a canceled wake session.
         if (!(await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO)))
           throw new WakePermissionRequired();

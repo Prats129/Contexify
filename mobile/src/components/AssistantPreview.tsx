@@ -4,6 +4,7 @@ import {
   Keyboard,
   KeyboardAvoidingView,
   Modal,
+  PermissionsAndroid,
   Platform,
   ScrollView,
   Text,
@@ -88,6 +89,15 @@ export function AssistantPreview({
   const [deviceMessage, setDeviceMessage] = useState("");
   const [controlMessage, setControlMessage] = useState("");
   const [controlBusy, setControlBusy] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(false);
+  const [microphonePermission, setMicrophonePermission] = useState<
+    "unknown" | "checking" | "granted" | "needed" | "blocked"
+  >("unknown");
+  const [permissionBusy, setPermissionBusy] = useState(false);
+  const [permissionMessage, setPermissionMessage] = useState("");
+  const permissionEpoch = useRef(0);
+  const permissionScope = useRef<object | null>(null);
+  const permissionPending = useRef(false);
   const controlOperation = useRef(0);
   const controlRunning = useRef(false);
   const volumeAllowed =
@@ -196,7 +206,7 @@ export function AssistantPreview({
         else await volumeControls.enableBrightness!(volumeUserId);
         if (operation === controlOperation.current)
           setControlMessage(
-            "Device enrollment is ready. Review one supported command, then request its confirmation.",
+            "Device controls are ready. Type or speak a command; each supported action still needs approval.",
           );
       } else {
         const result = selected?.contextId
@@ -257,6 +267,8 @@ export function AssistantPreview({
     sessionRef.current?.clear();
   }
   function closePreview() {
+    permissionEpoch.current++;
+    permissionScope.current = null;
     clearCommand();
     onClose();
   }
@@ -367,11 +379,86 @@ export function AssistantPreview({
     };
   }, [voiceAllowed, volumeUserId, volumeControls, planningAllowed]);
   const capturing = state?.phase === "starting" || state?.phase === "listening";
+  const androidMicrophone = Platform.OS === "android" && voiceAllowed &&
+    state?.availability.recognition === true;
+  useEffect(() => {
+    let active = true;
+    const scope = {};
+    permissionScope.current = scope;
+    async function refreshPermission() {
+      const epoch = ++permissionEpoch.current;
+      setPermissionMessage("");
+      setPermissionBusy(false);
+      setMicrophonePermission("unknown");
+      if (!androidMicrophone || AppState.currentState !== "active") return;
+      setMicrophonePermission("checking");
+      try {
+        const granted = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
+        if (active && epoch === permissionEpoch.current && AppState.currentState === "active")
+          setMicrophonePermission(granted ? "granted" : "needed");
+      } catch {
+        if (active && epoch === permissionEpoch.current) {
+          setMicrophonePermission("unknown");
+          setPermissionMessage("Microphone access could not be checked. You can still type.");
+        }
+      }
+    }
+    void refreshPermission();
+    const lifecycle = AppState.addEventListener("change", (next) => {
+      permissionEpoch.current++;
+      setPermissionBusy(false);
+      if (next === "active") void refreshPermission();
+    });
+    return () => {
+      active = false;
+      if (permissionScope.current === scope) permissionScope.current = null;
+      permissionEpoch.current++;
+      lifecycle.remove();
+    };
+  }, [androidMicrophone, volumeUserId]);
+  async function grantMicrophoneAccess() {
+    const scope = permissionScope.current;
+    if (!androidMicrophone || !scope || permissionPending.current || AppState.currentState !== "active") return;
+    permissionEpoch.current++;
+    permissionPending.current = true;
+    setPermissionBusy(true);
+    setPermissionMessage("");
+    try {
+      // OS permission is setup only: it never grants session consent or starts capture.
+      const result = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
+      if (scope !== permissionScope.current || AppState.currentState !== "active") return;
+      permissionEpoch.current++;
+      const granted = result === PermissionsAndroid.RESULTS.GRANTED;
+      setMicrophonePermission(granted ? "granted" :
+        result === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN ? "blocked" : "needed");
+      setPermissionMessage(granted
+        ? 'Microphone access granted. Select "Allow the microphone" when you want to speak.'
+        : result === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN
+          ? "Allow microphone access in Android Settings → Apps → this app → Permissions, or type your command."
+          : "Microphone access was not granted. You can still type.");
+    } catch {
+      if (scope === permissionScope.current && AppState.currentState === "active")
+        setPermissionMessage("Microphone access is unavailable. You can still type.");
+    } finally {
+      permissionPending.current = false;
+      if (scope === permissionScope.current) setPermissionBusy(false);
+    }
+  }
+  const microphoneReady = !androidMicrophone || microphonePermission === "granted";
   const wakeBusy = wakeState.phase !== "idle";
   const wakeAllowed = mobileWakeAvailable(
     voiceAllowed && process.env.EXPO_PUBLIC_ASSISTANT_VOICE_ENABLED === "true",
   );
-  const busy = state?.phase !== "idle" || controlBusy || wakeBusy;
+  const busy = state?.phase !== "idle" || controlBusy || wakeBusy || permissionBusy;
+  const statusHeading = state?.phase === "listening" ? "Speak your command now"
+    : state?.phase === "starting" ? "Starting command microphone…"
+      : state?.phase === "processing" ? "Processing your command…"
+        : state?.phase === "speaking" ? "Reading the plan aloud…"
+          : wakeState.phase === "listening" ? "Waiting for the wake phrase"
+            : wakeState.phase === "starting" ? "Preparing wake listening…"
+              : wakeState.phase === "stopping" ? "Stopping wake listening…"
+                : controlBusy ? "Device request in progress…"
+                  : "Ready";
   function button(label: string, action: () => void, disabled = false) {
     return (
       <TouchableOpacity
@@ -494,7 +581,7 @@ export function AssistantPreview({
                 flex: 1,
               }}
             >
-              Assistant preview
+              Assistant
             </Text>
             {button("Close", closePreview)}
           </View>
@@ -503,70 +590,109 @@ export function AssistantPreview({
             keyboardShouldPersistTaps="handled"
             contentContainerStyle={{ gap: 12, paddingBottom: 8 }}
           >
-            {Platform.OS === "ios" &&
-              button(
-                appleToolsOpen
-                  ? "Hide iPhone tools"
-                  : "iPhone tools and support",
-                () => {
-                  clearCommand();
-                  setAppleToolsOpen((open) => !open);
-                },
-                Boolean(busy),
-              )}
-            {Platform.OS === "ios" && appleToolsOpen && state && (
-              <AppleAssistantTools
-                theme={theme}
-                voice={state.availability}
-                signedIn={Boolean(volumeUserId)}
-                beforeOpen={clearCommand}
-                scheduling={{
-                  reminders: remindersAllowed,
-                  alarms: volumeControls?.appleAlarmSupported?.() === true,
-                  timers: volumeControls?.appleTimerSupported?.() === true,
-                }}
-              />
-            )}
-            {Platform.OS === "ios" &&
-              volumeUserId &&
-              volumeControls?.appleAlarmSupported?.() &&
-              button(
-                "iPhone alarms and timers",
-                () => {
-                  clearCommand();
-                  setAppleAlarmsOpen(true);
-                },
-                Boolean(busy),
-              )}
-            {volumeAllowed &&
-              button(
-                "Alarms in Clock",
-                () => {
-                  clearCommand();
-                  setAlarmsOpen(true);
-                },
-                Boolean(busy),
-              )}
-            {(volumeAllowed || remindersAllowed) &&
-              button(
-                "Reminders and settings",
-                () => {
-                  clearCommand();
-                  setRemindersOpen(true);
-                },
-                Boolean(busy),
-              )}
             <Text style={{ color: theme.textMuted }}>
               {state?.planningConsent
                 ? volumeAllowed
-                  ? "Send a supported command and approve each exact action in Android. App opening needs a compatible build and must be the last action. Unsupported plans stay previews."
+                  ? "Type or speak a public test command. Approve each supported action in Android."
                   : "Send a command to review its plan. Device actions are unavailable in this build."
                 : volumeAllowed
-                  ? "Review a command, then request confirmation for media volume or Contexify app-window brightness. Other actions remain previews."
+                  ? "AI is off. Type or dictate an exact command, review it, then confirm supported setting changes."
                   : Platform.OS === "ios" && remindersAllowed
                     ? "Typed commands are previews here. Use Reminders and settings or iPhone alarms and timers to review private schedules."
                     : "Type or dictate a command, then review the steps. Device actions are unavailable here."}
             </Text>
+            {volumeAllowed && (<View style={{ gap: 8 }}>
+              <Text style={{ color: theme.textMuted }}>
+                First time on this phone? Enable device controls once.
+                If already enabled, skip this setup. Every action still needs approval.
+              </Text>
+              {button(
+                "Enable device controls on this device",
+                () => {
+                  void runControl(true);
+                },
+                controlBusy || busy,
+              )}
+            </View>)}
+            {state?.availability.recognition && (
+              <View style={{ gap: 8 }}>
+                <Text style={{ color: theme.textMain, fontWeight: "600" }}>Voice setup</Text>
+                {androidMicrophone && microphonePermission !== "granted" && (
+                  <>
+                    <Text style={{ color: theme.textMuted, fontSize: 12 }}>
+                      Allow Android microphone access first. This does not start recording.
+                    </Text>
+                    {microphonePermission === "blocked" ? (
+                      <Text style={{ color: theme.textMuted }}>
+                        Allow microphone access in Android Settings → Apps → this app → Permissions.
+                      </Text>
+                    ) : button(permissionBusy ? "Requesting microphone access…"
+                      : microphonePermission === "checking" ? "Checking microphone access…"
+                        : "Grant microphone access",
+                      () => { void grantMicrophoneAccess(); }, busy || microphonePermission === "checking")}
+                  </>
+                )}
+                {Boolean(permissionMessage) && <Text accessibilityLiveRegion="polite" style={{ color: theme.textMain }}>{permissionMessage}</Text>}
+                <TouchableOpacity
+                    accessibilityRole="checkbox"
+                    disabled={!state.consent && (permissionBusy || !microphoneReady)}
+                    accessibilityState={{ checked: state.consent, disabled: !state.consent && (permissionBusy || !microphoneReady) }}
+                    onPress={() => {
+                      if (!state.consent && !microphoneReady) return;
+                      setPermissionMessage("");
+                      wakeRef.current?.cancel();
+                      sessionRef.current?.setConsent(!state.consent);
+                    }}
+                    style={{ minHeight: 44, justifyContent: "center", opacity: !state.consent && !microphoneReady ? 0.45 : 1 }}
+                  >
+                    <Text style={{ color: theme.textMain }}>
+                      {state.consent ? "☑" : "☐"} Allow the microphone in this session.
+                    </Text>
+                </TouchableOpacity>
+                <Text style={{ color: theme.textMuted, fontSize: 12 }}>
+                  English speech stays on this phone unless you also allow AI planning.
+                  Closing Assistant or leaving the app clears session consent.
+                </Text>
+              </View>
+            )}
+            {volumeUserId &&
+              volumeControls?.planningContext &&
+              planningAllowed && (
+                <TouchableOpacity
+                  accessibilityRole="checkbox"
+                  disabled={wakeBusy && !state?.planningConsent}
+                  accessibilityState={{
+                    checked: state?.planningConsent ?? false,
+                  }}
+                  onPress={() => {
+                    controlOperation.current++;
+                    volumeControls.cancel();
+                    setControlMessage("");
+                    sessionRef.current?.setPlanningConsent(
+                      !state?.planningConsent,
+                    );
+                  }}
+                  style={{ minHeight: 44, justifyContent: "center", gap: 4 }}
+                >
+                  <Text style={{ color: theme.textMain }}>
+                    {state?.planningConsent ? "☑" : "☐"} Allow AI planning in
+                    this session.
+                  </Text>
+                  <Text style={{ color: theme.textMuted, fontSize: 12 }}>
+                    Public test commands only; do not enter personal information.
+                    When on, finished voice transcripts are sent for AI planning.
+                    Each supported action still needs its own approval.
+                    When off, speech stays as editable text for local review.
+                  </Text>
+                </TouchableOpacity>
+              )}
+            {wakeAllowed && (
+              <Text style={{ color: theme.textMuted, fontSize: 12 }}>
+                Tap Listen for Hey Contexify, say “Hey Contexify”, then pause.
+                Speak your command when “Speak your command now” appears.
+                Wake listening stops after one command, 30 seconds, or when you leave.
+              </Text>
+            )}
             <Text style={{ color: theme.textMain, fontWeight: "600" }}>
               Your command or transcript
             </Text>
@@ -636,48 +762,14 @@ export function AssistantPreview({
                 }}
               />
             )}
-            {volumeUserId &&
-              volumeControls?.planningContext &&
-              planningAllowed && (
-                <TouchableOpacity
-                  accessibilityRole="checkbox"
-                  disabled={wakeBusy && !state?.planningConsent}
-                  accessibilityState={{
-                    checked: state?.planningConsent ?? false,
-                  }}
-                  onPress={() => {
-                    controlOperation.current++;
-                    volumeControls.cancel();
-                    setControlMessage("");
-                    sessionRef.current?.setPlanningConsent(
-                      !state?.planningConsent,
-                    );
-                  }}
-                  style={{ minHeight: 44, justifyContent: "center", gap: 4 }}
-                >
-                  <Text style={{ color: theme.textMain }}>
-                    {state?.planningConsent ? "☑" : "☐"} Allow AI planning in
-                    this session.
-                  </Text>
-                  <Text style={{ color: theme.textMuted, fontSize: 12 }}>
-                    Currently limited to approved public test commands. Do not
-                    enter personal information. Enroll this device first.
-                    Supported phone/message examples open local recipient
-                    selection and native review. Android setting plans open
-                    Android confirmations. App opening must be the final action
-                    and needs a compatible Android build. Voice transcripts are
-                    submitted after you finish speaking.
-                  </Text>
-                </TouchableOpacity>
-              )}
-            {state?.phase === "idle" &&
+            {!voiceAllowed && state?.phase === "idle" &&
               state.preview === null &&
               Boolean(state.message) && (
                 <Text style={{ color: theme.textMain }}>{state.message}</Text>
               )}
             <Text style={{ color: theme.textMuted, fontSize: 12 }}>
               Examples: “open clock”, “brightness to 40 percent”, “set volume to
-              50%”. Preview ranges: media volume 0–70%, app brightness 10–100%.
+              50%”. Supported ranges: media volume 0–70%, app brightness 10–100%.
               Nothing is saved to chat history.
             </Text>
             {state?.preview?.map((step, index) => (
@@ -700,82 +792,20 @@ export function AssistantPreview({
                 )}
               </View>
             ))}
-            {volumeUserId &&
-              process.env.EXPO_PUBLIC_ASSISTANT_EXECUTION_ENABLED === "true" &&
-              process.env.EXPO_PUBLIC_ASSISTANT_NATIVE_TEST !== "true" &&
-              button(
-                "Calls and messages",
-                () => {
-                  clearCommand();
-                  setInitialCommunicationRequest(null);
-                  setCommunicationsOpen(true);
-                },
-                busy,
-              )}
-            {Platform.OS === "android" && deviceChecksAllowed && (
+            {volumeAllowed && !state?.planningConsent && reviewedVolumePercent(state?.reviewed ?? null) !== null && (
               <View style={{ gap: 8 }}>
-                <Text style={{ color: theme.textMuted, fontSize: 12 }}>
-                  Check media-volume support, the app window, Spotify and
-                  reviewed Clock apps locally. Results stay in this screen. This
-                  does not enable device actions.
-                </Text>
                 {button(
-                  checkingDevice
-                    ? "Checking Android support..."
-                    : "Check Android support",
+                  controlBusy
+                    ? "Waiting for volume result..."
+                    : "Confirm volume change",
                   () => {
-                    void checkDevice();
+                    void runControl(false);
                   },
-                  checkingDevice || busy,
-                )}
-                {Boolean(deviceMessage) && (
-                  <Text
-                    accessibilityLiveRegion="polite"
-                    style={{ color: theme.textMuted, fontSize: 12 }}
-                  >
-                    {deviceMessage}
-                  </Text>
+                  busy || !state?.preview,
                 )}
               </View>
             )}
-            {volumeAllowed && (
-              <View style={{ gap: 8 }}>
-                {volumeControls?.reconcilePlans &&
-                  button(
-                    "Check previous actions",
-                    () => {
-                      void runPlan(true);
-                    },
-                    busy,
-                  )}
-                <Text style={{ color: theme.textMuted }}>
-                  Enroll this device first. Media volume and app brightness
-                  changes need Android confirmation. Reviewed app opens also
-                  require a compatible build and must be the final action.
-                </Text>
-                {button(
-                  "Enable device controls on this device",
-                  () => {
-                    void runControl(true);
-                  },
-                  controlBusy || busy,
-                )}
-                {!state?.planningConsent &&
-                  button(
-                    controlBusy
-                      ? "Waiting for volume result..."
-                      : "Confirm volume change",
-                    () => {
-                      void runControl(false);
-                    },
-                    controlBusy ||
-                      busy ||
-                      !state?.preview ||
-                      reviewedVolumePercent(state.reviewed) === null,
-                  )}
-              </View>
-            )}
-            {brightnessAllowed && (
+            {brightnessAllowed && reviewedBrightnessPercent(state?.reviewed ?? null) !== null && (
               <View style={{ gap: 8 }}>
                 <Text style={{ color: theme.textMuted }}>
                   Contexify app-window brightness only, 10-100%. System
@@ -784,13 +814,6 @@ export function AssistantPreview({
                   background.
                 </Text>
                 {button(
-                  "Enable app brightness control",
-                  () => {
-                    void runControl(true, "brightness");
-                  },
-                  controlBusy || busy,
-                )}
-                {button(
                   controlBusy
                     ? "Waiting for control result..."
                     : "Confirm app brightness change",
@@ -798,70 +821,15 @@ export function AssistantPreview({
                     void runControl(false, "brightness");
                   },
                   controlBusy ||
-                    busy ||
-                    !state?.preview ||
-                    reviewedBrightnessPercent(state.reviewed) === null,
+                  busy ||
+                  !state?.preview ||
+                  reviewedBrightnessPercent(state.reviewed) === null,
                 )}
               </View>
             )}
-          </ScrollView>
-          <View
-            style={{
-              gap: 8,
-              paddingTop: 12,
-              borderTopWidth: 1,
-              borderColor: theme.borderSubtle,
-            }}
-          >
-            <Text
-              accessibilityLiveRegion="polite"
-              style={{ color: theme.textMain }}
-            >
-              {!voiceAllowed
-                ? "Sign in to use assistant voice and device controls. You can still review typed commands."
-                : (wakeBusy && wakeState.phase !== "handoff" && wakeState.message) || controlMessage ||
-                  state?.message || wakeState.message ||
-                  state?.availability.message}
-            </Text>
-            {state?.availability.recognition && (
-              <TouchableOpacity
-                accessibilityRole="checkbox"
-                accessibilityState={{ checked: state.consent }}
-                onPress={() => {
-                  wakeRef.current?.cancel();
-                  sessionRef.current?.setConsent(!state.consent);
-                }}
-                style={{ minHeight: 44, justifyContent: "center" }}
-              >
-                <Text style={{ color: theme.textMain }}>
-                  {state.consent ? "☑" : "☐"} Allow the microphone for on-device
-                  English speech in this session.
-                </Text>
-              </TouchableOpacity>
-            )}
-            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-              {wakeAllowed && state?.availability.recognition && button(
-                wakeBusy ? "Stop wake listening" : "Listen for Hey Contexify",
-                () => {
-                  if (wakeBusy) { wakeRef.current?.cancel(); sessionRef.current?.clear(); }
-                  else {
-                    setControlMessage("");
-                    sessionRef.current?.setTranscript("");
-                    void wakeRef.current?.start();
-                  }
-                },
-                wakeBusy ? wakeState.phase === "stopping" : busy || !state.consent,
-              )}
-              {state?.availability.recognition &&
-                button(
-                  capturing ? "Stop microphone" : "Use microphone",
-                  () => {
-                    setControlMessage("");
-                    if (capturing) sessionRef.current?.stop();
-                    else void sessionRef.current?.listen();
-                  },
-                  busy && !capturing,
-                )}
+            {button(toolsOpen ? "Hide tools and support" : "Tools and support",
+              () => setToolsOpen((open) => !open), busy)}
+            {toolsOpen && (<View style={{ gap: 12 }}>
               {state?.availability.synthesis &&
                 button(
                   "Read preview aloud",
@@ -871,18 +839,158 @@ export function AssistantPreview({
                   },
                   busy || !state.preview,
                 )}
+              {Platform.OS === "ios" &&
+                button(
+                  appleToolsOpen
+                    ? "Hide iPhone tools"
+                    : "iPhone tools and support",
+                  () => {
+                    clearCommand();
+                    setAppleToolsOpen((open) => !open);
+                  },
+                  Boolean(busy),
+                )}
+              {Platform.OS === "ios" && appleToolsOpen && state && (
+                <AppleAssistantTools
+                  theme={theme}
+                  voice={state.availability}
+                  signedIn={Boolean(volumeUserId)}
+                  beforeOpen={clearCommand}
+                  scheduling={{
+                    reminders: remindersAllowed,
+                    alarms: volumeControls?.appleAlarmSupported?.() === true,
+                    timers: volumeControls?.appleTimerSupported?.() === true,
+                  }}
+                />
+              )}
+              {Platform.OS === "ios" &&
+                volumeUserId &&
+                volumeControls?.appleAlarmSupported?.() &&
+                button(
+                  "iPhone alarms and timers",
+                  () => {
+                    clearCommand();
+                    setAppleAlarmsOpen(true);
+                  },
+                  Boolean(busy),
+                )}
+              {volumeAllowed &&
+                button(
+                  "Alarms in Clock",
+                  () => {
+                    clearCommand();
+                    setAlarmsOpen(true);
+                  },
+                  Boolean(busy),
+                )}
+              {(volumeAllowed || remindersAllowed) &&
+                button(
+                  "Reminders and settings",
+                  () => {
+                    clearCommand();
+                    setRemindersOpen(true);
+                  },
+                  Boolean(busy),
+                )}
+              {volumeUserId &&
+                process.env.EXPO_PUBLIC_ASSISTANT_EXECUTION_ENABLED === "true" &&
+                process.env.EXPO_PUBLIC_ASSISTANT_NATIVE_TEST !== "true" &&
+                button(
+                  "Calls and messages",
+                  () => {
+                    clearCommand();
+                    setInitialCommunicationRequest(null);
+                    setCommunicationsOpen(true);
+                  },
+                  busy,
+                )}
+              {Platform.OS === "android" && deviceChecksAllowed && (
+                <View style={{ gap: 8 }}>
+                  <Text style={{ color: theme.textMuted, fontSize: 12 }}>
+                    Check media-volume support, the app window, Spotify and
+                    reviewed Clock apps locally. Results stay in this screen. This
+                    does not enable device actions.
+                  </Text>
+                  {button(
+                    checkingDevice
+                      ? "Checking Android support..."
+                      : "Check Android support",
+                    () => {
+                      void checkDevice();
+                    },
+                    checkingDevice || busy,
+                  )}
+                  {Boolean(deviceMessage) && (
+                    <Text
+                      accessibilityLiveRegion="polite"
+                      style={{ color: theme.textMuted, fontSize: 12 }}
+                    >
+                      {deviceMessage}
+                    </Text>
+                  )}
+                </View>
+              )}
+              {volumeAllowed && (<View style={{ gap: 8 }}>
+                {volumeControls?.reconcilePlans &&
+                  button(
+                    "Check previous actions",
+                    () => {
+                      void runPlan(true);
+                    },
+                    busy,
+                  )}
+              </View>)}
+            </View>)}
+          </ScrollView>
+          <View
+            style={{
+              gap: 8,
+              paddingTop: 12,
+              borderTopWidth: 1,
+              borderColor: theme.borderSubtle,
+            }}
+          >
+            <Text accessibilityLabel="Assistant listening status" accessibilityRole="header" accessibilityLiveRegion="polite" style={{ color: theme.textMain, fontWeight: "700" }}>{statusHeading}</Text>
+            <Text
+              accessibilityLiveRegion="polite"
+              style={{ color: theme.textMain }}
+            >
+              {!voiceAllowed
+                ? "Sign in to use assistant voice and device controls. You can still review typed commands."
+                : (wakeBusy && wakeState.phase !== "handoff" && wakeState.message) || controlMessage ||
+                state?.message || wakeState.message ||
+                state?.availability.message}
+            </Text>
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+              {wakeAllowed && state?.availability.recognition && button(
+                wakeBusy ? "Stop wake listening" : "Listen for Hey Contexify",
+                () => {
+                  if (wakeBusy) { wakeRef.current?.cancel(); sessionRef.current?.clear(); }
+                  else {
+                    if (!microphoneReady) return;
+                    setControlMessage("");
+                    sessionRef.current?.setTranscript("");
+                    void wakeRef.current?.start();
+                  }
+                },
+                wakeBusy ? wakeState.phase === "stopping" : busy || !state.consent || !microphoneReady,
+              )}
+              {state?.availability.recognition &&
+                button(
+                  capturing ? "Stop microphone" : "Use microphone",
+                  () => {
+                    setControlMessage("");
+                    if (capturing) sessionRef.current?.stop();
+                    else if (microphoneReady && state?.consent) void sessionRef.current?.listen();
+                  },
+                  !capturing && (busy || !state.consent || !microphoneReady),
+                )}
             </View>
-            {wakeAllowed && (
-              <Text style={{ color: theme.textMuted, fontSize: 12 }}>
-                Wake listening is optional and stays on this phone for up to 30 seconds while Assistant is open.
-                Say “Hey Contexify”, pause, then speak when the command microphone is ready.
-                It stops after one command or when you leave. AI planning still needs its own consent;
-                actions still need their existing confirmation.
-              </Text>
-            )}
             {state?.availability.recognition && !state.consent && (
               <Text style={{ color: theme.textMuted, fontSize: 12 }}>
-                Select "Allow the microphone" above before starting voice.
+                {microphoneReady
+                  ? "Allow the microphone in Voice setup above to speak."
+                  : "Grant microphone access in Voice setup above, or type your command."}
               </Text>
             )}
           </View>
